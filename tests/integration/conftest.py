@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
+from redis import Redis
 from sqlalchemy import make_url, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -75,9 +76,17 @@ def clean_database(migrated_database: None) -> Iterator[None]:
     asyncio.run(_truncate_tables(TEST_DATABASE_URL))
 
 
+@pytest.fixture(autouse=True)
+def clean_redis() -> Iterator[None]:
+    yield
+    with Redis.from_url(TEST_REDIS_URL) as redis:
+        redis.flushdb()
+
+
 @pytest.fixture
 def client() -> Iterator[TestClient]:
     from app.main import create_app
 
-    with TestClient(create_app()) as test_client:
+    # HTTPS so the client cookie jar sends back the Secure refresh cookie.
+    with TestClient(create_app(), base_url="https://testserver") as test_client:
         yield test_client

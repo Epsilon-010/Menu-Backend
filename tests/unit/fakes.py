@@ -41,6 +41,9 @@ class FakePasswordHasher:
         self.verified.append(password_hash)
         return password_hash == f"hashed:{password}"
 
+    def verify_dummy(self, password: str) -> None:
+        self.verified.append("dummy")
+
 
 class InMemoryTenantRepository:
     def __init__(self) -> None:

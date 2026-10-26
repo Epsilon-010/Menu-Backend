@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from functools import cache
 
 from argon2 import PasswordHasher as _Argon2
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
@@ -18,6 +19,14 @@ class Argon2PasswordHasher:
             return self._argon2.verify(password_hash, password)
         except (VerifyMismatchError, VerificationError, InvalidHashError):
             return False
+
+    def verify_dummy(self, password: str) -> None:
+        self.verify(_dummy_hash(), password)
+
+
+@cache
+def _dummy_hash() -> str:
+    return _Argon2().hash("dummy-password-for-unknown-accounts")
 
 
 class SystemClock:

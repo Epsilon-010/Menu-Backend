@@ -1,6 +1,7 @@
 import uuid
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Protocol
 
 
 class Role(StrEnum):
@@ -11,6 +12,18 @@ class Role(StrEnum):
 
 
 STAFF_ROLES = frozenset({Role.ADMIN, Role.WAITER, Role.KITCHEN})
+
+
+class InvalidAccessToken(Exception):
+    """The access token is missing, malformed, expired or not signed by us."""
+
+
+class AccessTokenDecoder(Protocol):
+    """Port: turns a bearer access token into the authenticated principal."""
+
+    def decode(self, token: str) -> "Principal":
+        """Raises InvalidAccessToken when the token cannot be trusted."""
+        ...
 
 
 @dataclass(frozen=True)
