@@ -20,7 +20,7 @@ Branch: `feat/slice-0-base` in `Backend` and `Menu-Frontend` (two separate repos
 ## Tasks
 - [x] T1 (S1, S3, S5, S8, S9) backend skeleton, settings, health, Alembic, pytest, Dockerfile — inline — RED: import error; GREEN: 5 passed — Backend b2bc7ec
 - [x] T2 (S4, S10) frontend Tailwind + Router + strict + home page + Dockerfile — inline — typecheck/lint/build OK — Menu-Frontend f367bfd, 3c0f85d
-- [ ] T3 (S2, S6, S7, S11) docker-compose, `.env.example`, CI workflows in both repos — inline — S7 verified locally; S11 pending push/PR (user decision) — Backend fa6b83b
+- [x] T3 (S2, S6, S7, S11) docker-compose, `.env.example`, CI workflows in both repos — inline — S7 verified locally; S11 CI green on push (PRs pending, gh not authenticated) — Backend fa6b83b
 - [x] T4 (S12) UUID primary key mixin + CLAUDE.md convention — inline — RED: import error; GREEN: 8 passed — Backend b2bc7ec
 
 ## Log
@@ -30,3 +30,4 @@ Branch: `feat/slice-0-base` in `Backend` and `Menu-Frontend` (two separate repos
 - L4 (2026-10-26, user): "lops id se autogenrar y son uuid usan la libreria que ya existe e igual modificalo en el proyecot y demas" → stdlib `uuid.uuid4` in Python (domain can create ids without the DB) plus Postgres `gen_random_uuid()` server default. Per-tenant order sequence numbers stay integers (display number, not the id).
 - L5: host ports 5432/6379/8000 are taken by other local projects → compose host ports configurable, defaults Postgres 5440, Redis 6380, API 8020, frontend 5173.
 - L6 (evidence): `docker compose up -d --build` → 4 services up; `GET :8020/api/v1/health` 200 `{"status":"ok","checks":{"postgres":"ok","redis":"ok"}}`, same through Vite proxy on :5173; `uv run pytest` 8 passed on host and in container; frontend runtime image builds. Next: push branches + PRs (user).
+- L7 (2026-10-26, user): "si subelas y deja hehca la slide 0 y marcada o asi para qeu otro conversacion pueda seguir con la siguenjte y asi" → pushed `main` + `feat/slice-0-base` to both repos; CI green (Menu-Backend run 40415830807: backend, docker; Menu-Frontend run 40415836134: frontend, docker). PRs not opened: `gh` has no session. Native review partial: risk lens completed, resilience lens blocked twice by the Anthropic API safety filter. Slice 0 marked done in ROADMAP.md and CLAUDE.md.
