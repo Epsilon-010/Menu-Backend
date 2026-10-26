@@ -24,12 +24,15 @@ Done when:
 - S14: "Tests: rotación emite un refresh nuevo e invalida el anterior; reutilizar un refresh rotado revoca toda la familia; un token de un tenant no accede a datos de otro."
 
 ## Tasks
-- [ ] T1 (S1, S2) tenants + staff modules: entities, ports, models, migration, seed command — inline
-- [ ] T2 (S3, S4, S5, S6, S12, S14) auth module: login/refresh/logout/me, JWT, Argon2, Redis rate limit, require_role — inline
-- [ ] T3 (S7, S8, S9, S10, S11, S13) frontend: HTTP client with single-flight refresh, auth context, /login, protected /admin, logout — inline
-- [ ] T4 (S11, S13) end-to-end check with docker compose + CLAUDE.md/ROADMAP/README updates — inline
+- [x] T1 (S1, S2) tenants + staff modules: entities, ports, models, migration, seed command — inline — RED: import error; GREEN: 25 passed; migration up/down/up OK — Backend 182dcda
+- [x] T2 (S3, S4, S5, S6, S12, S14) auth module: login/refresh/logout/me, JWT, Argon2, Redis rate limit, require_role — inline — RED: import error (unit); GREEN: 74 passed — Backend f699c6c
+- [x] T3 (S7, S8, S9, S10, S11, S13) frontend: HTTP client with single-flight refresh, auth context, /login, protected /admin, logout — inline — no frontend test runner (exception): typecheck/lint/build OK — Menu-Frontend c6ed3e0
+- [ ] T4 (S11, S13) end-to-end check with docker compose + CLAUDE.md/ROADMAP/README updates — inline — API flow verified through the Vite proxy; pending: manual browser check, push + CI
 
 ## Log
 - L1 (2026-10-26, user): "checa el proyecto y haz la sigueitne slide"
 - L2 (2026-10-26, user decision): runtime deps `argon2-cffi` + `python-jose` (chosen over PyJWT/pwdlib).
 - L3 (assumptions, documented defaults): user email is globally unique and stored lowercase (login has no tenant input); refresh tokens are 256-bit random values stored as SHA-256 hashes; refresh lifetime slides on each rotation (7d admin, 12h waiter/kitchen, 30d table); login rate limit counts failures per IP (20/15 min) and per account (5/15 min), configurable by env; `JWT_SECRET` is required configuration (no default in code).
+- L4 (decision): auth module reuses staff/tenants through their application use cases (FindUserByEmail, GetUser, GetTenant), never their tables. JWT adapter lives in auth/infrastructure; shared only knows the AccessTokenDecoder port (app.state.access_tokens).
+- L5 (evidence): docker compose rebuilt backend (new deps); seed created tenant 'La Taqueria Demo' / admin@demo.com in the dev DB; through http://localhost:5173 proxy: login 200 + refresh cookie, /me returns business name, refresh 200, logout 204, refresh after logout 401. Integration RED was not observed separately (tests and adapters written in the same step); unit RED observed.
+- L6 (known limitation): per-IP login limit uses request.client.host; behind the Vite/nginx proxy every client shares the proxy IP. Trusted-proxy handling is pending.
