@@ -83,10 +83,16 @@ def test_seed_command_line_reports_a_duplicate_email(capsys: pytest.CaptureFixtu
     assert "already in use" in capsys.readouterr().err
 
 
-def test_argon2_hasher_verifies_only_the_right_password() -> None:
+async def _check_argon2() -> tuple[bool, bool, bool]:
     hasher = Argon2PasswordHasher()
-    password_hash = hasher.hash("s3cret-pass")
+    password_hash = await hasher.hash("s3cret-pass")
+    await hasher.verify_dummy("anything")
+    return (
+        await hasher.verify(password_hash, "s3cret-pass"),
+        await hasher.verify(password_hash, "wrong-pass"),
+        await hasher.verify("not-a-hash", "s3cret-pass"),
+    )
 
-    assert hasher.verify(password_hash, "s3cret-pass") is True
-    assert hasher.verify(password_hash, "wrong-pass") is False
-    assert hasher.verify("not-a-hash", "s3cret-pass") is False
+
+def test_argon2_hasher_verifies_only_the_right_password() -> None:
+    assert asyncio.run(_check_argon2()) == (True, False, False)

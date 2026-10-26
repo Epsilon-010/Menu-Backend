@@ -70,7 +70,7 @@ class World:
             email=email,
             full_name="Ana Owner",
             role=role,
-            password_hash=self.hasher.hash(PASSWORD),
+            password_hash=await self.hasher.hash(PASSWORD),
             is_active=active,
         )
         await self.users.add(user)
@@ -114,15 +114,17 @@ async def test_login_issues_an_access_token_and_a_stored_refresh_token(world: Wo
     assert stored.token_hash == "hash:refresh-1"
     assert (stored.user_id, stored.tenant_id) == (admin.id, admin.tenant_id)
     assert stored.rotated_at is None and stored.revoked_at is None
-    assert world.limiter.resets == ["owner@example.com"]
+    assert world.limiter.acquired == [(CLIENT_IP, "owner@example.com")]
+    assert world.limiter.succeeded_logins == [(CLIENT_IP, "owner@example.com")]
     assert world.uow.commits == 1
 
 
-async def test_login_with_a_wrong_password_fails_generically_and_counts_the_failure(world: World, admin: User) -> None:
+async def test_login_with_a_wrong_password_fails_generically_and_keeps_the_attempt_counted(world: World, admin: User) -> None:
     with pytest.raises(InvalidCredentials):
         await world.login().execute("owner@example.com", "wrong-pass", CLIENT_IP)
 
-    assert world.limiter.failures == [(CLIENT_IP, "owner@example.com")]
+    assert world.limiter.acquired == [(CLIENT_IP, "owner@example.com")]
+    assert world.limiter.succeeded_logins == []
     assert world.refresh_tokens.tokens == {}
     assert world.uow.commits == 0
 
@@ -132,7 +134,8 @@ async def test_login_with_an_unknown_email_fails_the_same_way_and_still_spends_a
         await world.login().execute("Nobody@example.com", PASSWORD, CLIENT_IP)
 
     assert world.hasher.verified == ["dummy"]
-    assert world.limiter.failures == [(CLIENT_IP, "nobody@example.com")]
+    assert world.limiter.acquired == [(CLIENT_IP, "nobody@example.com")]
+    assert world.limiter.succeeded_logins == []
 
 
 async def test_login_of_an_inactive_user_fails_generically(world: World) -> None:
@@ -152,7 +155,7 @@ async def test_login_is_blocked_while_the_limiter_says_so(world: World, admin: U
 
     assert error.value.retry_after == 120
     assert world.hasher.verified == []
-    assert world.limiter.failures == []
+    assert world.limiter.succeeded_logins == []
 
 
 # --- Refresh -----------------------------------------------------------------------------------

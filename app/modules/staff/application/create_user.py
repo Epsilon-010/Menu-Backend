@@ -19,7 +19,7 @@ class CreateUser:
         if await self._users.get_by_email(normalize_email(email)) is not None:
             raise EmailAlreadyInUse(email)
 
-        user = User.create(tenant_id, email, full_name, role, self._hasher.hash(password))
+        user = User.create(tenant_id, email, full_name, role, await self._hasher.hash(password))
         await self._users.add(user)
         await self._uow.commit()
         return user

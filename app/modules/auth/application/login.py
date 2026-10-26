@@ -23,18 +23,18 @@ class Login:
 
     async def execute(self, email: str, password: str, client_ip: str) -> AuthSession:
         account = normalize_email(email)
-        retry_after = await self._limiter.retry_after(client_ip, account)
+        # Counted before checking the password, so parallel requests cannot exceed the limit.
+        retry_after = await self._limiter.acquire(client_ip, account)
         if retry_after is not None:
             raise TooManyLoginAttempts(retry_after)
 
         user = await self._find_user.execute(account)
         if user is None:
-            self._hasher.verify_dummy(password)
-        if user is None or not self._hasher.verify(user.password_hash, password) or not user.is_active:
-            await self._limiter.record_failure(client_ip, account)
+            await self._hasher.verify_dummy(password)
+        if user is None or not await self._hasher.verify(user.password_hash, password) or not user.is_active:
             raise InvalidCredentials()
 
-        await self._limiter.reset(account)
+        await self._limiter.succeeded(client_ip, account)
         session = await self._sessions.issue(user)
         await self._uow.commit()
         return session

@@ -34,14 +34,14 @@ class FakePasswordHasher:
     def __init__(self) -> None:
         self.verified: list[str] = []
 
-    def hash(self, password: str) -> str:
+    async def hash(self, password: str) -> str:
         return f"hashed:{password}"
 
-    def verify(self, password_hash: str, password: str) -> bool:
+    async def verify(self, password_hash: str, password: str) -> bool:
         self.verified.append(password_hash)
         return password_hash == f"hashed:{password}"
 
-    def verify_dummy(self, password: str) -> None:
+    async def verify_dummy(self, password: str) -> None:
         self.verified.append("dummy")
 
 
@@ -97,14 +97,12 @@ class InMemoryRefreshTokenRepository:
 class FakeLoginAttemptLimiter:
     def __init__(self, blocked_for: int | None = None) -> None:
         self.blocked_for = blocked_for
-        self.failures: list[tuple[str, str]] = []
-        self.resets: list[str] = []
+        self.acquired: list[tuple[str, str]] = []
+        self.succeeded_logins: list[tuple[str, str]] = []
 
-    async def retry_after(self, client_ip: str, account: str) -> int | None:
+    async def acquire(self, client_ip: str, account: str) -> int | None:
+        self.acquired.append((client_ip, account))
         return self.blocked_for
 
-    async def record_failure(self, client_ip: str, account: str) -> None:
-        self.failures.append((client_ip, account))
-
-    async def reset(self, account: str) -> None:
-        self.resets.append(account)
+    async def succeeded(self, client_ip: str, account: str) -> None:
+        self.succeeded_logins.append((client_ip, account))

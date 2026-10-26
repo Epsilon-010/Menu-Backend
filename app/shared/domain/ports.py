@@ -15,12 +15,12 @@ class Clock(Protocol):
 
 
 class PasswordHasher(Protocol):
-    """Port: one-way password hashing (Argon2 in production)."""
+    """Port: one-way password hashing (Argon2 in production). Async: hashing is CPU-heavy."""
 
-    def hash(self, password: str) -> str: ...
+    async def hash(self, password: str) -> str: ...
 
-    def verify(self, password_hash: str, password: str) -> bool: ...
+    async def verify(self, password_hash: str, password: str) -> bool: ...
 
-    def verify_dummy(self, password: str) -> None:
+    async def verify_dummy(self, password: str) -> None:
         """Spends the same time as `verify`, so unknown accounts cannot be detected by timing."""
         ...
