@@ -18,13 +18,15 @@ Branch: `feat/slice-0-base` in `Backend` and `Menu-Frontend` (two separate repos
 - S12: "los id se autogenrar y son uuid usan la libreria que ya existe e igual modificalo en el proyecot y demas" — primary keys are auto-generated UUIDs (stdlib `uuid`), provided by a shared mixin and documented in CLAUDE.md.
 
 ## Tasks
-- [ ] T1 (S1, S3, S5, S8, S9) backend skeleton, settings, health, Alembic, pytest, Dockerfile — inline
-- [ ] T2 (S4, S10) frontend Tailwind + Router + strict + home page + Dockerfile — inline
-- [ ] T3 (S2, S6, S7, S11) docker-compose, `.env.example`, CI workflows in both repos — inline
-- [ ] T4 (S12) UUID primary key mixin + CLAUDE.md convention — inline
+- [x] T1 (S1, S3, S5, S8, S9) backend skeleton, settings, health, Alembic, pytest, Dockerfile — inline — RED: import error; GREEN: 5 passed — Backend b2bc7ec
+- [x] T2 (S4, S10) frontend Tailwind + Router + strict + home page + Dockerfile — inline — typecheck/lint/build OK — Menu-Frontend f367bfd, 3c0f85d
+- [ ] T3 (S2, S6, S7, S11) docker-compose, `.env.example`, CI workflows in both repos — inline — S7 verified locally; S11 pending push/PR (user decision) — Backend fa6b83b
+- [x] T4 (S12) UUID primary key mixin + CLAUDE.md convention — inline — RED: import error; GREEN: 8 passed — Backend b2bc7ec
 
 ## Log
 - L1 (2026-10-26, user): "revisa el claude.md para entender el proeycto y el entrono que se usara y el roadmap para las slices que me entregaras, hazlas usanado las herrameitnas de egram odd y demas"
 - L2 (2026-10-26, user decision): two separate repos ("Dos repos separados"): `Backend` → Epsilon-010/Menu-Backend, `Menu-Frontend` → Epsilon-010/Menu-Frontend. Each repo has its own CI; the 4-service docker-compose lives in the backend repo and builds `../Menu-Frontend`. Folder kept as `Backend` (rename to `Menu-Backend` was blocked by Windows file lock).
 - L3: Postgres driver chosen: `asyncpg` (async SQLAlchemy + Alembic async env); psycopg v3 async was rejected because it does not run on the default Windows Proactor event loop. Async tests use the AnyIO pytest plugin bundled with FastAPI (no extra test lib).
 - L4 (2026-10-26, user): "lops id se autogenrar y son uuid usan la libreria que ya existe e igual modificalo en el proyecot y demas" → stdlib `uuid.uuid4` in Python (domain can create ids without the DB) plus Postgres `gen_random_uuid()` server default. Per-tenant order sequence numbers stay integers (display number, not the id).
+- L5: host ports 5432/6379/8000 are taken by other local projects → compose host ports configurable, defaults Postgres 5440, Redis 6380, API 8020, frontend 5173.
+- L6 (evidence): `docker compose up -d --build` → 4 services up; `GET :8020/api/v1/health` 200 `{"status":"ok","checks":{"postgres":"ok","redis":"ok"}}`, same through Vite proxy on :5173; `uv run pytest` 8 passed on host and in container; frontend runtime image builds. Next: push branches + PRs (user).
