@@ -51,6 +51,14 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
         yield session
 
 
+class SqlAlchemyUnitOfWork:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def commit(self) -> None:
+        await self._session.commit()
+
+
 class PostgresProbe:
     name = "postgres"
 

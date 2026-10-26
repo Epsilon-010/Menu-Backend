@@ -1,0 +1,107 @@
+"""In-memory fakes for the domain ports, shared by the unit tests."""
+
+import uuid
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+
+from app.modules.auth.domain.refresh_token import RefreshToken
+from app.modules.staff.domain.user import User
+from app.modules.tenants.domain.tenant import Tenant
+
+
+class FakeClock:
+    def __init__(self, now: datetime | None = None) -> None:
+        self.now_value = now or datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+
+    def now(self) -> datetime:
+        return self.now_value
+
+    def advance(self, delta: timedelta) -> None:
+        self.now_value += delta
+
+
+class FakeUnitOfWork:
+    def __init__(self) -> None:
+        self.commits = 0
+
+    async def commit(self) -> None:
+        self.commits += 1
+
+
+class FakePasswordHasher:
+    """Reversible stand-in for Argon2: keeps tests fast and readable."""
+
+    def __init__(self) -> None:
+        self.verified: list[str] = []
+
+    def hash(self, password: str) -> str:
+        return f"hashed:{password}"
+
+    def verify(self, password_hash: str, password: str) -> bool:
+        self.verified.append(password_hash)
+        return password_hash == f"hashed:{password}"
+
+
+class InMemoryTenantRepository:
+    def __init__(self) -> None:
+        self.tenants: dict[uuid.UUID, Tenant] = {}
+
+    async def add(self, tenant: Tenant) -> None:
+        self.tenants[tenant.id] = tenant
+
+    async def get(self, tenant_id: uuid.UUID) -> Tenant | None:
+        return self.tenants.get(tenant_id)
+
+
+class InMemoryUserRepository:
+    def __init__(self) -> None:
+        self.users: dict[uuid.UUID, User] = {}
+
+    async def add(self, user: User) -> None:
+        self.users[user.id] = user
+
+    async def get(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> User | None:
+        user = self.users.get(user_id)
+        return user if user is not None and user.tenant_id == tenant_id else None
+
+    async def get_by_email(self, email: str) -> User | None:
+        return next((user for user in self.users.values() if user.email == email), None)
+
+
+class InMemoryRefreshTokenRepository:
+    def __init__(self) -> None:
+        self.tokens: dict[uuid.UUID, RefreshToken] = {}
+
+    async def add(self, token: RefreshToken) -> None:
+        self.tokens[token.id] = token
+
+    async def get_by_hash(self, token_hash: str) -> RefreshToken | None:
+        return next((token for token in self.tokens.values() if token.token_hash == token_hash), None)
+
+    async def mark_rotated(self, token_id: uuid.UUID, at: datetime) -> bool:
+        token = self.tokens[token_id]
+        if token.rotated_at is not None or token.revoked_at is not None:
+            return False
+        self.tokens[token_id] = replace(token, rotated_at=at)
+        return True
+
+    async def revoke_family(self, family_id: uuid.UUID, at: datetime) -> None:
+        for token_id, token in self.tokens.items():
+            if token.family_id == family_id and token.revoked_at is None:
+                self.tokens[token_id] = replace(token, revoked_at=at)
+
+
+class FakeLoginAttemptLimiter:
+    def __init__(self, blocked_for: int | None = None) -> None:
+        self.blocked_for = blocked_for
+        self.failures: list[tuple[str, str]] = []
+        self.resets: list[str] = []
+
+    async def retry_after(self, client_ip: str, account: str) -> int | None:
+        return self.blocked_for
+
+    async def record_failure(self, client_ip: str, account: str) -> None:
+        self.failures.append((client_ip, account))
+
+    async def reset(self, account: str) -> None:
+        self.resets.append(account)

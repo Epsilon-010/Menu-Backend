@@ -35,6 +35,7 @@ jobs:
       # Test-only values; real secrets never live in the repository.
       DATABASE_URL: postgresql+asyncpg://menu:menu@localhost:5432/menu
       REDIS_URL: redis://localhost:6379/0
+      JWT_SECRET: ci-test-only-jwt-secret-not-for-production
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v6
