@@ -7,9 +7,11 @@ from app.modules.auth.infrastructure import router as auth_router
 from app.modules.auth.infrastructure.access_revocations import RedisAccessRevocations
 from app.modules.auth.infrastructure.access_tokens import JoseAccessTokens
 from app.modules.catalog.infrastructure import router as catalog_router
+from app.modules.media.infrastructure.jobs import CeleryImageCleanupScheduler
 from app.modules.staff.infrastructure import router as staff_router
 from app.modules.tables.infrastructure import router as tables_router
 from app.shared.infrastructure.cache import create_redis
+from app.shared.infrastructure.celery_app import create_celery
 from app.shared.infrastructure.config import get_settings
 from app.shared.infrastructure.database import create_engine, create_session_factory
 from app.shared.infrastructure.http import health_router
@@ -38,6 +40,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
     app.state.access_tokens = JoseAccessTokens(settings.jwt_secret.get_secret_value())
     app.state.image_storage = build_image_storage(settings)
+    app.state.image_cleanup = CeleryImageCleanupScheduler(create_celery(settings))
     register_problem_handlers(app)
 
     api = APIRouter(prefix=API_PREFIX)

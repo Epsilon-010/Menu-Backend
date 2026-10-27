@@ -201,12 +201,6 @@ class InMemoryItemRepository:
         item = self.items.get(item_id)
         return item if item is not None and item.tenant_id == tenant_id else None
 
-    async def image_in_use(self, tenant_id: uuid.UUID, public_id: str, except_item_id: uuid.UUID) -> bool:
-        return any(
-            i.tenant_id == tenant_id and i.image_public_id == public_id and i.id != except_item_id
-            for i in self.items.values()
-        )
-
     async def list_in_category(self, tenant_id: uuid.UUID, category_id: uuid.UUID) -> list[Item]:
         return [item for item in await self.list(tenant_id) if item.category_id == category_id]
 
@@ -267,6 +261,53 @@ class FakeImageStorage:
 
     def url(self, public_id: str, variant: ImageVariant) -> str | None:
         return f"https://images.test/{variant.value}/{public_id}"
+
+
+class InMemoryImageRegistry:
+    """Fake of the media module's image records: implements `ImageRegistry` and `CleanupRepository`."""
+
+    def __init__(self, clock: FakeClock | None = None) -> None:
+        self.clock = clock or FakeClock()
+        # public_id -> (tenant_id, status, created_at)
+        self.records: dict[str, tuple[uuid.UUID, str, datetime]] = {}
+
+    def status(self, public_id: str) -> str | None:
+        record = self.records.get(public_id)
+        return record[1] if record is not None else None
+
+    async def register(self, tenant_id: uuid.UUID, public_id: str) -> None:
+        self.records[public_id] = (tenant_id, "pending", self.clock.now())
+
+    async def attach(self, tenant_id: uuid.UUID, public_id: str) -> bool:
+        record = self.records.get(public_id)
+        if record is None or record[0] != tenant_id or record[1] != "pending":
+            return False
+        self.records[public_id] = (tenant_id, "attached", record[2])
+        return True
+
+    async def discard(self, tenant_id: uuid.UUID, public_id: str) -> None:
+        record = self.records.get(public_id)
+        if record is not None and record[0] == tenant_id:
+            self.records[public_id] = (tenant_id, "discarded", record[2])
+
+    async def claim_due(self, pending_before: datetime, limit: int) -> list[str]:
+        due = [
+            (created_at, public_id)
+            for public_id, (_, status, created_at) in self.records.items()
+            if status == "discarded" or (status == "pending" and created_at < pending_before)
+        ]
+        return [public_id for _, public_id in sorted(due)][:limit]
+
+    async def forget(self, public_id: str) -> None:
+        self.records.pop(public_id, None)
+
+
+class FakeCleanupScheduler:
+    def __init__(self) -> None:
+        self.requests = 0
+
+    async def request_cleanup(self) -> None:
+        self.requests += 1
 
 
 class InMemoryRefreshTokenRepository:

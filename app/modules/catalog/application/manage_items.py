@@ -7,11 +7,10 @@ are reported as not found.
 import uuid
 from dataclasses import dataclass, replace
 
-from app.modules.catalog.application.item_images import discard_image
 from app.modules.catalog.application.manage_categories import get_category
 from app.modules.catalog.domain.catalog import CategoryRepository, Item, ItemRepository, ensure_complete_order
 from app.modules.catalog.domain.errors import ItemNotFound
-from app.shared.domain.images import ImageStorage
+from app.shared.domain.images import ImageCleanupScheduler, ImageRegistry
 from app.shared.domain.ports import UnitOfWork
 
 
@@ -91,18 +90,24 @@ class UpdateItem:
 
 
 class DeleteItem:
-    """Deletes the item and then its image from the storage."""
+    """Deletes the item; its image is discarded in the same transaction and deleted by the worker."""
 
-    def __init__(self, items: ItemRepository, images: ImageStorage, uow: UnitOfWork) -> None:
+    def __init__(
+        self, items: ItemRepository, registry: ImageRegistry, uow: UnitOfWork, cleanup: ImageCleanupScheduler
+    ) -> None:
         self._items = items
-        self._images = images
+        self._registry = registry
         self._uow = uow
+        self._cleanup = cleanup
 
     async def execute(self, tenant_id: uuid.UUID, item_id: uuid.UUID) -> None:
         item = await get_item(self._items, tenant_id, item_id)
+        if item.image_public_id is not None:
+            await self._registry.discard(tenant_id, item.image_public_id)
         await self._items.delete(tenant_id, item_id)
         await self._uow.commit()
-        await discard_image(self._images, item.image_public_id)
+        if item.image_public_id is not None:
+            await self._cleanup.request_cleanup()
 
 
 class ReorderItems:

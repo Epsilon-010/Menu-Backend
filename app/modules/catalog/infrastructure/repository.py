@@ -150,18 +150,6 @@ class SqlAlchemyItemRepository:
             _raise_category_gone(error, item)
             raise
 
-    async def image_in_use(self, tenant_id: uuid.UUID, public_id: str, except_item_id: uuid.UUID) -> bool:
-        found = await self._session.scalar(
-            select(ItemModel.id)
-            .where(
-                ItemModel.tenant_id == tenant_id,
-                ItemModel.image_public_id == public_id,
-                ItemModel.id != except_item_id,
-            )
-            .limit(1)
-        )
-        return found is not None
-
     async def get(self, tenant_id: uuid.UUID, item_id: uuid.UUID) -> Item | None:
         model = await self._session.scalar(
             select(ItemModel).where(ItemModel.tenant_id == tenant_id, ItemModel.id == item_id)
