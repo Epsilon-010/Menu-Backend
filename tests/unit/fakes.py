@@ -5,9 +5,12 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from app.modules.auth.domain.refresh_token import RefreshToken
+from app.modules.catalog.domain.catalog import Category, Item
+from app.modules.catalog.domain.errors import CategoryNotEmpty
 from app.modules.staff.domain.user import STAFF_MEMBER_ROLES, User
 from app.modules.tables.domain.table import Table
 from app.modules.tenants.domain.tenant import Tenant
+from app.shared.domain.images import ImageVariant, StoredImage, UploadSignature
 
 
 class FakeClock:
@@ -131,6 +134,130 @@ class FakeTableCredentials:
     def new_pin(self) -> str:
         self.issued_pins += 1
         return f"{self.issued_pins:06d}"
+
+
+def _by_position(entity: Category | Item) -> tuple[int, str]:
+    return entity.position, entity.name.lower()
+
+
+class InMemoryCategoryRepository:
+    def __init__(self) -> None:
+        self.categories: dict[uuid.UUID, Category] = {}
+        # Item counts per category, kept by InMemoryItemRepository to mimic the RESTRICT foreign key.
+        self.item_counts: dict[uuid.UUID, int] = {}
+
+    async def add(self, category: Category) -> None:
+        self.categories[category.id] = category
+
+    async def get(self, tenant_id: uuid.UUID, category_id: uuid.UUID) -> Category | None:
+        category = self.categories.get(category_id)
+        return category if category is not None and category.tenant_id == tenant_id else None
+
+    async def get_by_name(self, tenant_id: uuid.UUID, name: str) -> Category | None:
+        return next(
+            (c for c in self.categories.values() if c.tenant_id == tenant_id and c.name.lower() == name.lower()),
+            None,
+        )
+
+    async def next_position(self, tenant_id: uuid.UUID) -> int:
+        return max((c.position + 1 for c in self.categories.values() if c.tenant_id == tenant_id), default=0)
+
+    async def update(self, category: Category) -> None:
+        self.categories[category.id] = category
+
+    async def delete(self, tenant_id: uuid.UUID, category_id: uuid.UUID) -> None:
+        if self.item_counts.get(category_id, 0):
+            raise CategoryNotEmpty(category_id)
+        if (await self.get(tenant_id, category_id)) is not None:
+            del self.categories[category_id]
+
+    async def set_positions(self, tenant_id: uuid.UUID, ordered_ids: list[uuid.UUID]) -> None:
+        for position, category_id in enumerate(ordered_ids):
+            category = self.categories[category_id]
+            assert category.tenant_id == tenant_id
+            self.categories[category_id] = replace(category, position=position)
+
+    # Last on purpose: a method named `list` shadows the builtin in the annotations below it.
+    async def list(self, tenant_id: uuid.UUID) -> list[Category]:
+        return sorted((c for c in self.categories.values() if c.tenant_id == tenant_id), key=_by_position)
+
+
+class InMemoryItemRepository:
+    def __init__(self, categories: InMemoryCategoryRepository) -> None:
+        self.items: dict[uuid.UUID, Item] = {}
+        self._categories = categories
+
+    def _recount(self) -> None:
+        counts: dict[uuid.UUID, int] = {}
+        for item in self.items.values():
+            counts[item.category_id] = counts.get(item.category_id, 0) + 1
+        self._categories.item_counts = counts
+
+    async def add(self, item: Item) -> None:
+        self.items[item.id] = item
+        self._recount()
+
+    async def get(self, tenant_id: uuid.UUID, item_id: uuid.UUID) -> Item | None:
+        item = self.items.get(item_id)
+        return item if item is not None and item.tenant_id == tenant_id else None
+
+    async def list_in_category(self, tenant_id: uuid.UUID, category_id: uuid.UUID) -> list[Item]:
+        return [item for item in await self.list(tenant_id) if item.category_id == category_id]
+
+    async def next_position(self, tenant_id: uuid.UUID, category_id: uuid.UUID) -> int:
+        return max((item.position + 1 for item in await self.list_in_category(tenant_id, category_id)), default=0)
+
+    async def update(self, item: Item) -> None:
+        self.items[item.id] = item
+        self._recount()
+
+    async def delete(self, tenant_id: uuid.UUID, item_id: uuid.UUID) -> None:
+        if (await self.get(tenant_id, item_id)) is not None:
+            del self.items[item_id]
+        self._recount()
+
+    async def set_positions(self, tenant_id: uuid.UUID, ordered_ids: list[uuid.UUID]) -> None:
+        for position, item_id in enumerate(ordered_ids):
+            item = self.items[item_id]
+            assert item.tenant_id == tenant_id
+            self.items[item_id] = replace(item, position=position)
+
+    async def list(self, tenant_id: uuid.UUID) -> list[Item]:
+        return sorted((i for i in self.items.values() if i.tenant_id == tenant_id), key=_by_position)
+
+
+class FakeImageStorage:
+    """Stands in for Cloudinary: `upload` plays the browser's direct upload."""
+
+    def __init__(self) -> None:
+        self.stored: dict[str, StoredImage] = {}
+        self.deleted: list[str] = []
+        self.fail_deletes = False
+
+    def upload(self, public_id: str, image_format: str = "jpg", size: int = 1_000) -> None:
+        self.stored[public_id] = StoredImage(public_id=public_id, format=image_format, bytes=size)
+
+    def sign_upload(self, public_id: str, allowed_formats: tuple[str, ...]) -> UploadSignature:
+        return UploadSignature(
+            upload_url="https://upload.test/image/upload",
+            api_key="test-key",
+            timestamp=1_700_000_000,
+            signature=f"signed:{public_id}",
+            public_id=public_id,
+            allowed_formats=allowed_formats,
+        )
+
+    async def find(self, public_id: str) -> StoredImage | None:
+        return self.stored.get(public_id)
+
+    async def delete(self, public_id: str) -> None:
+        if self.fail_deletes:
+            raise ConnectionError("storage down")
+        self.stored.pop(public_id, None)
+        self.deleted.append(public_id)
+
+    def url(self, public_id: str, variant: ImageVariant) -> str | None:
+        return f"https://images.test/{variant.value}/{public_id}"
 
 
 class InMemoryRefreshTokenRepository:

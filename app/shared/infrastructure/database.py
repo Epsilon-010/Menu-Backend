@@ -59,11 +59,25 @@ def violated_unique_constraint(error: IntegrityError) -> str | None:
     database index is what keeps the data right, and the repository turns its name into the
     matching domain error.
     """
-    cause = error.orig.__cause__ if error.orig is not None else None
+    cause = _driver_error(error)
     if getattr(cause, "sqlstate", None) != "23505":  # unique_violation
         return None
     name = getattr(cause, "constraint_name", None)
     return name if isinstance(name, str) else None
+
+
+def violated_foreign_key(error: IntegrityError) -> str | None:
+    """Name of the foreign key a failed write broke (e.g. deleting a row others still reference)."""
+    cause = _driver_error(error)
+    if getattr(cause, "sqlstate", None) != "23503":  # foreign_key_violation
+        return None
+    name = getattr(cause, "constraint_name", None)
+    return name if isinstance(name, str) else None
+
+
+def _driver_error(error: IntegrityError) -> BaseException | None:
+    # SQLAlchemy wraps asyncpg's error in an adapter exception; the original is its cause.
+    return error.orig.__cause__ if error.orig is not None else None
 
 
 class SqlAlchemyUnitOfWork:

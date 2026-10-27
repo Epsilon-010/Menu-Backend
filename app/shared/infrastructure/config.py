@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     login_failure_window_seconds: int = Field(default=900, gt=0)
     login_max_failures_per_account: int = Field(default=5, gt=0)
 
+    # Image storage. Without all three the API still runs, but image uploads answer 503.
+    cloudinary_cloud_name: str | None = None
+    cloudinary_api_key: str | None = None
+    cloudinary_api_secret: SecretStr | None = None
+
 
 @lru_cache
 def get_settings() -> Settings:
