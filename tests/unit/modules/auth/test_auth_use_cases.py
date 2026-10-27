@@ -29,7 +29,6 @@ from tests.unit.fakes import (
 pytestmark = pytest.mark.anyio
 
 PASSWORD = "s3cret-pass"
-CLIENT_IP = "203.0.113.7"
 
 
 class FakeAccessTokens:
@@ -103,7 +102,7 @@ async def admin(world: World) -> User:
 
 
 async def test_login_issues_an_access_token_and_a_stored_refresh_token(world: World, admin: User) -> None:
-    session = await world.login().execute(" Owner@Example.com ", PASSWORD, CLIENT_IP)
+    session = await world.login().execute(" Owner@Example.com ", PASSWORD)
 
     assert session.role is Role.ADMIN
     assert session.access_token == f"access:{admin.id}:{admin.tenant_id}:admin"
@@ -114,16 +113,16 @@ async def test_login_issues_an_access_token_and_a_stored_refresh_token(world: Wo
     assert stored.token_hash == "hash:refresh-1"
     assert (stored.user_id, stored.tenant_id) == (admin.id, admin.tenant_id)
     assert stored.rotated_at is None and stored.revoked_at is None
-    assert world.limiter.acquired == [(CLIENT_IP, "owner@example.com")]
-    assert world.limiter.succeeded_logins == [(CLIENT_IP, "owner@example.com")]
+    assert world.limiter.acquired == ["owner@example.com"]
+    assert world.limiter.succeeded_logins == ["owner@example.com"]
     assert world.uow.commits == 1
 
 
 async def test_login_with_a_wrong_password_fails_generically_and_keeps_the_attempt_counted(world: World, admin: User) -> None:
     with pytest.raises(InvalidCredentials):
-        await world.login().execute("owner@example.com", "wrong-pass", CLIENT_IP)
+        await world.login().execute("owner@example.com", "wrong-pass")
 
-    assert world.limiter.acquired == [(CLIENT_IP, "owner@example.com")]
+    assert world.limiter.acquired == ["owner@example.com"]
     assert world.limiter.succeeded_logins == []
     assert world.refresh_tokens.tokens == {}
     assert world.uow.commits == 0
@@ -131,10 +130,10 @@ async def test_login_with_a_wrong_password_fails_generically_and_keeps_the_attem
 
 async def test_login_with_an_unknown_email_fails_the_same_way_and_still_spends_a_hash(world: World) -> None:
     with pytest.raises(InvalidCredentials):
-        await world.login().execute("Nobody@example.com", PASSWORD, CLIENT_IP)
+        await world.login().execute("Nobody@example.com", PASSWORD)
 
     assert world.hasher.verified == ["dummy"]
-    assert world.limiter.acquired == [(CLIENT_IP, "nobody@example.com")]
+    assert world.limiter.acquired == ["nobody@example.com"]
     assert world.limiter.succeeded_logins == []
 
 
@@ -142,7 +141,7 @@ async def test_login_of_an_inactive_user_fails_generically(world: World) -> None
     await world.add_user(Tenant(name="Closed"), "gone@example.com", active=False)
 
     with pytest.raises(InvalidCredentials):
-        await world.login().execute("gone@example.com", PASSWORD, CLIENT_IP)
+        await world.login().execute("gone@example.com", PASSWORD)
 
     assert world.refresh_tokens.tokens == {}
 
@@ -151,7 +150,7 @@ async def test_login_is_blocked_while_the_limiter_says_so(world: World, admin: U
     world.limiter.blocked_for = 120
 
     with pytest.raises(TooManyLoginAttempts) as error:
-        await world.login().execute("owner@example.com", PASSWORD, CLIENT_IP)
+        await world.login().execute("owner@example.com", PASSWORD)
 
     assert error.value.retry_after == 120
     assert world.hasher.verified == []
@@ -162,7 +161,7 @@ async def test_login_is_blocked_while_the_limiter_says_so(world: World, admin: U
 
 
 async def test_refresh_rotates_the_token_and_invalidates_the_previous_one(world: World, admin: User) -> None:
-    first = await world.login().execute("owner@example.com", PASSWORD, CLIENT_IP)
+    first = await world.login().execute("owner@example.com", PASSWORD)
     world.clock.advance(timedelta(hours=1))
 
     second = await world.refresh().execute(first.refresh_token)
@@ -179,7 +178,7 @@ async def test_refresh_rotates_the_token_and_invalidates_the_previous_one(world:
 
 
 async def test_reusing_a_rotated_refresh_token_revokes_the_whole_family(world: World, admin: User) -> None:
-    first = await world.login().execute("owner@example.com", PASSWORD, CLIENT_IP)
+    first = await world.login().execute("owner@example.com", PASSWORD)
     second = await world.refresh().execute(first.refresh_token)
     commits_before = world.uow.commits
 
@@ -193,8 +192,8 @@ async def test_reusing_a_rotated_refresh_token_revokes_the_whole_family(world: W
 
 
 async def test_reuse_does_not_touch_other_families(world: World, admin: User) -> None:
-    stolen = await world.login().execute("owner@example.com", PASSWORD, CLIENT_IP)
-    other_device = await world.login().execute("owner@example.com", PASSWORD, CLIENT_IP)
+    stolen = await world.login().execute("owner@example.com", PASSWORD)
+    other_device = await world.login().execute("owner@example.com", PASSWORD)
     await world.refresh().execute(stolen.refresh_token)
 
     with pytest.raises(InvalidRefreshToken):
@@ -204,7 +203,7 @@ async def test_reuse_does_not_touch_other_families(world: World, admin: User) ->
 
 
 async def test_refresh_rejects_an_expired_token(world: World, admin: User) -> None:
-    session = await world.login().execute("owner@example.com", PASSWORD, CLIENT_IP)
+    session = await world.login().execute("owner@example.com", PASSWORD)
     world.clock.advance(timedelta(days=7))
 
     with pytest.raises(InvalidRefreshToken):
@@ -218,7 +217,7 @@ async def test_refresh_rejects_missing_or_unknown_tokens(world: World, token: st
 
 
 async def test_refresh_of_a_deactivated_user_fails_and_revokes_the_family(world: World, admin: User) -> None:
-    session = await world.login().execute("owner@example.com", PASSWORD, CLIENT_IP)
+    session = await world.login().execute("owner@example.com", PASSWORD)
     world.users.users[admin.id] = replace(admin, is_active=False)
 
     with pytest.raises(InvalidRefreshToken):
@@ -234,7 +233,7 @@ async def test_refresh_of_a_deactivated_user_fails_and_revokes_the_family(world:
 async def test_refresh_lifetime_depends_on_the_role(world: World, role: Role, ttl: timedelta) -> None:
     await world.add_user(Tenant(name="Diner"), "staff@example.com", role=role)
 
-    session = await world.login().execute("staff@example.com", PASSWORD, CLIENT_IP)
+    session = await world.login().execute("staff@example.com", PASSWORD)
 
     assert session.refresh_expires_at == world.clock.now() + ttl
 
@@ -243,7 +242,7 @@ async def test_refresh_lifetime_depends_on_the_role(world: World, role: Role, tt
 
 
 async def test_logout_revokes_the_family_of_the_presented_token(world: World, admin: User) -> None:
-    first = await world.login().execute("owner@example.com", PASSWORD, CLIENT_IP)
+    first = await world.login().execute("owner@example.com", PASSWORD)
     second = await world.refresh().execute(first.refresh_token)
 
     await world.logout().execute(second.refresh_token)

@@ -97,12 +97,12 @@ class InMemoryRefreshTokenRepository:
 class FakeLoginAttemptLimiter:
     def __init__(self, blocked_for: int | None = None) -> None:
         self.blocked_for = blocked_for
-        self.acquired: list[tuple[str, str]] = []
-        self.succeeded_logins: list[tuple[str, str]] = []
+        self.acquired: list[str] = []
+        self.succeeded_logins: list[str] = []
 
-    async def acquire(self, client_ip: str, account: str) -> int | None:
-        self.acquired.append((client_ip, account))
+    async def acquire(self, account: str) -> int | None:
+        self.acquired.append(account)
         return self.blocked_for
 
-    async def succeeded(self, client_ip: str, account: str) -> None:
-        self.succeeded_logins.append((client_ip, account))
+    async def succeeded(self, account: str) -> None:
+        self.succeeded_logins.append(account)

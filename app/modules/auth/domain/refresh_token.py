@@ -77,15 +77,15 @@ class AccessTokenIssuer(Protocol):
 
 
 class LoginAttemptLimiter(Protocol):
-    """Port: limits login attempts per client IP and per account to block brute force."""
+    """Port: limits login attempts per account (user) to block brute force from any number of IPs."""
 
-    async def acquire(self, client_ip: str, account: str) -> int | None:
+    async def acquire(self, account: str) -> int | None:
         """Atomically counts this attempt before the password is checked.
 
         Returns the seconds until a new attempt is allowed when over the limit, else None.
         """
         ...
 
-    async def succeeded(self, client_ip: str, account: str) -> None:
-        """Gives the attempt back and clears the account's count after a successful login."""
+    async def succeeded(self, account: str) -> None:
+        """Clears the account's count after a successful login."""
         ...

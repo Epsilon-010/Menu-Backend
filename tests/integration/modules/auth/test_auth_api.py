@@ -48,8 +48,16 @@ def refresh_with(client: TestClient, token: str | None) -> Response:
     return client.post("/api/v1/auth/refresh", headers=headers)
 
 
-def me(client: TestClient, access_token: str) -> Response:
-    return client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {access_token}"})
+def me(client: TestClient, access_token: str | None = None) -> Response:
+    """Calls /me with the cookies in the jar, or with exactly the given access token cookie."""
+    if access_token is None:
+        return client.get("/api/v1/auth/me")
+    client.cookies.clear()
+    return client.get("/api/v1/auth/me", headers={"Cookie": f"access_token={access_token}"})
+
+
+def set_cookies(response: Response) -> dict[str, str]:
+    return {header.split("=", 1)[0]: header for header in response.headers.get_list("set-cookie")}
 
 
 def sign(claims: dict[str, Any], secret: str | None = None) -> str:
@@ -73,17 +81,16 @@ def claims_for(user_id: uuid.UUID, tenant_id: uuid.UUID, role: str = "admin", **
 # --- Login -------------------------------------------------------------------------------------
 
 
-def test_login_returns_a_15_minute_access_token_and_a_hardened_refresh_cookie(
+def test_login_sets_both_tokens_as_hardened_cookies_and_never_returns_them_in_the_body(
     client: TestClient, tenant_a: SeedResult
 ) -> None:
     response = login(client, email="OWNER@example.com")
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["token_type"] == "bearer"
-    assert body["expires_in"] == 900
-    assert body["role"] == "admin"
-    claims = jwt.decode(body["access_token"], get_settings().jwt_secret.get_secret_value(), algorithms=["HS256"])
+    assert response.json() == {"expires_in": 900, "role": "admin"}
+    claims = jwt.decode(
+        response.cookies["access_token"], get_settings().jwt_secret.get_secret_value(), algorithms=["HS256"]
+    )
     assert claims["sub"] == str(tenant_a.user_id)
     assert claims["tenant_id"] == str(tenant_a.tenant_id)
     assert claims["role"] == "admin"
@@ -91,13 +98,14 @@ def test_login_returns_a_15_minute_access_token_and_a_hardened_refresh_cookie(
     assert uuid.UUID(claims["jti"])
     assert "table_id" not in claims
 
-    cookie = response.headers["set-cookie"]
-    assert cookie.startswith("refresh_token=")
-    assert "HttpOnly" in cookie
-    assert "Secure" in cookie
-    assert "SameSite=strict" in cookie
-    assert "Path=/api/v1/auth" in cookie
-    assert "Max-Age=604800" in cookie
+    cookies = set_cookies(response)
+    for name, path, max_age in [("access_token", "/api", 900), ("refresh_token", "/api/v1/auth", 604800)]:
+        cookie = cookies[name]
+        assert "HttpOnly" in cookie
+        assert "Secure" in cookie
+        assert "SameSite=strict" in cookie
+        assert f"Path={path};" in f"{cookie};"
+        assert f"Max-Age={max_age}" in cookie
 
 
 def test_wrong_password_and_unknown_email_get_the_same_generic_error(client: TestClient, tenant_a: SeedResult) -> None:
@@ -120,11 +128,12 @@ def test_too_many_failures_for_an_account_block_it_temporarily(client: TestClien
     assert 0 < int(blocked.headers["retry-after"]) <= get_settings().login_failure_window_seconds
 
 
-def test_too_many_failures_from_one_ip_block_every_account(client: TestClient, tenant_a: SeedResult) -> None:
-    for attempt in range(get_settings().login_max_failures_per_ip):
+def test_failures_on_other_accounts_never_block_this_user(client: TestClient, tenant_a: SeedResult) -> None:
+    # The limit is per user only: one client failing on many accounts does not lock out the rest.
+    for attempt in range(30):
         assert login(client, email=f"guess-{attempt}@example.com").status_code == 401
 
-    assert login(client).status_code == 429
+    assert login(client).status_code == 200
 
 
 def test_a_successful_login_clears_the_account_failures(client: TestClient, tenant_a: SeedResult) -> None:
@@ -146,9 +155,9 @@ def test_login_validates_the_body(client: TestClient, body: dict[str, str]) -> N
 
 
 def test_me_returns_the_admin_and_the_business_name(client: TestClient, tenant_a: SeedResult) -> None:
-    access_token = login(client).json()["access_token"]
+    login(client)
 
-    response = me(client, access_token)
+    response = me(client)
 
     assert response.status_code == 200
     assert response.json() == {
@@ -164,8 +173,10 @@ def test_a_token_from_one_tenant_cannot_reach_another_tenants_data(
     forged = sign(claims_for(tenant_a.user_id, tenant_b.tenant_id))
 
     assert me(client, forged).status_code == 401
-    a = me(client, login(client).json()["access_token"]).json()
-    b = me(client, login(client, email="boss@example.com").json()["access_token"]).json()
+    login(client)
+    a = me(client).json()
+    login(client, email="boss@example.com")
+    b = me(client).json()
     assert a["tenant"]["name"] == "La Taquería"
     assert b["tenant"]["name"] == "Burger Place"
 
@@ -193,11 +204,18 @@ def test_me_rejects_invalid_access_tokens(client: TestClient, tenant_a: SeedResu
     response = me(client, tokens[token])
 
     assert response.status_code == 401
-    assert response.headers["www-authenticate"] == "Bearer"
 
 
 def test_me_requires_a_token(client: TestClient) -> None:
     assert client.get("/api/v1/auth/me").status_code == 401
+
+
+def test_bearer_headers_are_not_accepted_only_the_cookie(client: TestClient, tenant_a: SeedResult) -> None:
+    token = sign(claims_for(tenant_a.user_id, tenant_a.tenant_id))
+
+    response = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 401
 
 
 # --- Refresh -----------------------------------------------------------------------------------
@@ -212,7 +230,9 @@ def test_refresh_rotates_the_token_and_the_previous_one_stops_working(client: Te
     assert rotated.json()["role"] == "admin"
     second = rotated.cookies["refresh_token"]
     assert second != first
-    assert me(client, rotated.json()["access_token"]).status_code == 200
+    assert rotated.json() == {"expires_in": 900, "role": "admin"}
+    assert "access_token" in set_cookies(rotated)
+    assert me(client).status_code == 200
 
 
 def test_reusing_a_rotated_refresh_token_revokes_the_whole_family(client: TestClient, tenant_a: SeedResult) -> None:
@@ -241,7 +261,9 @@ def test_logout_revokes_the_session_and_clears_the_cookie(client: TestClient, te
     response = client.post("/api/v1/auth/logout", headers={"Cookie": f"refresh_token={token}"})
 
     assert response.status_code == 204
-    assert 'refresh_token=""' in response.headers["set-cookie"]
+    cookies = set_cookies(response)
+    assert 'refresh_token=""' in cookies["refresh_token"]
+    assert 'access_token=""' in cookies["access_token"]
     assert refresh_with(client, token).status_code == 401
 
 
@@ -267,7 +289,7 @@ def test_require_role_only_lets_the_listed_roles_through(guarded_client: TestCli
     extra = {"table_id": str(uuid.uuid4())} if role == "table" else {}
     token = sign(claims_for(uuid.uuid4(), tenant_id, role=role, **extra))
 
-    response = guarded_client.get("/test/admin-only", headers={"Authorization": f"Bearer {token}"})
+    response = guarded_client.get("/test/admin-only", headers={"Cookie": f"access_token={token}"})
 
     assert response.status_code == status
     if status == 200:
