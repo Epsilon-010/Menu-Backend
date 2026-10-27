@@ -1,0 +1,166 @@
+import uuid
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Request, status
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.modules.auth.application.revoke_user_sessions import RevokeTableSessions
+from app.modules.auth.infrastructure.refresh_tokens import SqlAlchemyRefreshTokenRepository
+from app.modules.tables.application.manage_tables import (
+    CreateTable,
+    ListTables,
+    RegenerateTablePin,
+    TableWithPin,
+    UpdateTable,
+)
+from app.modules.tables.domain.errors import InvalidTableData, TableNameNotAvailable, TableNotFound
+from app.modules.tables.domain.table import Table
+from app.modules.tables.infrastructure.repository import RandomTableCredentials, SqlAlchemyTableRepository
+from app.shared.domain.principal import Principal
+from app.shared.infrastructure.database import SqlAlchemyUnitOfWork, get_session
+from app.shared.infrastructure.http.auth import require_role
+from app.shared.infrastructure.security import Argon2PasswordHasher, SystemClock
+
+router = APIRouter(prefix="/tables", tags=["tables"])
+
+SessionDep = Annotated[AsyncSession, Depends(get_session)]
+Admin = Annotated[Principal, Depends(require_role("admin"))]
+
+
+# --- Schemas -----------------------------------------------------------------------------------
+
+
+class TableIn(BaseModel):
+    name: str = Field(max_length=200)
+
+
+class TableUpdate(BaseModel):
+    name: str | None = Field(default=None, max_length=200)
+    is_active: bool | None = None
+
+
+class TableOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    code: str
+    is_active: bool
+
+
+class TableWithPinOut(TableOut):
+    """Only returned when the PIN is created or regenerated: it is never shown again."""
+
+    pin: str
+
+
+def _out(table: Table) -> TableOut:
+    return TableOut(id=table.id, name=table.name, code=table.code, is_active=table.is_active)
+
+
+def _with_pin(result: TableWithPin) -> TableWithPinOut:
+    return TableWithPinOut(**_out(result.table).model_dump(), pin=result.pin)
+
+
+def _invalid(error: InvalidTableData) -> JSONResponse:
+    return JSONResponse({"detail": str(error)}, status_code=status.HTTP_422_UNPROCESSABLE_CONTENT)
+
+
+def _name_taken() -> JSONResponse:
+    return JSONResponse({"detail": "Table name already in use"}, status_code=status.HTTP_409_CONFLICT)
+
+
+def _not_found() -> JSONResponse:
+    return JSONResponse({"detail": "Table not found"}, status_code=status.HTTP_404_NOT_FOUND)
+
+
+# --- Wiring ------------------------------------------------------------------------------------
+
+
+class AuthTableSessionRevoker:
+    """Adapter of the tables `SessionRevoker` port onto the auth module's use case."""
+
+    def __init__(self, revoke: RevokeTableSessions) -> None:
+        self._revoke = revoke
+
+    async def revoke_all(self, tenant_id: uuid.UUID, table_id: uuid.UUID) -> None:
+        await self._revoke.execute(tenant_id, table_id)
+
+
+def _session_revoker(request: Request, session: AsyncSession) -> AuthTableSessionRevoker:
+    return AuthTableSessionRevoker(
+        RevokeTableSessions(SqlAlchemyRefreshTokenRepository(session), request.app.state.access_revocations, SystemClock())
+    )
+
+
+def get_create_table(session: SessionDep) -> CreateTable:
+    return CreateTable(
+        SqlAlchemyTableRepository(session), RandomTableCredentials(), Argon2PasswordHasher(), SqlAlchemyUnitOfWork(session)
+    )
+
+
+def get_list_tables(session: SessionDep) -> ListTables:
+    return ListTables(SqlAlchemyTableRepository(session))
+
+
+def get_update_table(request: Request, session: SessionDep) -> UpdateTable:
+    return UpdateTable(
+        SqlAlchemyTableRepository(session), _session_revoker(request, session), SqlAlchemyUnitOfWork(session)
+    )
+
+
+def get_regenerate_table_pin(request: Request, session: SessionDep) -> RegenerateTablePin:
+    return RegenerateTablePin(
+        SqlAlchemyTableRepository(session),
+        RandomTableCredentials(),
+        Argon2PasswordHasher(),
+        _session_revoker(request, session),
+        SqlAlchemyUnitOfWork(session),
+    )
+
+
+# --- Routes (admin only; the tenant always comes from the token) -------------------------------
+
+
+@router.get("", response_model=list[TableOut])
+async def list_tables(admin: Admin, use_case: Annotated[ListTables, Depends(get_list_tables)]) -> list[TableOut]:
+    return [_out(table) for table in await use_case.execute(admin.tenant_id)]
+
+
+@router.post("", response_model=TableWithPinOut, status_code=status.HTTP_201_CREATED)
+async def create_table(
+    body: TableIn, admin: Admin, use_case: Annotated[CreateTable, Depends(get_create_table)]
+) -> TableWithPinOut | JSONResponse:
+    try:
+        result = await use_case.execute(admin.tenant_id, body.name)
+    except InvalidTableData as error:
+        return _invalid(error)
+    except TableNameNotAvailable:
+        return _name_taken()
+    return _with_pin(result)
+
+
+@router.patch("/{table_id}", response_model=TableOut)
+async def update_table(
+    table_id: uuid.UUID, body: TableUpdate, admin: Admin, use_case: Annotated[UpdateTable, Depends(get_update_table)]
+) -> TableOut | JSONResponse:
+    try:
+        table = await use_case.execute(admin.tenant_id, table_id, name=body.name, is_active=body.is_active)
+    except InvalidTableData as error:
+        return _invalid(error)
+    except TableNameNotAvailable:
+        return _name_taken()
+    except TableNotFound:
+        return _not_found()
+    return _out(table)
+
+
+@router.post("/{table_id}/pin", response_model=TableWithPinOut)
+async def regenerate_table_pin(
+    table_id: uuid.UUID, admin: Admin, use_case: Annotated[RegenerateTablePin, Depends(get_regenerate_table_pin)]
+) -> TableWithPinOut | JSONResponse:
+    try:
+        result = await use_case.execute(admin.tenant_id, table_id)
+    except TableNotFound:
+        return _not_found()
+    return _with_pin(result)

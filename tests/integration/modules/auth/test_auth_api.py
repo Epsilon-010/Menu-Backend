@@ -171,6 +171,7 @@ def test_me_returns_the_admin_and_the_business_name(client: TestClient, tenant_a
             "full_name": "Owner",
             "role": "admin",
         },
+        "table": None,
         "tenant": {"id": str(tenant_a.tenant_id), "name": "La Taquería"},
     }
 

@@ -24,3 +24,22 @@ class RevokeUserSessions:
         now = self._clock.now()
         await self._refresh_tokens.revoke_all_for_user(tenant_id, user_id, now)
         await self._access_revocations.revoke(user_id, now)
+
+
+class RevokeTableSessions:
+    """Ends every session of a table's device right away (deactivating it, regenerating its PIN).
+
+    Same transaction rules as `RevokeUserSessions`; the table id is the access-token subject.
+    """
+
+    def __init__(
+        self, refresh_tokens: RefreshTokenRepository, access_revocations: AccessRevocations, clock: Clock
+    ) -> None:
+        self._refresh_tokens = refresh_tokens
+        self._access_revocations = access_revocations
+        self._clock = clock
+
+    async def execute(self, tenant_id: uuid.UUID, table_id: uuid.UUID) -> None:
+        now = self._clock.now()
+        await self._refresh_tokens.revoke_all_for_table(tenant_id, table_id, now)
+        await self._access_revocations.revoke(table_id, now)

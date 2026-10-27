@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 from app.modules.auth.domain.refresh_token import RefreshToken
 from app.modules.staff.domain.user import STAFF_MEMBER_ROLES, User
+from app.modules.tables.domain.table import Table
 from app.modules.tenants.domain.tenant import Tenant
 
 
@@ -81,6 +82,57 @@ class InMemoryUserRepository:
         self.users[user.id] = user
 
 
+class InMemoryTableRepository:
+    def __init__(self) -> None:
+        self.tables: dict[uuid.UUID, Table] = {}
+
+    async def add(self, table: Table) -> None:
+        self.tables[table.id] = table
+
+    async def get(self, tenant_id: uuid.UUID, table_id: uuid.UUID) -> Table | None:
+        table = self.tables.get(table_id)
+        return table if table is not None and table.tenant_id == tenant_id else None
+
+    async def get_by_code(self, code: str) -> Table | None:
+        return next((table for table in self.tables.values() if table.code == code), None)
+
+    async def get_by_name(self, tenant_id: uuid.UUID, name: str) -> Table | None:
+        return next(
+            (
+                table
+                for table in self.tables.values()
+                if table.tenant_id == tenant_id and table.name.lower() == name.lower()
+            ),
+            None,
+        )
+
+    async def list(self, tenant_id: uuid.UUID) -> list[Table]:
+        tables = [table for table in self.tables.values() if table.tenant_id == tenant_id]
+        return sorted(tables, key=lambda table: table.name.lower())
+
+    async def update(self, table: Table) -> None:
+        self.tables[table.id] = table
+
+
+class FakeTableCredentials:
+    """Hands out the queued codes first (to force collisions), then sequential ones."""
+
+    def __init__(self, codes: list[str] | None = None) -> None:
+        self.codes = list(codes or [])
+        self.issued_codes = 0
+        self.issued_pins = 0
+
+    def new_code(self) -> str:
+        if self.codes:
+            return self.codes.pop(0)
+        self.issued_codes += 1
+        return f"CODE{self.issued_codes:02d}"
+
+    def new_pin(self) -> str:
+        self.issued_pins += 1
+        return f"{self.issued_pins:06d}"
+
+
 class InMemoryRefreshTokenRepository:
     def __init__(self) -> None:
         self.tokens: dict[uuid.UUID, RefreshToken] = {}
@@ -106,6 +158,11 @@ class InMemoryRefreshTokenRepository:
     async def revoke_all_for_user(self, tenant_id: uuid.UUID, user_id: uuid.UUID, at: datetime) -> None:
         for token_id, token in self.tokens.items():
             if token.tenant_id == tenant_id and token.user_id == user_id and token.revoked_at is None:
+                self.tokens[token_id] = replace(token, revoked_at=at)
+
+    async def revoke_all_for_table(self, tenant_id: uuid.UUID, table_id: uuid.UUID, at: datetime) -> None:
+        for token_id, token in self.tokens.items():
+            if token.tenant_id == tenant_id and token.table_id == table_id and token.revoked_at is None:
                 self.tokens[token_id] = replace(token, revoked_at=at)
 
 

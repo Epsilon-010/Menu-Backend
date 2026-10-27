@@ -29,14 +29,20 @@ class RefreshToken:
     """
 
     tenant_id: uuid.UUID
-    user_id: uuid.UUID
+    # Exactly one of them: the staff member or the table device the session belongs to.
+    user_id: uuid.UUID | None
     family_id: uuid.UUID
     token_hash: str
     created_at: datetime
     expires_at: datetime
     rotated_at: datetime | None = None
     revoked_at: datetime | None = None
+    table_id: uuid.UUID | None = None
     id: uuid.UUID = field(default_factory=uuid.uuid4)
+
+    def __post_init__(self) -> None:
+        if (self.user_id is None) == (self.table_id is None):
+            raise ValueError("A refresh token belongs to exactly one user or table")
 
     def is_expired(self, now: datetime) -> bool:
         return now >= self.expires_at
@@ -57,6 +63,8 @@ class RefreshTokenRepository(Protocol):
 
     async def revoke_all_for_user(self, tenant_id: uuid.UUID, user_id: uuid.UUID, at: datetime) -> None: ...
 
+    async def revoke_all_for_table(self, tenant_id: uuid.UUID, table_id: uuid.UUID, at: datetime) -> None: ...
+
 
 class RefreshTokenCodec(Protocol):
     """Port: creates opaque refresh token values and the hash stored for them."""
@@ -75,7 +83,9 @@ class IssuedAccessToken:
 class AccessTokenIssuer(Protocol):
     """Port: signs short-lived access tokens."""
 
-    def issue(self, subject_id: uuid.UUID, tenant_id: uuid.UUID, role: Role, now: datetime) -> IssuedAccessToken: ...
+    def issue(
+        self, subject_id: uuid.UUID, tenant_id: uuid.UUID, role: Role, now: datetime, table_id: uuid.UUID | None = None
+    ) -> IssuedAccessToken: ...
 
 
 class LoginAttemptLimiter(Protocol):

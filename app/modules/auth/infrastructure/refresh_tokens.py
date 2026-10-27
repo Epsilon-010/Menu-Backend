@@ -25,6 +25,7 @@ def _to_entity(model: RefreshTokenModel) -> RefreshToken:
         id=model.id,
         tenant_id=model.tenant_id,
         user_id=model.user_id,
+        table_id=model.table_id,
         family_id=model.family_id,
         token_hash=model.token_hash,
         created_at=model.created_at,
@@ -44,6 +45,7 @@ class SqlAlchemyRefreshTokenRepository:
                 id=token.id,
                 tenant_id=token.tenant_id,
                 user_id=token.user_id,
+                table_id=token.table_id,
                 family_id=token.family_id,
                 token_hash=token.token_hash,
                 created_at=token.created_at,
@@ -83,6 +85,17 @@ class SqlAlchemyRefreshTokenRepository:
             .where(
                 RefreshTokenModel.tenant_id == tenant_id,
                 RefreshTokenModel.user_id == user_id,
+                RefreshTokenModel.revoked_at.is_(None),
+            )
+            .values(revoked_at=at)
+        )
+
+    async def revoke_all_for_table(self, tenant_id: uuid.UUID, table_id: uuid.UUID, at: datetime) -> None:
+        await self._session.execute(
+            update(RefreshTokenModel)
+            .where(
+                RefreshTokenModel.tenant_id == tenant_id,
+                RefreshTokenModel.table_id == table_id,
                 RefreshTokenModel.revoked_at.is_(None),
             )
             .values(revoked_at=at)
