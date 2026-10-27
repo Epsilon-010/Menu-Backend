@@ -3,8 +3,20 @@ import uuid
 import pytest
 
 from app.modules.staff.application.create_user import CreateUser
-from app.modules.staff.application.find_user import FindUserByEmail, GetUser
-from app.modules.staff.domain.errors import EmailAlreadyInUse, InvalidUserData
+from app.modules.staff.application.find_user import FindUserByLogin, GetUser
+from app.modules.staff.application.manage_staff import (
+    CreateStaffMember,
+    ListStaff,
+    ResetStaffPassword,
+    UpdateStaffMember,
+)
+from app.modules.staff.domain.errors import (
+    EmailAlreadyInUse,
+    InvalidUserData,
+    StaffMemberNotFound,
+    UsernameNotAvailable,
+)
+from app.modules.staff.domain.user import User
 from app.shared.domain.principal import Role
 from tests.unit.fakes import FakePasswordHasher, FakeUnitOfWork, InMemoryUserRepository
 
@@ -84,8 +96,8 @@ async def test_rejects_the_table_role_for_staff_accounts(users: InMemoryUserRepo
 async def test_finds_a_user_by_email_case_insensitively(users: InMemoryUserRepository, uow: FakeUnitOfWork) -> None:
     created = await create_user(users, uow).execute(TENANT_A, "owner@example.com", "Ana", Role.ADMIN, "s3cret-pass")
 
-    assert await FindUserByEmail(users).execute(" OWNER@example.com") == created
-    assert await FindUserByEmail(users).execute("nobody@example.com") is None
+    assert await FindUserByLogin(users).execute(" OWNER@example.com") == created
+    assert await FindUserByLogin(users).execute("nobody@example.com") is None
 
 
 async def test_get_user_is_scoped_to_the_tenant(users: InMemoryUserRepository, uow: FakeUnitOfWork) -> None:
@@ -93,3 +105,191 @@ async def test_get_user_is_scoped_to_the_tenant(users: InMemoryUserRepository, u
 
     assert await GetUser(users).execute(TENANT_A, created.id) == created
     assert await GetUser(users).execute(TENANT_B, created.id) is None
+
+
+# --- Staff management (admin) ------------------------------------------------------------------
+
+
+class FakeSessionRevoker:
+    def __init__(self) -> None:
+        self.revoked: list[tuple[uuid.UUID, uuid.UUID]] = []
+
+    async def revoke_all(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> None:
+        self.revoked.append((tenant_id, user_id))
+
+
+@pytest.fixture
+def sessions() -> FakeSessionRevoker:
+    return FakeSessionRevoker()
+
+
+async def add_waiter(users: InMemoryUserRepository, uow: FakeUnitOfWork, tenant_id: uuid.UUID = TENANT_A) -> User:
+    return await CreateStaffMember(users, FakePasswordHasher(), uow).execute(
+        tenant_id, "juan.burger", "Juan Pérez", Role.WAITER, "s3cret-pass"
+    )
+
+
+async def test_creates_a_staff_member_with_a_normalized_username(
+    users: InMemoryUserRepository, uow: FakeUnitOfWork
+) -> None:
+    member = await CreateStaffMember(users, FakePasswordHasher(), uow).execute(
+        TENANT_A, "  Juan.Burger ", " Juan Pérez ", Role.KITCHEN, "s3cret-pass"
+    )
+
+    assert member.username == "juan.burger"
+    assert member.email is None
+    assert member.full_name == "Juan Pérez"
+    assert member.role is Role.KITCHEN
+    assert member.tenant_id == TENANT_A
+    assert member.is_active is True
+    assert member.password_hash == "hashed:s3cret-pass"
+    assert users.users[member.id] == member
+    assert uow.commits == 1
+
+
+async def test_a_username_is_unique_across_tenants(users: InMemoryUserRepository, uow: FakeUnitOfWork) -> None:
+    await add_waiter(users, uow, TENANT_A)
+
+    with pytest.raises(UsernameNotAvailable):
+        await CreateStaffMember(users, FakePasswordHasher(), uow).execute(
+            TENANT_B, "JUAN.burger", "Other Juan", Role.WAITER, "s3cret-pass"
+        )
+
+    assert len(users.users) == 1
+    assert uow.commits == 1
+
+
+@pytest.mark.parametrize(
+    ("username", "full_name", "role", "password"),
+    [
+        ("ju", "Juan", Role.WAITER, "s3cret-pass"),
+        ("j" * 41, "Juan", Role.WAITER, "s3cret-pass"),
+        ("juan@burger", "Juan", Role.WAITER, "s3cret-pass"),
+        ("juan perez", "Juan", Role.WAITER, "s3cret-pass"),
+        ("juan", "  ", Role.WAITER, "s3cret-pass"),
+        ("juan", "Juan", Role.WAITER, "short"),
+        ("juan", "Juan", Role.ADMIN, "s3cret-pass"),
+        ("juan", "Juan", Role.TABLE, "s3cret-pass"),
+    ],
+)
+async def test_rejects_invalid_staff_member_data(
+    users: InMemoryUserRepository, uow: FakeUnitOfWork, username: str, full_name: str, role: Role, password: str
+) -> None:
+    with pytest.raises(InvalidUserData):
+        await CreateStaffMember(users, FakePasswordHasher(), uow).execute(TENANT_A, username, full_name, role, password)
+
+    assert users.users == {}
+    assert uow.commits == 0
+
+
+async def test_finds_a_staff_member_by_username_for_login(users: InMemoryUserRepository, uow: FakeUnitOfWork) -> None:
+    member = await add_waiter(users, uow)
+
+    assert await FindUserByLogin(users).execute(" Juan.Burger") == member
+    assert await FindUserByLogin(users).execute("nobody") is None
+
+
+async def test_lists_only_the_waiters_and_cooks_of_the_tenant_by_name(
+    users: InMemoryUserRepository, uow: FakeUnitOfWork
+) -> None:
+    await create_user(users, uow).execute(TENANT_A, "owner@example.com", "Ana Owner", Role.ADMIN, "s3cret-pass")
+    create = CreateStaffMember(users, FakePasswordHasher(), uow)
+    zoe = await create.execute(TENANT_A, "zoe", "Zoe", Role.KITCHEN, "s3cret-pass")
+    bob = await create.execute(TENANT_A, "bob", "bob", Role.WAITER, "s3cret-pass")
+    await create.execute(TENANT_B, "carl", "Carl", Role.WAITER, "s3cret-pass")
+
+    assert await ListStaff(users).execute(TENANT_A) == [bob, zoe]
+
+
+async def test_updates_name_and_role_and_revokes_sessions_on_role_change(
+    users: InMemoryUserRepository, uow: FakeUnitOfWork, sessions: FakeSessionRevoker
+) -> None:
+    member = await add_waiter(users, uow)
+
+    updated = await UpdateStaffMember(users, sessions, uow).execute(
+        TENANT_A, member.id, full_name=" Juan P. ", role=Role.KITCHEN
+    )
+
+    assert updated.full_name == "Juan P."
+    assert updated.role is Role.KITCHEN
+    assert users.users[member.id] == updated
+    assert sessions.revoked == [(TENANT_A, member.id)]
+    assert uow.commits == 2
+
+
+async def test_renaming_alone_keeps_the_sessions(
+    users: InMemoryUserRepository, uow: FakeUnitOfWork, sessions: FakeSessionRevoker
+) -> None:
+    member = await add_waiter(users, uow)
+
+    await UpdateStaffMember(users, sessions, uow).execute(TENANT_A, member.id, full_name="Juan P.")
+
+    assert sessions.revoked == []
+
+
+async def test_deactivating_revokes_every_session_and_reactivating_does_not(
+    users: InMemoryUserRepository, uow: FakeUnitOfWork, sessions: FakeSessionRevoker
+) -> None:
+    member = await add_waiter(users, uow)
+    update = UpdateStaffMember(users, sessions, uow)
+
+    deactivated = await update.execute(TENANT_A, member.id, is_active=False)
+    reactivated = await update.execute(TENANT_A, member.id, is_active=True)
+
+    assert deactivated.is_active is False
+    assert reactivated.is_active is True
+    assert sessions.revoked == [(TENANT_A, member.id)]
+
+
+async def test_rejects_an_invalid_update_without_saving(
+    users: InMemoryUserRepository, uow: FakeUnitOfWork, sessions: FakeSessionRevoker
+) -> None:
+    member = await add_waiter(users, uow)
+
+    with pytest.raises(InvalidUserData):
+        await UpdateStaffMember(users, sessions, uow).execute(TENANT_A, member.id, role=Role.ADMIN)
+
+    assert users.users[member.id] == member
+    assert sessions.revoked == []
+    assert uow.commits == 1
+
+
+async def test_resets_the_password_and_revokes_every_session(
+    users: InMemoryUserRepository, uow: FakeUnitOfWork, sessions: FakeSessionRevoker
+) -> None:
+    member = await add_waiter(users, uow)
+
+    await ResetStaffPassword(users, FakePasswordHasher(), sessions, uow).execute(TENANT_A, member.id, "new-pass-123")
+
+    assert users.users[member.id].password_hash == "hashed:new-pass-123"
+    assert sessions.revoked == [(TENANT_A, member.id)]
+    assert uow.commits == 2
+
+
+async def test_rejects_a_short_new_password(
+    users: InMemoryUserRepository, uow: FakeUnitOfWork, sessions: FakeSessionRevoker
+) -> None:
+    member = await add_waiter(users, uow)
+
+    with pytest.raises(InvalidUserData):
+        await ResetStaffPassword(users, FakePasswordHasher(), sessions, uow).execute(TENANT_A, member.id, "short")
+
+    assert users.users[member.id] == member
+    assert sessions.revoked == []
+
+
+async def test_staff_management_never_reaches_another_tenant_nor_an_admin(
+    users: InMemoryUserRepository, uow: FakeUnitOfWork, sessions: FakeSessionRevoker
+) -> None:
+    member = await add_waiter(users, uow, TENANT_B)
+    admin = await create_user(users, uow).execute(TENANT_A, "owner@example.com", "Ana", Role.ADMIN, "s3cret-pass")
+
+    for target in (member.id, admin.id, uuid.uuid4()):
+        with pytest.raises(StaffMemberNotFound):
+            await UpdateStaffMember(users, sessions, uow).execute(TENANT_A, target, is_active=False)
+        with pytest.raises(StaffMemberNotFound):
+            await ResetStaffPassword(users, FakePasswordHasher(), sessions, uow).execute(TENANT_A, target, "new-pass-123")
+
+    assert users.users[member.id] == member
+    assert users.users[admin.id] == admin
+    assert sessions.revoked == []

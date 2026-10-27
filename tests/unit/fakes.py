@@ -5,7 +5,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from app.modules.auth.domain.refresh_token import RefreshToken
-from app.modules.staff.domain.user import User
+from app.modules.staff.domain.user import STAFF_MEMBER_ROLES, User
 from app.modules.tenants.domain.tenant import Tenant
 
 
@@ -70,6 +70,16 @@ class InMemoryUserRepository:
     async def get_by_email(self, email: str) -> User | None:
         return next((user for user in self.users.values() if user.email == email), None)
 
+    async def get_by_username(self, username: str) -> User | None:
+        return next((user for user in self.users.values() if user.username == username), None)
+
+    async def list_staff(self, tenant_id: uuid.UUID) -> list[User]:
+        staff = [user for user in self.users.values() if user.tenant_id == tenant_id and user.role in STAFF_MEMBER_ROLES]
+        return sorted(staff, key=lambda user: user.full_name.lower())
+
+    async def update(self, user: User) -> None:
+        self.users[user.id] = user
+
 
 class InMemoryRefreshTokenRepository:
     def __init__(self) -> None:
@@ -92,6 +102,22 @@ class InMemoryRefreshTokenRepository:
         for token_id, token in self.tokens.items():
             if token.family_id == family_id and token.revoked_at is None:
                 self.tokens[token_id] = replace(token, revoked_at=at)
+
+    async def revoke_all_for_user(self, tenant_id: uuid.UUID, user_id: uuid.UUID, at: datetime) -> None:
+        for token_id, token in self.tokens.items():
+            if token.tenant_id == tenant_id and token.user_id == user_id and token.revoked_at is None:
+                self.tokens[token_id] = replace(token, revoked_at=at)
+
+
+class FakeAccessRevocations:
+    def __init__(self) -> None:
+        self.revoked: dict[uuid.UUID, datetime] = {}
+
+    async def revoke(self, subject_id: uuid.UUID, at: datetime) -> None:
+        self.revoked[subject_id] = at
+
+    async def revoked_since(self, subject_id: uuid.UUID) -> datetime | None:
+        return self.revoked.get(subject_id)
 
 
 class FakeLoginAttemptLimiter:

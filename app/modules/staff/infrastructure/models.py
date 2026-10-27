@@ -9,11 +9,17 @@ from app.shared.infrastructure.database import Base, UUIDPrimaryKey
 
 class UserModel(UUIDPrimaryKey, Base):
     __tablename__ = "users"
-    __table_args__ = (CheckConstraint("role IN ('admin', 'waiter', 'kitchen')", name="role"),)
+    __table_args__ = (
+        CheckConstraint("role IN ('admin', 'waiter', 'kitchen')", name="role"),
+        # Every account needs something to sign in with.
+        CheckConstraint("email IS NOT NULL OR username IS NOT NULL", name="login"),
+    )
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
-    # Unique across tenants: login receives only an email, the tenant comes from the account.
-    email: Mapped[str] = mapped_column(String(254), unique=True)
+    # Email (admins) and username (waiters, cooks) are unique across tenants: login receives
+    # only one of them, the tenant comes from the account.
+    email: Mapped[str | None] = mapped_column(String(254), unique=True)
+    username: Mapped[str | None] = mapped_column(String(40), unique=True)
     full_name: Mapped[str] = mapped_column(String(120))
     role: Mapped[str] = mapped_column(String(20))
     password_hash: Mapped[str] = mapped_column(String(255))

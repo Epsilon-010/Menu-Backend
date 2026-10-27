@@ -76,3 +76,14 @@ class SqlAlchemyRefreshTokenRepository:
             .where(RefreshTokenModel.family_id == family_id, RefreshTokenModel.revoked_at.is_(None))
             .values(revoked_at=at)
         )
+
+    async def revoke_all_for_user(self, tenant_id: uuid.UUID, user_id: uuid.UUID, at: datetime) -> None:
+        await self._session.execute(
+            update(RefreshTokenModel)
+            .where(
+                RefreshTokenModel.tenant_id == tenant_id,
+                RefreshTokenModel.user_id == user_id,
+                RefreshTokenModel.revoked_at.is_(None),
+            )
+            .values(revoked_at=at)
+        )

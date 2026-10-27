@@ -8,15 +8,17 @@ from app.modules.auth.application.get_current_account import GetCurrentAccount
 from app.modules.auth.application.login import Login
 from app.modules.auth.application.logout import Logout
 from app.modules.auth.application.refresh_session import RefreshSession
+from app.modules.auth.application.revoke_user_sessions import RevokeUserSessions
 from app.modules.auth.application.session_issuer import SessionIssuer
 from app.modules.auth.domain.errors import AccountNotFound, InvalidCredentials, InvalidRefreshToken, TooManyLoginAttempts
 from app.modules.auth.domain.refresh_token import IssuedAccessToken
-from app.modules.staff.application.find_user import FindUserByEmail, GetUser
+from app.modules.staff.application.find_user import FindUserByLogin, GetUser
 from app.modules.staff.domain.user import User
 from app.modules.tenants.application.get_tenant import GetTenant
 from app.modules.tenants.domain.tenant import Tenant
 from app.shared.domain.principal import Principal, Role
 from tests.unit.fakes import (
+    FakeAccessRevocations,
     FakeClock,
     FakeLoginAttemptLimiter,
     FakePasswordHasher,
@@ -60,6 +62,7 @@ class World:
         self.users = InMemoryUserRepository()
         self.tenants = InMemoryTenantRepository()
         self.refresh_tokens = InMemoryRefreshTokenRepository()
+        self.access_revocations = FakeAccessRevocations()
         self.sessions = SessionIssuer(self.refresh_tokens, self.codec, FakeAccessTokens(), self.clock)
 
     async def add_user(self, tenant: Tenant, email: str, role: Role = Role.ADMIN, active: bool = True) -> User:
@@ -75,8 +78,17 @@ class World:
         await self.users.add(user)
         return user
 
+    async def add_staff(self, tenant: Tenant, username: str, role: Role = Role.WAITER) -> User:
+        await self.tenants.add(tenant)
+        user = User.create_staff(tenant.id, username, "Juan Waiter", role, await self.hasher.hash(PASSWORD))
+        await self.users.add(user)
+        return user
+
     def login(self) -> Login:
-        return Login(FindUserByEmail(self.users), self.hasher, self.limiter, self.sessions, self.uow)
+        return Login(FindUserByLogin(self.users), self.hasher, self.limiter, self.sessions, self.uow)
+
+    def revoke_user_sessions(self) -> RevokeUserSessions:
+        return RevokeUserSessions(self.refresh_tokens, self.access_revocations, self.clock)
 
     def refresh(self) -> RefreshSession:
         return RefreshSession(self.refresh_tokens, self.codec, GetUser(self.users), self.sessions, self.clock, self.uow)
@@ -116,6 +128,25 @@ async def test_login_issues_an_access_token_and_a_stored_refresh_token(world: Wo
     assert world.limiter.acquired == ["owner@example.com"]
     assert world.limiter.succeeded_logins == ["owner@example.com"]
     assert world.uow.commits == 1
+
+
+async def test_staff_member_logs_in_with_their_username_and_gets_a_shift_long_session(world: World) -> None:
+    waiter = await world.add_staff(Tenant(name="Burger Place"), "juan.burger")
+
+    session = await world.login().execute(" Juan.Burger ", PASSWORD)
+
+    assert session.role is Role.WAITER
+    assert session.access_token == f"access:{waiter.id}:{waiter.tenant_id}:waiter"
+    assert session.refresh_expires_at == world.clock.now() + timedelta(hours=12)
+    assert world.limiter.acquired == ["juan.burger"]
+    assert world.limiter.succeeded_logins == ["juan.burger"]
+
+
+async def test_login_with_an_unknown_username_fails_generically(world: World) -> None:
+    with pytest.raises(InvalidCredentials):
+        await world.login().execute("nobody", PASSWORD)
+
+    assert world.hasher.verified == ["dummy"]
 
 
 async def test_login_with_a_wrong_password_fails_generically_and_keeps_the_attempt_counted(world: World, admin: User) -> None:
@@ -257,6 +288,39 @@ async def test_logout_without_a_known_token_is_a_no_op(world: World, token: str 
     await world.logout().execute(token)
 
     assert world.uow.commits == 0
+
+
+# --- Revoking every session of a user ---------------------------------------------------------
+
+
+async def test_revoking_a_user_ends_all_their_sessions_and_marks_their_access_tokens(world: World) -> None:
+    tenant = Tenant(name="Burger Place")
+    waiter = await world.add_staff(tenant, "juan.burger")
+    colleague = await world.add_staff(tenant, "luis.burger")
+    tablet = await world.login().execute("juan.burger", PASSWORD)
+    phone = await world.login().execute("juan.burger", PASSWORD)
+    other = await world.login().execute("luis.burger", PASSWORD)
+    commits = world.uow.commits
+
+    await world.revoke_user_sessions().execute(waiter.tenant_id, waiter.id)
+
+    # The calling use case owns the transaction.
+    assert world.uow.commits == commits
+    assert world.access_revocations.revoked == {waiter.id: world.clock.now()}
+    for session in (tablet, phone):
+        with pytest.raises(InvalidRefreshToken):
+            await world.refresh().execute(session.refresh_token)
+    assert (await world.refresh().execute(other.refresh_token)).role is Role.WAITER
+    assert colleague.id not in world.access_revocations.revoked
+
+
+async def test_revoking_never_touches_another_tenant(world: World) -> None:
+    waiter = await world.add_staff(Tenant(name="Burger Place"), "juan.burger")
+    session = await world.login().execute("juan.burger", PASSWORD)
+
+    await world.revoke_user_sessions().execute(uuid.uuid4(), waiter.id)
+
+    assert (await world.refresh().execute(session.refresh_token)).role is Role.WAITER
 
 
 # --- Current account ---------------------------------------------------------------------------

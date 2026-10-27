@@ -16,7 +16,7 @@ from app.modules.auth.domain.errors import AccountNotFound, InvalidCredentials, 
 from app.modules.auth.domain.refresh_token import ACCESS_TOKEN_TTL
 from app.modules.auth.infrastructure.rate_limiter import RedisLoginAttemptLimiter
 from app.modules.auth.infrastructure.refresh_tokens import OpaqueRefreshTokenCodec, SqlAlchemyRefreshTokenRepository
-from app.modules.staff.application.find_user import FindUserByEmail, GetUser
+from app.modules.staff.application.find_user import FindUserByLogin, GetUser
 from app.modules.staff.infrastructure.repository import SqlAlchemyUserRepository
 from app.modules.tenants.application.get_tenant import GetTenant
 from app.modules.tenants.infrastructure.repository import SqlAlchemyTenantRepository
@@ -40,7 +40,8 @@ RefreshCookie = Annotated[str | None, Cookie(alias=REFRESH_COOKIE)]
 
 
 class LoginRequest(BaseModel):
-    email: str = Field(min_length=3, max_length=254)
+    # The admin's email or a staff member's username.
+    username: str = Field(min_length=3, max_length=254)
     password: str = Field(min_length=1, max_length=128)
 
 
@@ -53,7 +54,8 @@ class SessionResponse(BaseModel):
 
 class UserOut(BaseModel):
     id: uuid.UUID
-    email: str
+    email: str | None
+    username: str | None
     full_name: str
     role: Role
 
@@ -88,7 +90,7 @@ def get_login(request: Request, session: SessionDep) -> Login:
         max_per_account=settings.login_max_failures_per_account,
     )
     return Login(
-        FindUserByEmail(SqlAlchemyUserRepository(session)),
+        FindUserByLogin(SqlAlchemyUserRepository(session)),
         Argon2PasswordHasher(),
         limiter,
         _session_issuer(request, session),
@@ -164,9 +166,9 @@ async def login(
     body: LoginRequest, response: Response, use_case: Annotated[Login, Depends(get_login)]
 ) -> SessionResponse | JSONResponse:
     try:
-        auth = await use_case.execute(body.email, body.password)
+        auth = await use_case.execute(body.username, body.password)
     except InvalidCredentials:
-        return JSONResponse({"detail": "Invalid email or password"}, status_code=status.HTTP_401_UNAUTHORIZED)
+        return JSONResponse({"detail": "Invalid username or password"}, status_code=status.HTTP_401_UNAUTHORIZED)
     except TooManyLoginAttempts as error:
         return JSONResponse(
             {"detail": "Too many login attempts. Try again later."},
@@ -209,6 +211,8 @@ async def me(
         return JSONResponse({"detail": "Not authenticated"}, status_code=status.HTTP_401_UNAUTHORIZED)
     user, tenant = account.user, account.tenant
     return MeResponse(
-        user=UserOut(id=user.id, email=user.email, full_name=user.full_name, role=user.role),
+        user=UserOut(
+            id=user.id, email=user.email, username=user.username, full_name=user.full_name, role=user.role
+        ),
         tenant=TenantOut(id=tenant.id, name=tenant.name),
     )

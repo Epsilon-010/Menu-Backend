@@ -55,6 +55,8 @@ class RefreshTokenRepository(Protocol):
 
     async def revoke_family(self, family_id: uuid.UUID, at: datetime) -> None: ...
 
+    async def revoke_all_for_user(self, tenant_id: uuid.UUID, user_id: uuid.UUID, at: datetime) -> None: ...
+
 
 class RefreshTokenCodec(Protocol):
     """Port: creates opaque refresh token values and the hash stored for them."""

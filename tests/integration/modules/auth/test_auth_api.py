@@ -16,7 +16,7 @@ from app.shared.infrastructure.database import create_engine, create_session_fac
 from app.shared.infrastructure.http.auth import require_role
 
 PASSWORD = "s3cret-pass"
-GENERIC_LOGIN_ERROR = {"detail": "Invalid email or password"}
+GENERIC_LOGIN_ERROR = {"detail": "Invalid username or password"}
 
 
 async def _seed(tenant: str, email: str) -> SeedResult:
@@ -37,8 +37,9 @@ def tenant_b() -> SeedResult:
     return asyncio.run(_seed("Burger Place", "boss@example.com"))
 
 
-def login(client: TestClient, email: str = "owner@example.com", password: str = PASSWORD) -> Response:
-    return client.post("/api/v1/auth/login", json={"email": email, "password": password})
+def login(client: TestClient, username: str = "owner@example.com", password: str = PASSWORD) -> Response:
+    """The `username` field takes the admin's email or a staff member's username."""
+    return client.post("/api/v1/auth/login", json={"username": username, "password": password})
 
 
 def refresh_with(client: TestClient, token: str | None) -> Response:
@@ -84,7 +85,7 @@ def claims_for(user_id: uuid.UUID, tenant_id: uuid.UUID, role: str = "admin", **
 def test_login_sets_both_tokens_as_hardened_cookies_and_never_returns_them_in_the_body(
     client: TestClient, tenant_a: SeedResult
 ) -> None:
-    response = login(client, email="OWNER@example.com")
+    response = login(client, username="OWNER@example.com")
 
     assert response.status_code == 200
     assert response.json() == {"expires_in": 900, "role": "admin"}
@@ -110,7 +111,7 @@ def test_login_sets_both_tokens_as_hardened_cookies_and_never_returns_them_in_th
 
 def test_wrong_password_and_unknown_email_get_the_same_generic_error(client: TestClient, tenant_a: SeedResult) -> None:
     wrong_password = login(client, password="wrong-pass")
-    unknown_email = login(client, email="nobody@example.com")
+    unknown_email = login(client, username="nobody@example.com")
 
     assert wrong_password.status_code == unknown_email.status_code == 401
     assert wrong_password.json() == unknown_email.json() == GENERIC_LOGIN_ERROR
@@ -131,7 +132,7 @@ def test_too_many_failures_for_an_account_block_it_temporarily(client: TestClien
 def test_failures_on_other_accounts_never_block_this_user(client: TestClient, tenant_a: SeedResult) -> None:
     # The limit is per user only: one client failing on many accounts does not lock out the rest.
     for attempt in range(30):
-        assert login(client, email=f"guess-{attempt}@example.com").status_code == 401
+        assert login(client, username=f"guess-{attempt}@example.com").status_code == 401
 
     assert login(client).status_code == 200
 
@@ -146,7 +147,9 @@ def test_a_successful_login_clears_the_account_failures(client: TestClient, tena
     assert login(client).status_code == 200
 
 
-@pytest.mark.parametrize("body", [{}, {"email": "owner@example.com"}, {"email": "x" * 300, "password": PASSWORD}])
+@pytest.mark.parametrize(
+    "body", [{}, {"username": "owner@example.com"}, {"username": "x" * 300, "password": PASSWORD}]
+)
 def test_login_validates_the_body(client: TestClient, body: dict[str, str]) -> None:
     assert client.post("/api/v1/auth/login", json=body).status_code == 422
 
@@ -161,7 +164,13 @@ def test_me_returns_the_admin_and_the_business_name(client: TestClient, tenant_a
 
     assert response.status_code == 200
     assert response.json() == {
-        "user": {"id": str(tenant_a.user_id), "email": "owner@example.com", "full_name": "Owner", "role": "admin"},
+        "user": {
+            "id": str(tenant_a.user_id),
+            "email": "owner@example.com",
+            "username": None,
+            "full_name": "Owner",
+            "role": "admin",
+        },
         "tenant": {"id": str(tenant_a.tenant_id), "name": "La Taquería"},
     }
 
@@ -175,7 +184,7 @@ def test_a_token_from_one_tenant_cannot_reach_another_tenants_data(
     assert me(client, forged).status_code == 401
     login(client)
     a = me(client).json()
-    login(client, email="boss@example.com")
+    login(client, username="boss@example.com")
     b = me(client).json()
     assert a["tenant"]["name"] == "La Taquería"
     assert b["tenant"]["name"] == "Burger Place"

@@ -10,7 +10,7 @@ from typing import Annotated
 
 from fastapi import Cookie, Depends, HTTPException, Request, status
 
-from app.shared.domain.principal import AccessTokenDecoder, InvalidAccessToken, Principal, Role
+from app.shared.domain.principal import AccessRevocations, AccessTokenDecoder, InvalidAccessToken, Principal, Role
 
 ACCESS_COOKIE = "access_token"
 # Sent to every API route; never to the static frontend.
@@ -28,9 +28,16 @@ async def get_principal(
         raise _unauthorized()
     decoder: AccessTokenDecoder = request.app.state.access_tokens
     try:
-        return decoder.decode(access_token)
+        principal = decoder.decode(access_token)
     except InvalidAccessToken as error:
         raise _unauthorized() from error
+
+    # Deactivating an account (or resetting its password) ends its sessions right away.
+    revocations: AccessRevocations = request.app.state.access_revocations
+    revoked_at = await revocations.revoked_since(principal.subject_id)
+    if revoked_at is not None and (principal.issued_at is None or principal.issued_at <= revoked_at):
+        raise _unauthorized()
+    return principal
 
 
 CurrentPrincipal = Annotated[Principal, Depends(get_principal)]

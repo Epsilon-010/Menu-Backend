@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.modules.staff.application.create_user import CreateUser
-from app.modules.staff.application.find_user import FindUserByEmail
+from app.modules.staff.application.find_user import FindUserByLogin
 from app.modules.staff.domain.errors import EmailAlreadyInUse, InvalidUserData
 from app.modules.staff.domain.user import validate_password
 from app.modules.staff.infrastructure.repository import SqlAlchemyUserRepository
@@ -47,7 +47,7 @@ async def seed_tenant(
         users = SqlAlchemyUserRepository(session)
         # Fail before creating the tenant, so a rejected seed leaves nothing behind.
         validate_password(admin_password)
-        if await FindUserByEmail(users).execute(admin_email) is not None:
+        if await FindUserByLogin(users).execute(admin_email) is not None:
             raise EmailAlreadyInUse(admin_email)
 
         uow = SqlAlchemyUnitOfWork(session)
