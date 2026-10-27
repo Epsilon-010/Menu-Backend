@@ -13,7 +13,12 @@ from tests.integration.modules.staff.test_staff_api import STAFF_PASSWORD, STAFF
 
 TABLES_URL = "/api/v1/tables"
 TABLE_LOGIN_URL = "/api/v1/auth/table-login"
-GENERIC_TABLE_LOGIN_ERROR = {"detail": "Invalid table code or PIN"}
+GENERIC_TABLE_LOGIN_ERROR = {
+    "type": "about:blank",
+    "title": "Unauthorized",
+    "status": 401,
+    "detail": "Invalid table code or PIN",
+}
 CODE_PATTERN = re.compile(r"^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$")
 
 ClientFactory = Callable[[], TestClient]

@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auth.application.revoke_user_sessions import RevokeTableSessions
-from app.modules.auth.infrastructure.refresh_tokens import SqlAlchemyRefreshTokenRepository
+from app.modules.auth.infrastructure.session_revocation import revoke_table_sessions
 from app.modules.tables.application.manage_tables import (
     CreateTable,
     ListTables,
@@ -21,7 +21,8 @@ from app.modules.tables.infrastructure.repository import RandomTableCredentials,
 from app.shared.domain.principal import Principal
 from app.shared.infrastructure.database import SqlAlchemyUnitOfWork, get_session
 from app.shared.infrastructure.http.auth import require_role
-from app.shared.infrastructure.security import Argon2PasswordHasher, SystemClock
+from app.shared.infrastructure.http.problems import problem
+from app.shared.infrastructure.security import Argon2PasswordHasher
 
 router = APIRouter(prefix="/tables", tags=["tables"])
 
@@ -63,15 +64,15 @@ def _with_pin(result: TableWithPin) -> TableWithPinOut:
 
 
 def _invalid(error: InvalidTableData) -> JSONResponse:
-    return JSONResponse({"detail": str(error)}, status_code=status.HTTP_422_UNPROCESSABLE_CONTENT)
+    return problem(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error))
 
 
 def _name_taken() -> JSONResponse:
-    return JSONResponse({"detail": "Table name already in use"}, status_code=status.HTTP_409_CONFLICT)
+    return problem(status.HTTP_409_CONFLICT, "Table name already in use")
 
 
 def _not_found() -> JSONResponse:
-    return JSONResponse({"detail": "Table not found"}, status_code=status.HTTP_404_NOT_FOUND)
+    return problem(status.HTTP_404_NOT_FOUND, "Table not found")
 
 
 # --- Wiring ------------------------------------------------------------------------------------
@@ -88,9 +89,7 @@ class AuthTableSessionRevoker:
 
 
 def _session_revoker(request: Request, session: AsyncSession) -> AuthTableSessionRevoker:
-    return AuthTableSessionRevoker(
-        RevokeTableSessions(SqlAlchemyRefreshTokenRepository(session), request.app.state.access_revocations, SystemClock())
-    )
+    return AuthTableSessionRevoker(revoke_table_sessions(request, session))
 
 
 def get_create_table(session: SessionDep) -> CreateTable:

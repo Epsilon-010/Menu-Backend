@@ -12,6 +12,7 @@ from app.shared.infrastructure.cache import create_redis
 from app.shared.infrastructure.config import get_settings
 from app.shared.infrastructure.database import create_engine, create_session_factory
 from app.shared.infrastructure.http import health_router
+from app.shared.infrastructure.http.problems import register_problem_handlers
 
 API_PREFIX = "/api/v1"
 
@@ -34,6 +35,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
     app.state.access_tokens = JoseAccessTokens(settings.jwt_secret.get_secret_value())
+    register_problem_handlers(app)
 
     api = APIRouter(prefix=API_PREFIX)
     api.include_router(health_router.router)

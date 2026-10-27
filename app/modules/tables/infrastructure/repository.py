@@ -2,10 +2,15 @@ import secrets
 import uuid
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.tables.domain.errors import TableNameNotAvailable
 from app.modules.tables.domain.table import PIN_LENGTH, TABLE_CODE_ALPHABET, TABLE_CODE_LENGTH, Table
 from app.modules.tables.infrastructure.models import TableModel
+from app.shared.infrastructure.database import violated_unique_constraint
+
+_NAME_INDEX = "uq_tables_tenant_id_lower_name"
 
 
 class RandomTableCredentials:
@@ -29,6 +34,12 @@ def _to_entity(model: TableModel) -> Table:
     )
 
 
+def _raise_name_taken(error: IntegrityError, table: Table) -> None:
+    """Another request took the name after the use case checked it."""
+    if violated_unique_constraint(error) == _NAME_INDEX:
+        raise TableNameNotAvailable(table.name) from error
+
+
 class SqlAlchemyTableRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -44,7 +55,11 @@ class SqlAlchemyTableRepository:
                 is_active=table.is_active,
             )
         )
-        await self._session.flush()
+        try:
+            await self._session.flush()
+        except IntegrityError as error:
+            _raise_name_taken(error, table)
+            raise
 
     async def get(self, tenant_id: uuid.UUID, table_id: uuid.UUID) -> Table | None:
         model = await self._session.scalar(
@@ -71,8 +86,12 @@ class SqlAlchemyTableRepository:
 
     async def update(self, table: Table) -> None:
         # Tenant-scoped like every other query; the code never changes.
-        await self._session.execute(
-            update(TableModel)
-            .where(TableModel.tenant_id == table.tenant_id, TableModel.id == table.id)
-            .values(name=table.name, pin_hash=table.pin_hash, is_active=table.is_active)
-        )
+        try:
+            await self._session.execute(
+                update(TableModel)
+                .where(TableModel.tenant_id == table.tenant_id, TableModel.id == table.id)
+                .values(name=table.name, pin_hash=table.pin_hash, is_active=table.is_active)
+            )
+        except IntegrityError as error:
+            _raise_name_taken(error, table)
+            raise

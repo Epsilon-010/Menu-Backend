@@ -16,7 +16,12 @@ from app.shared.infrastructure.database import create_engine, create_session_fac
 from app.shared.infrastructure.http.auth import require_role
 
 PASSWORD = "s3cret-pass"
-GENERIC_LOGIN_ERROR = {"detail": "Invalid username or password"}
+GENERIC_LOGIN_ERROR = {
+    "type": "about:blank",
+    "title": "Unauthorized",
+    "status": 401,
+    "detail": "Invalid username or password",
+}
 
 
 async def _seed(tenant: str, email: str) -> SeedResult:
@@ -125,7 +130,12 @@ def test_too_many_failures_for_an_account_block_it_temporarily(client: TestClien
     blocked = login(client)
 
     assert blocked.status_code == 429
-    assert blocked.json() == {"detail": "Too many login attempts. Try again later."}
+    assert blocked.json() == {
+        "type": "about:blank",
+        "title": "Too Many Requests",
+        "status": 429,
+        "detail": "Too many login attempts. Try again later.",
+    }
     assert 0 < int(blocked.headers["retry-after"]) <= get_settings().login_failure_window_seconds
 
 

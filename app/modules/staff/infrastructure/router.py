@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auth.application.revoke_user_sessions import RevokeUserSessions
-from app.modules.auth.infrastructure.refresh_tokens import SqlAlchemyRefreshTokenRepository
+from app.modules.auth.infrastructure.session_revocation import revoke_user_sessions
 from app.modules.staff.application.manage_staff import (
     CreateStaffMember,
     ListStaff,
@@ -20,7 +20,8 @@ from app.modules.staff.infrastructure.repository import SqlAlchemyUserRepository
 from app.shared.domain.principal import Principal, Role
 from app.shared.infrastructure.database import SqlAlchemyUnitOfWork, get_session
 from app.shared.infrastructure.http.auth import require_role
-from app.shared.infrastructure.security import Argon2PasswordHasher, SystemClock
+from app.shared.infrastructure.http.problems import problem
+from app.shared.infrastructure.security import Argon2PasswordHasher
 
 router = APIRouter(prefix="/staff", tags=["staff"])
 
@@ -68,11 +69,11 @@ def _out(member: User) -> StaffMemberOut:
 
 
 def _invalid(error: InvalidUserData) -> JSONResponse:
-    return JSONResponse({"detail": str(error)}, status_code=status.HTTP_422_UNPROCESSABLE_CONTENT)
+    return problem(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error))
 
 
 def _not_found() -> JSONResponse:
-    return JSONResponse({"detail": "Staff member not found"}, status_code=status.HTTP_404_NOT_FOUND)
+    return problem(status.HTTP_404_NOT_FOUND, "Staff member not found")
 
 
 # --- Wiring ------------------------------------------------------------------------------------
@@ -89,9 +90,7 @@ class AuthSessionRevoker:
 
 
 def _session_revoker(request: Request, session: AsyncSession) -> AuthSessionRevoker:
-    return AuthSessionRevoker(
-        RevokeUserSessions(SqlAlchemyRefreshTokenRepository(session), request.app.state.access_revocations, SystemClock())
-    )
+    return AuthSessionRevoker(revoke_user_sessions(request, session))
 
 
 def get_create_staff_member(session: SessionDep) -> CreateStaffMember:
@@ -134,7 +133,7 @@ async def create_staff_member(
     except InvalidUserData as error:
         return _invalid(error)
     except UsernameNotAvailable:
-        return JSONResponse({"detail": "Username not available"}, status_code=status.HTTP_409_CONFLICT)
+        return problem(status.HTTP_409_CONFLICT, "Username not available")
     return _out(member)
 
 

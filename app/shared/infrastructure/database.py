@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi import Request
 from sqlalchemy import MetaData, Uuid, func, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -49,6 +50,20 @@ def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSessi
 async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
     async with request.app.state.session_factory() as session:
         yield session
+
+
+def violated_unique_constraint(error: IntegrityError) -> str | None:
+    """Name of the unique constraint or index a failed write broke, or None for any other integrity error.
+
+    Use cases check uniqueness first, but two concurrent requests can both pass that check; the
+    database index is what keeps the data right, and the repository turns its name into the
+    matching domain error.
+    """
+    cause = error.orig.__cause__ if error.orig is not None else None
+    if getattr(cause, "sqlstate", None) != "23505":  # unique_violation
+        return None
+    name = getattr(cause, "constraint_name", None)
+    return name if isinstance(name, str) else None
 
 
 class SqlAlchemyUnitOfWork:

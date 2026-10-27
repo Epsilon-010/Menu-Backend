@@ -27,6 +27,7 @@ from app.shared.domain.principal import Role
 from app.shared.infrastructure.config import get_settings
 from app.shared.infrastructure.database import SqlAlchemyUnitOfWork, get_session
 from app.shared.infrastructure.http.auth import ACCESS_COOKIE, ACCESS_COOKIE_PATH, CurrentPrincipal
+from app.shared.infrastructure.http.problems import problem
 from app.shared.infrastructure.security import Argon2PasswordHasher, SystemClock
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -193,9 +194,9 @@ def _session_response(response: Response, auth: AuthSession) -> SessionResponse:
 
 
 def _too_many_attempts(error: TooManyLoginAttempts) -> JSONResponse:
-    return JSONResponse(
-        {"detail": "Too many login attempts. Try again later."},
-        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+    return problem(
+        status.HTTP_429_TOO_MANY_REQUESTS,
+        "Too many login attempts. Try again later.",
         headers={"Retry-After": str(error.retry_after)},
     )
 
@@ -210,7 +211,7 @@ async def login(
     try:
         auth = await use_case.execute(body.username, body.password)
     except InvalidCredentials:
-        return JSONResponse({"detail": "Invalid username or password"}, status_code=status.HTTP_401_UNAUTHORIZED)
+        return problem(status.HTTP_401_UNAUTHORIZED, "Invalid username or password")
     except TooManyLoginAttempts as error:
         return _too_many_attempts(error)
     return _session_response(response, auth)
@@ -223,7 +224,7 @@ async def table_login(
     try:
         auth = await use_case.execute(body.code, body.pin)
     except InvalidCredentials:
-        return JSONResponse({"detail": "Invalid table code or PIN"}, status_code=status.HTTP_401_UNAUTHORIZED)
+        return problem(status.HTTP_401_UNAUTHORIZED, "Invalid table code or PIN")
     except TooManyLoginAttempts as error:
         return _too_many_attempts(error)
     return _session_response(response, auth)
@@ -238,7 +239,7 @@ async def refresh(
     try:
         auth = await use_case.execute(refresh_token or "")
     except InvalidRefreshToken:
-        rejected = JSONResponse({"detail": "Invalid session"}, status_code=status.HTTP_401_UNAUTHORIZED)
+        rejected = problem(status.HTTP_401_UNAUTHORIZED, "Invalid session")
         _clear_session_cookies(rejected)
         return rejected
     return _session_response(response, auth)
@@ -259,7 +260,7 @@ async def me(
     try:
         account = await use_case.execute(principal)
     except AccountNotFound:
-        return JSONResponse({"detail": "Not authenticated"}, status_code=status.HTTP_401_UNAUTHORIZED)
+        return problem(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
     user, table, tenant = account.user, account.table, account.tenant
     return MeResponse(
         user=UserOut(id=user.id, email=user.email, username=user.username, full_name=user.full_name, role=user.role)

@@ -1,11 +1,14 @@
 import uuid
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.staff.domain.errors import EmailAlreadyInUse, UsernameNotAvailable
 from app.modules.staff.domain.user import STAFF_MEMBER_ROLES, User
 from app.modules.staff.infrastructure.models import UserModel
 from app.shared.domain.principal import Role
+from app.shared.infrastructure.database import violated_unique_constraint
 
 
 def _to_entity(model: UserModel) -> User:
@@ -38,7 +41,16 @@ class SqlAlchemyUserRepository:
                 is_active=user.is_active,
             )
         )
-        await self._session.flush()
+        try:
+            await self._session.flush()
+        except IntegrityError as error:
+            # Another request took the login after the use case checked it.
+            constraint = violated_unique_constraint(error)
+            if constraint == "uq_users_username":
+                raise UsernameNotAvailable(user.username) from error
+            if constraint == "uq_users_email":
+                raise EmailAlreadyInUse(user.email) from error
+            raise
 
     async def get(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> User | None:
         model = await self._session.scalar(
