@@ -30,8 +30,8 @@ Done when:
 - [x] T2 (S3, S4, S5, S6, S12, S14) auth module: login/refresh/logout/me, JWT, Argon2, Redis rate limit, require_role — inline — RED: import error (unit); GREEN: 74 passed — Backend f699c6c
 - [x] T3 (S7, S8, S9, S10, S11, S13) frontend: HTTP client with single-flight refresh, auth context, /login, protected /admin, logout — inline — no frontend test runner (exception): typecheck/lint/build OK — Menu-Frontend c6ed3e0
 - [x] T4 (S11, S13) end-to-end check with docker compose + CLAUDE.md/ROADMAP/README updates — inline — API flow verified through the Vite proxy; pushed, CI green (Menu-Backend run 40421334883: backend, docker; Menu-Frontend run 40421338931: frontend, docker); merged to main (PR #1 slice 0, PR #2 slice 1 in both repos), CI green on main (Backend 0124ebf, Menu-Frontend 82b0a3e)
-- [ ] T5 (S15) per-account-only login limiter — inline — branch feat/auth-cookie-session
-- [ ] T6 (S16) access token cookie in backend and frontend — inline — branch feat/auth-cookie-session
+- [x] T5 (S15) per-account-only login limiter — inline — RED: 28 failed; GREEN: 78 passed — Backend 82f57a6
+- [x] T6 (S16) access token cookie in backend and frontend — inline — GREEN: 78 passed; frontend typecheck/lint/build OK — Backend 82f57a6, Menu-Frontend (see L12)
 
 ## Log
 - L1 (2026-10-26, user): "checa el proyecto y haz la sigueitne slide"
@@ -45,3 +45,4 @@ Done when:
 - L9 (2026-10-26, user): "haz los ci y subelo" -> pushed feat/slice-1-admin-login in both repos; CI green on 8b38022 (backend) and 66db36c (frontend).
 - L10 (2026-10-26, user): "ya hice merge checa y vee que mas hace falta para termianr esta slide y si ya no hae falta nada marcala como guardada o demas" -> PRs #1 and #2 merged in both repos, CI on main green; slice closed in ROADMAP.md and CLAUDE.md. Browser walkthrough (S11/S13) was not reported back by the user; covered at API level by tests and the proxy flow (L5).
 - L11 (2026-10-26, user): "el contador de intentos quiero que sea por usuairo que intenten entrar porfavor si es por ip muchas ips pueden entrar al usauor o intnetrar entrar que sea pro usuaoro porfavor igual los jwt que esten en cookies o se setten ahi porfavor" -> slice reopened for T5/T6. Verified: the per-account limit (5/15 min) already existed next to the per-IP one; per-IP removed (also fixes the shared-proxy-IP and success-refund advisories). CSRF for cookie auth relies on SameSite=Strict (same-origin frontend). CLAUDE.md auth section updated accordingly.
+- L12 (evidence): through the Vite proxy: login 200 sets access_token (path /api) and refresh_token (path /api/v1/auth), both HttpOnly; body is {expires_in, role}; /me with cookie 200, with only an Authorization: Bearer header 401; refresh 200; logout 204; /me after logout 401. Note: Vite's auto-restart on branch switch dropped host binding; docker compose restart frontend fixed it.
