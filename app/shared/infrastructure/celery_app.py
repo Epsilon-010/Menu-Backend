@@ -11,6 +11,7 @@ from celery import Celery
 from app.shared.infrastructure.config import Settings
 
 CLEAN_UP_IMAGES_TASK = "media.clean_up_images"
+PURGE_REFRESH_TOKENS_TASK = "auth.purge_refresh_tokens"
 
 
 def create_celery(settings: Settings) -> Celery:
@@ -35,6 +36,8 @@ def create_celery(settings: Settings) -> Celery:
                 "task": CLEAN_UP_IMAGES_TASK,
                 "schedule": timedelta(seconds=settings.image_cleanup_interval_seconds),
             },
+            # Expired refresh tokens are useless rows: drop them daily.
+            "purge-refresh-tokens": {"task": PURGE_REFRESH_TOKENS_TASK, "schedule": timedelta(days=1)},
         },
     )
     return app

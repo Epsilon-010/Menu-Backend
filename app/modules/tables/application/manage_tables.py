@@ -7,7 +7,13 @@ found. There is no hard delete; deactivating is the removal.
 import uuid
 from dataclasses import dataclass, replace
 
-from app.modules.tables.domain.errors import TableAlreadyCreated, TableIdTaken, TableNameNotAvailable, TableNotFound
+from app.modules.tables.domain.errors import (
+    TableAlreadyCreated,
+    TableCodeTaken,
+    TableIdTaken,
+    TableNameNotAvailable,
+    TableNotFound,
+)
 from app.modules.tables.domain.table import (
     SessionRevoker,
     Table,
@@ -66,10 +72,17 @@ class CreateTable:
         await _ensure_name_available(self._tables, tenant_id, name)
 
         pin = self._credentials.new_pin()
-        table = Table.create(tenant_id, name, await self._unused_code(), await self._hasher.hash(pin), table_id)
-        await self._tables.add(table)
-        await self._uow.commit()
-        return TableWithPin(table=table, pin=pin)
+        pin_hash = await self._hasher.hash(pin)
+        for _ in range(_MAX_CODE_ATTEMPTS):
+            table = Table.create(tenant_id, name, await self._unused_code(), pin_hash, table_id)
+            try:
+                await self._tables.add(table)
+            except TableCodeTaken:
+                # A concurrent create took this code after our check: draw another one.
+                continue
+            await self._uow.commit()
+            return TableWithPin(table=table, pin=pin)
+        raise RuntimeError("Could not insert a table with an unused code")
 
     async def _unused_code(self) -> str:
         for _ in range(_MAX_CODE_ATTEMPTS):

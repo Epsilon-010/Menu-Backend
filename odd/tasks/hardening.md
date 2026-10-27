@@ -15,14 +15,14 @@ Branch: `feat/image-cleanup` (Backend) and `feat/redesign` (Menu-Frontend). Deli
 - [ ] H2 (S3) Frontend: "saved but not refreshed" is success; delete of a missing row is done
 - [x] H3 (S4) Row locks (get_for_update) in every read-then-write use case of catalog, tables and staff — inline — RED 3 lock tests; GREEN — see L4
 - [x] H4 (S5) Reject discards only pending; FK RESTRICT on image_uploads.tenant_id; per-row retry backoff (new migration) — inline — tests written first but RED not run before the code; GREEN 244 passed; migration e5be48d96257
-- [ ] H5 (S6) NUL characters in any text field -> 422, not 500 (all modules)
+- [x] H5 (S6) NUL characters in any text field -> 422 "Text cannot contain NUL characters" (router-level dependency, all modules) — inline — RED 3; GREEN — see L5
 - [x] H6 (S6) UPDATE/DELETE that hit no row -> not-found error (catalog, tables, staff) via ffected_rows — inline — see L4
 - [x] H7 (S6) Order locks (pg_advisory_xact_lock per tenant / per category) for create, move, delete, reorder; partial reorder -> 422 — inline — see L4
-- [ ] H8 (S6) Schema 422s carry a readable `detail` as well as `errors`
+- [x] H8 (S6) Schema 422s carry `detail` naming the invalid fields ("Invalid fields: name, price_cents"), never values — inline — RED 2; GREEN — see L5
 - [ ] H9 (S6) `extra="forbid"` on staff and tables input schemas
 - [ ] H10 (S6) Frontend: request timeout in the HTTP client; sign-out button display on phones; shared row-action hook; one money formatter; credential format constants shared by login; tests for the catalog change runner
-- [ ] H11 (S6, Slice 3) Two creates drawing the same table code -> retry, never 500; limiter keys of table and staff logins can never collide
-- [ ] H12 (S6, Slice 1) Expired and revoked refresh tokens are purged periodically (Celery beat)
+- [x] H11 (S6, Slice 3) Table code collision redrawn inside a savepoint (no 500); staff limiter keys namespaced `staff:<login>` — inline — RED; GREEN — see L5
+- [x] H12 (S6, Slice 1) Refresh tokens expired for more than a day purged daily (Celery `auth.purge_refresh_tokens`); rotated/revoked tokens still valid are kept for theft detection; migration 9d1a8c72e939 indexes `expires_at` — inline — see L5
 - [ ] H13 Needs user decision: refresh in flight during a PIN regeneration/password reset may survive; account lockout by third parties (limit is per account)
 - [ ] H14 Independent verification
 
@@ -31,3 +31,4 @@ Branch: `feat/image-cleanup` (Backend) and `feat/redesign` (Menu-Frontend). Deli
 - L2 (2026-10-27, decision): idempotency by client-supplied resource id (primary key guarantee) instead of an `Idempotency-Key` header in Redis, which still duplicates if the process dies between commit and storing the response.
 - L3 (evidence, 2026-10-27): image-cleanup verifier: S1-S6 PASS, no blockers; advisories A1-A5 (above) reproduced with a race probe on `menu_test`; scratch removed by the parent.
 - L4 (evidence, 2026-10-27): creates accept an optional client id; the replay check runs after the order lock, so concurrent replays serialize; a clash (other data or another tenant) answers 409 "That id is already used by something else"; tables answer 409 "This table was already created; generate a new PIN to see its credentials" (the PIN cannot be shown twice); primary-key violations map to the same 409. Every read-then-write uses get_for_update; moves and deletes of items take the order lock before the row lock (same order as reorder, no deadlock). Integration tests in 	ests/integration/modules/catalog/test_catalog_concurrency.py use repositories that pause after each read; with the locks disabled by monkeypatch all 4 fail (lost category edit, shared positions, duplicate creates, stale image written back), with them all pass. `uv run pytest`: 263 passed + tables/staff API tests (42 passed).
+- L5 (evidence, 2026-10-27): `uv run pytest`: 275 passed. NUL check decodes the JSON, so a literal `\\u0000` text stays valid (tested). Validation detail lists each field once. Limiter: staff attempts now count under `staff:<login>` (existing counters restart once). Table code race reproduced against Postgres with a repository blind to the code check: the second create redraws and both rows exist.

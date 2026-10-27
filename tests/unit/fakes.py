@@ -403,6 +403,12 @@ class InMemoryRefreshTokenRepository:
             if token.tenant_id == tenant_id and token.table_id == table_id and token.revoked_at is None:
                 self.tokens[token_id] = replace(token, revoked_at=at)
 
+    async def delete_expired(self, before: datetime, limit: int) -> int:
+        expired = [token_id for token_id, token in self.tokens.items() if token.expires_at < before][:limit]
+        for token_id in expired:
+            del self.tokens[token_id]
+        return len(expired)
+
 
 class FakeAccessRevocations:
     def __init__(self) -> None:

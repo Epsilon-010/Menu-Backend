@@ -25,7 +25,7 @@ class TableLogin:
 
     async def execute(self, code: str, pin: str) -> AuthSession:
         code = normalize_table_code(code)
-        # Staff usernames cannot contain ":", so table accounts never share a counter with them.
+        # Staff logins count under "staff:<login>", so no typed login ever shares this table's counter.
         account = f"table:{code}"
         retry_after = await self._limiter.acquire(account)
         if retry_after is not None:

@@ -65,6 +65,10 @@ class RefreshTokenRepository(Protocol):
 
     async def revoke_all_for_table(self, tenant_id: uuid.UUID, table_id: uuid.UUID, at: datetime) -> None: ...
 
+    async def delete_expired(self, before: datetime, limit: int) -> int:
+        """Deletes up to `limit` tokens that expired before `before` (all tenants); returns how many."""
+        ...
+
 
 class RefreshTokenCodec(Protocol):
     """Port: creates opaque refresh token values and the hash stored for them."""

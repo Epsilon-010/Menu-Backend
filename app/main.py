@@ -1,7 +1,7 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, Depends, FastAPI
 
 from app.modules.auth.infrastructure import router as auth_router
 from app.modules.auth.infrastructure.access_revocations import RedisAccessRevocations
@@ -16,6 +16,7 @@ from app.shared.infrastructure.config import get_settings
 from app.shared.infrastructure.database import create_engine, create_session_factory
 from app.shared.infrastructure.http import health_router
 from app.shared.infrastructure.http.problems import register_problem_handlers
+from app.shared.infrastructure.http.validation import reject_nul_characters
 from app.shared.infrastructure.images import build_image_storage
 
 API_PREFIX = "/api/v1"
@@ -43,7 +44,7 @@ def create_app() -> FastAPI:
     app.state.image_cleanup = CeleryImageCleanupScheduler(create_celery(settings))
     register_problem_handlers(app)
 
-    api = APIRouter(prefix=API_PREFIX)
+    api = APIRouter(prefix=API_PREFIX, dependencies=[Depends(reject_nul_characters)])
     api.include_router(health_router.router)
     api.include_router(auth_router.router)
     api.include_router(staff_router.router)

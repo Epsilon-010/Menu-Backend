@@ -155,8 +155,8 @@ async def test_login_issues_an_access_token_and_a_stored_refresh_token(world: Wo
     assert stored.token_hash == "hash:refresh-1"
     assert (stored.user_id, stored.tenant_id) == (admin.id, admin.tenant_id)
     assert stored.rotated_at is None and stored.revoked_at is None
-    assert world.limiter.acquired == ["owner@example.com"]
-    assert world.limiter.succeeded_logins == ["owner@example.com"]
+    assert world.limiter.acquired == ["staff:owner@example.com"]
+    assert world.limiter.succeeded_logins == ["staff:owner@example.com"]
     assert world.uow.commits == 1
 
 
@@ -168,8 +168,8 @@ async def test_staff_member_logs_in_with_their_username_and_gets_a_shift_long_se
     assert session.role is Role.WAITER
     assert session.access_token == f"access:{waiter.id}:{waiter.tenant_id}:waiter"
     assert session.refresh_expires_at == world.clock.now() + timedelta(hours=12)
-    assert world.limiter.acquired == ["juan.burger"]
-    assert world.limiter.succeeded_logins == ["juan.burger"]
+    assert world.limiter.acquired == ["staff:juan.burger"]
+    assert world.limiter.succeeded_logins == ["staff:juan.burger"]
 
 
 async def test_login_with_an_unknown_username_fails_generically(world: World) -> None:
@@ -183,7 +183,7 @@ async def test_login_with_a_wrong_password_fails_generically_and_keeps_the_attem
     with pytest.raises(InvalidCredentials):
         await world.login().execute("owner@example.com", "wrong-pass")
 
-    assert world.limiter.acquired == ["owner@example.com"]
+    assert world.limiter.acquired == ["staff:owner@example.com"]
     assert world.limiter.succeeded_logins == []
     assert world.refresh_tokens.tokens == {}
     assert world.uow.commits == 0
@@ -194,7 +194,7 @@ async def test_login_with_an_unknown_email_fails_the_same_way_and_still_spends_a
         await world.login().execute("Nobody@example.com", PASSWORD)
 
     assert world.hasher.verified == ["dummy"]
-    assert world.limiter.acquired == ["nobody@example.com"]
+    assert world.limiter.acquired == ["staff:nobody@example.com"]
     assert world.limiter.succeeded_logins == []
 
 
@@ -494,3 +494,11 @@ async def test_current_account_of_a_table_never_crosses_tenants_and_rejects_inac
     world.tables.tables[table.id] = replace(table, is_active=False)
     with pytest.raises(AccountNotFound):
         await world.current_account().execute(Principal(table.id, table.tenant_id, Role.TABLE, table.id))
+
+
+async def test_staff_and_table_login_attempts_are_counted_apart(world: World) -> None:
+    # A staff login typed as "table:<code>" must never count against (and lock out) that table.
+    with pytest.raises(InvalidCredentials):
+        await world.login().execute("table:K7M2QX", PASSWORD)
+
+    assert world.limiter.acquired == ["staff:table:k7m2qx"]

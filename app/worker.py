@@ -8,10 +8,13 @@ import asyncio
 import logging
 from datetime import timedelta
 
+from app.modules.auth.application.purge_refresh_tokens import BATCH_SIZE as PURGE_BATCH_SIZE
+from app.modules.auth.application.purge_refresh_tokens import PurgeExpiredRefreshTokens
+from app.modules.auth.infrastructure.refresh_tokens import SqlAlchemyRefreshTokenRepository
 from app.modules.media.application.clean_up_images import CleanUpImages
 from app.modules.media.infrastructure.repository import SqlAlchemyImageUploads
 from app.shared.domain.images import ImageStorage
-from app.shared.infrastructure.celery_app import CLEAN_UP_IMAGES_TASK, create_celery
+from app.shared.infrastructure.celery_app import CLEAN_UP_IMAGES_TASK, PURGE_REFRESH_TOKENS_TASK, create_celery
 from app.shared.infrastructure.config import get_settings
 from app.shared.infrastructure.database import SqlAlchemyUnitOfWork, create_engine, create_session_factory
 from app.shared.infrastructure.images import build_image_storage
@@ -53,6 +56,34 @@ async def clean_up_images_now(storage: ImageStorage | None = None) -> int:
     finally:
         await engine.dispose()
     return deleted
+
+
+async def purge_refresh_tokens_now() -> int:
+    """Deletes refresh tokens expired for more than a day, in batches. Returns how many."""
+    engine = create_engine(get_settings().database_url)
+    purged = 0
+    try:
+        for _ in range(MAX_BATCHES):
+            async with create_session_factory(engine)() as session:
+                batch = await PurgeExpiredRefreshTokens(
+                    SqlAlchemyRefreshTokenRepository(session),
+                    SystemClock(),
+                    SqlAlchemyUnitOfWork(session),
+                    grace=timedelta(days=1),
+                ).execute()
+            purged += batch
+            if batch < PURGE_BATCH_SIZE:
+                break
+    finally:
+        await engine.dispose()
+    return purged
+
+
+@celery_app.task(name=PURGE_REFRESH_TOKENS_TASK)
+def purge_refresh_tokens() -> int:
+    purged = asyncio.run(purge_refresh_tokens_now())
+    logger.info("Refresh token purge deleted %s tokens", purged)
+    return purged
 
 
 @celery_app.task(name=CLEAN_UP_IMAGES_TASK)

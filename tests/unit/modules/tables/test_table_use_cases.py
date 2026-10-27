@@ -7,6 +7,7 @@ from app.modules.tables.application.manage_tables import CreateTable, ListTables
 from app.modules.tables.domain.errors import (
     InvalidTableData,
     TableAlreadyCreated,
+    TableCodeTaken,
     TableIdTaken,
     TableNameNotAvailable,
     TableNotFound,
@@ -215,3 +216,26 @@ async def test_repeating_a_table_create_never_makes_a_second_table(world: World)
 
     assert created.table.id == table_id
     assert list(world.tables.tables) == [table_id]
+
+
+class RacyTables(InMemoryTableRepository):
+    """Another request inserts the same code between our check and our insert."""
+
+    async def get_by_code(self, code: str) -> Table | None:
+        return None
+
+    async def add(self, table: Table) -> None:
+        if any(existing.code == table.code for existing in self.tables.values()):
+            raise TableCodeTaken(table.code)
+        await super().add(table)
+
+
+async def test_a_code_taken_by_a_concurrent_create_is_redrawn_not_a_500(world: World) -> None:
+    racy = RacyTables()
+    world.tables = racy
+    world.credentials.codes = ["SAME22", "SAME22", "OTHER3"]
+    first = (await world.create().execute(TENANT_A, "Mesa 1")).table
+
+    second = (await world.create().execute(TENANT_B, "Mesa 1")).table
+
+    assert (first.code, second.code) == ("SAME22", "OTHER3")

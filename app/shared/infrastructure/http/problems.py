@@ -52,7 +52,18 @@ async def _validation_error(_: Request, error: Exception) -> JSONResponse:
         raise error
     # Only where and why: the rejected input may hold a password or a PIN.
     errors = [{"loc": list(item["loc"]), "msg": item["msg"], "type": item["type"]} for item in error.errors()]
-    return problem(status.HTTP_422_UNPROCESSABLE_CONTENT, errors=errors)
+    return problem(status.HTTP_422_UNPROCESSABLE_CONTENT, _fields_detail(errors), errors=errors)
+
+
+def _fields_detail(errors: list[dict[str, Any]]) -> str:
+    """Readable summary naming the invalid fields (never their values), e.g. "Invalid fields: name, price"."""
+    fields: list[str] = []
+    for item in errors:
+        # The last named part of the location (`["body", "price_cents"]` -> "price_cents").
+        name = next((str(part) for part in reversed(item["loc"]) if isinstance(part, str) and part != "body"), "body")
+        if name not in fields:
+            fields.append(name)
+    return f"Invalid field{'s' if len(fields) > 1 else ''}: {', '.join(fields)}"
 
 
 async def _unhandled_error(request: Request, error: Exception) -> JSONResponse:

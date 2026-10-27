@@ -21,6 +21,7 @@ class RefreshTokenModel(UUIDPrimaryKey, Base):
     # SHA-256 hex digest of the opaque value; the plain token is never stored.
     token_hash: Mapped[str] = mapped_column(String(64), unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # Indexed for the periodic purge of expired tokens.
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

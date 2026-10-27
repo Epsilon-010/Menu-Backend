@@ -5,12 +5,13 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.tables.domain.errors import TableIdTaken, TableNameNotAvailable, TableNotFound
+from app.modules.tables.domain.errors import TableCodeTaken, TableIdTaken, TableNameNotAvailable, TableNotFound
 from app.modules.tables.domain.table import PIN_LENGTH, TABLE_CODE_ALPHABET, TABLE_CODE_LENGTH, Table
 from app.modules.tables.infrastructure.models import TableModel
 from app.shared.infrastructure.database import affected_rows, violated_unique_constraint
 
 _NAME_INDEX = "uq_tables_tenant_id_lower_name"
+_CODE_INDEX = "uq_tables_code"
 
 
 class RandomTableCredentials:
@@ -45,20 +46,24 @@ class SqlAlchemyTableRepository:
         self._session = session
 
     async def add(self, table: Table) -> None:
-        self._session.add(
-            TableModel(
-                id=table.id,
-                tenant_id=table.tenant_id,
-                name=table.name,
-                code=table.code,
-                pin_hash=table.pin_hash,
-                is_active=table.is_active,
-            )
+        model = TableModel(
+            id=table.id,
+            tenant_id=table.tenant_id,
+            name=table.name,
+            code=table.code,
+            pin_hash=table.pin_hash,
+            is_active=table.is_active,
         )
         try:
-            await self._session.flush()
+            # A savepoint: when the random code collides, only this insert rolls back and the use
+            # case can retry with a new code in the same transaction.
+            async with self._session.begin_nested():
+                self._session.add(model)
         except IntegrityError as error:
-            if violated_unique_constraint(error) == "pk_tables":
+            constraint = violated_unique_constraint(error)
+            if constraint == _CODE_INDEX:
+                raise TableCodeTaken(table.code) from error
+            if constraint == "pk_tables":
                 # A concurrent replay of the same create, or a clash with another tenant's id.
                 raise TableIdTaken(table.id) from error
             _raise_name_taken(error, table)
