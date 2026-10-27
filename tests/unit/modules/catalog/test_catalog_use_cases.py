@@ -26,7 +26,7 @@ from app.modules.catalog.domain.errors import (
     InvalidCatalogData,
     ItemNotFound,
 )
-from app.shared.domain.images import MAX_IMAGE_BYTES, InvalidImage
+from app.shared.domain.images import MAX_IMAGE_BYTES, ImageStorageUnavailable, InvalidImage
 from tests.unit.fakes import FakeImageStorage, FakeUnitOfWork, InMemoryCategoryRepository, InMemoryItemRepository
 
 pytestmark = pytest.mark.anyio
@@ -318,6 +318,36 @@ async def test_rejects_and_deletes_uploads_with_a_wrong_format_or_size(
 
     assert world.images.deleted == [public_id]
     assert world.items.items[item.id].image_public_id is None
+
+
+async def test_an_image_already_used_by_another_item_is_rejected(world: World) -> None:
+    category = await world.category()
+    first = await world.item(category, "Pastor")
+    second = await world.item(category, "Suadero")
+    public_id = await world.uploaded_image()
+    await world.set_image().execute(TENANT_A, first.id, public_id)
+
+    with pytest.raises(InvalidImage):
+        await world.set_image().execute(TENANT_A, second.id, public_id)
+    # Saving the same image again on its own item is harmless.
+    again = await world.set_image().execute(TENANT_A, first.id, public_id)
+
+    assert world.items.items[second.id].image_public_id is None
+    assert again.image_public_id == public_id
+    assert world.images.deleted == []
+
+
+async def test_a_failing_storage_lookup_changes_nothing(world: World) -> None:
+    item = await world.item(await world.category())
+    public_id = await world.uploaded_image()
+    world.images.fail_lookups = True
+    commits = world.uow.commits
+
+    with pytest.raises(ImageStorageUnavailable):
+        await world.set_image().execute(TENANT_A, item.id, public_id)
+
+    assert world.items.items[item.id].image_public_id is None
+    assert world.uow.commits == commits
 
 
 async def test_deleting_an_item_deletes_its_image(world: World) -> None:

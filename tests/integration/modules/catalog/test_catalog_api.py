@@ -116,7 +116,10 @@ def test_admin_builds_the_catalog_with_images(
     assert signature["public_id"].startswith(f"tenants/{tenant_a.tenant_id}/items/")
     assert signature["allowed_formats"] == ["jpg", "png", "webp"]
     assert signature["max_bytes"] == MAX_IMAGE_BYTES
-    assert set(signature) == {"upload_url", "api_key", "timestamp", "signature", "public_id", "allowed_formats", "max_bytes"}
+    assert signature["overwrite"] is False
+    assert set(signature) == {
+        "upload_url", "api_key", "timestamp", "signature", "public_id", "allowed_formats", "overwrite", "max_bytes"
+    }
     images.upload(signature["public_id"])
     with_image = ok(admin.put(f"{ITEMS_URL}/{pastor['id']}/image", json={"public_id": signature["public_id"]}))
     assert with_image["image"] == {
@@ -293,6 +296,7 @@ def test_a_tenant_never_sees_nor_changes_another_tenant_catalog(
     other = admin_of(new_client, "boss@example.com")
     other_category = ok(create_category(other, "Burgers"), 201)
     other_item = ok(create_item(other, other_category["id"], "Clásica"), 201)
+    other_image = upload_image(other, images)
 
     assert [c["name"] for c in catalog(other)] == ["Burgers"]
     responses = [
@@ -303,7 +307,7 @@ def test_a_tenant_never_sees_nor_changes_another_tenant_catalog(
         other.patch(f"{ITEMS_URL}/{item['id']}", json={"price_cents": 1}),
         other.patch(f"{ITEMS_URL}/{other_item['id']}", json={"category_id": category["id"]}),
         other.delete(f"{ITEMS_URL}/{item['id']}"),
-        other.put(f"{ITEMS_URL}/{item['id']}/image", json={"public_id": owner_image}),
+        other.put(f"{ITEMS_URL}/{item['id']}/image", json={"public_id": other_image}),
         other.delete(f"{ITEMS_URL}/{item['id']}/image"),
     ]
     assert [r.status_code for r in responses] == [404] * 9

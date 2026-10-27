@@ -5,7 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.catalog.domain.catalog import Category, Item
-from app.modules.catalog.domain.errors import CategoryNameNotAvailable, CategoryNotEmpty
+from app.modules.catalog.domain.errors import CategoryNameNotAvailable, CategoryNotEmpty, CategoryNotFound
 from app.modules.catalog.infrastructure.models import CategoryModel, ItemModel
 from app.shared.infrastructure.database import violated_foreign_key, violated_unique_constraint
 
@@ -31,6 +31,12 @@ def _item(model: ItemModel) -> Item:
         is_available=model.is_available,
         image_public_id=model.image_public_id,
     )
+
+
+def _raise_category_gone(error: IntegrityError, item: Item) -> None:
+    """The category was deleted (or never was the tenant's) after the use case checked it."""
+    if violated_foreign_key(error) == _ITEM_CATEGORY_FK:
+        raise CategoryNotFound(item.category_id) from error
 
 
 def _raise_name_taken(error: IntegrityError, category: Category) -> None:
@@ -138,7 +144,23 @@ class SqlAlchemyItemRepository:
                 image_public_id=item.image_public_id,
             )
         )
-        await self._session.flush()
+        try:
+            await self._session.flush()
+        except IntegrityError as error:
+            _raise_category_gone(error, item)
+            raise
+
+    async def image_in_use(self, tenant_id: uuid.UUID, public_id: str, except_item_id: uuid.UUID) -> bool:
+        found = await self._session.scalar(
+            select(ItemModel.id)
+            .where(
+                ItemModel.tenant_id == tenant_id,
+                ItemModel.image_public_id == public_id,
+                ItemModel.id != except_item_id,
+            )
+            .limit(1)
+        )
+        return found is not None
 
     async def get(self, tenant_id: uuid.UUID, item_id: uuid.UUID) -> Item | None:
         model = await self._session.scalar(
@@ -163,19 +185,23 @@ class SqlAlchemyItemRepository:
         return 0 if last is None else last + 1
 
     async def update(self, item: Item) -> None:
-        await self._session.execute(
-            update(ItemModel)
-            .where(ItemModel.tenant_id == item.tenant_id, ItemModel.id == item.id)
-            .values(
-                category_id=item.category_id,
-                name=item.name,
-                description=item.description,
-                price_cents=item.price_cents,
-                position=item.position,
-                is_available=item.is_available,
-                image_public_id=item.image_public_id,
+        try:
+            await self._session.execute(
+                update(ItemModel)
+                .where(ItemModel.tenant_id == item.tenant_id, ItemModel.id == item.id)
+                .values(
+                    category_id=item.category_id,
+                    name=item.name,
+                    description=item.description,
+                    price_cents=item.price_cents,
+                    position=item.position,
+                    is_available=item.is_available,
+                    image_public_id=item.image_public_id,
+                )
             )
-        )
+        except IntegrityError as error:
+            _raise_category_gone(error, item)
+            raise
 
     async def delete(self, tenant_id: uuid.UUID, item_id: uuid.UUID) -> None:
         await self._session.execute(delete(ItemModel).where(ItemModel.tenant_id == tenant_id, ItemModel.id == item_id))

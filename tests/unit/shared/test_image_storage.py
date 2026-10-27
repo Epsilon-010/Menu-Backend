@@ -2,12 +2,19 @@
 
 import hashlib
 
+import cloudinary.api
+import cloudinary.exceptions
 import pytest
 from pydantic import SecretStr
 
 from app.shared.domain.images import ImageStorageUnavailable, ImageVariant
 from app.shared.infrastructure.config import Settings
-from app.shared.infrastructure.images import CloudinaryImageStorage, UnconfiguredImageStorage, build_image_storage
+from app.shared.infrastructure.images import (
+    STORAGE_TIMEOUT_SECONDS,
+    CloudinaryImageStorage,
+    UnconfiguredImageStorage,
+    build_image_storage,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -26,11 +33,43 @@ def test_signs_the_exact_public_id_and_formats_with_cloudinarys_sha1_scheme() ->
     signature = storage.sign_upload(PUBLIC_ID, ("jpg", "png", "webp"))
 
     # Cloudinary: sorted "key=value" pairs joined by "&", then the API secret, hashed with SHA-1.
-    payload = f"allowed_formats=jpg,png,webp&public_id={PUBLIC_ID}&timestamp={signature.timestamp}secret-xyz"
+    # overwrite=false: a checked upload cannot be replaced later with another file under the same id.
+    payload = (
+        f"allowed_formats=jpg,png,webp&overwrite=false&public_id={PUBLIC_ID}&timestamp={signature.timestamp}secret-xyz"
+    )
     assert signature.signature == hashlib.sha1(payload.encode()).hexdigest()
     assert signature.upload_url == "https://api.cloudinary.com/v1_1/demo-cloud/image/upload"
     assert (signature.api_key, signature.public_id) == ("key-123", PUBLIC_ID)
     assert "secret-xyz" not in repr(signature)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [cloudinary.exceptions.RateLimited("slow down"), cloudinary.exceptions.AuthorizationRequired("bad key"), OSError("timeout")],
+)
+async def test_storage_failures_other_than_not_found_mean_unavailable(
+    monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    def resource(public_id: str, **options: object) -> dict[str, object]:
+        raise failure
+
+    monkeypatch.setattr(cloudinary.api, "resource", resource)
+
+    with pytest.raises(ImageStorageUnavailable):
+        await CloudinaryImageStorage("demo-cloud", "key-123", "secret-xyz").find(PUBLIC_ID)
+
+
+async def test_a_missing_image_is_none_and_lookups_have_a_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def resource(public_id: str, **options: object) -> dict[str, object]:
+        calls.append(options)
+        raise cloudinary.exceptions.NotFound("missing")
+
+    monkeypatch.setattr(cloudinary.api, "resource", resource)
+
+    assert await CloudinaryImageStorage("demo-cloud", "key-123", "secret-xyz").find(PUBLIC_ID) is None
+    assert calls[0]["timeout"] == STORAGE_TIMEOUT_SECONDS
 
 
 def test_delivery_urls_are_optimized_and_sized_per_use() -> None:

@@ -60,15 +60,21 @@ class SetItemImage:
         self._uow = uow
 
     async def execute(self, tenant_id: uuid.UUID, item_id: uuid.UUID, public_id: str) -> Item:
-        item = await _get_item(self._items, tenant_id, item_id)
         ensure_owned_image(tenant_id, ImageKind.ITEM, public_id)
+        # The storage call goes first, before any query: a slow storage must not hold a database
+        # connection.
         stored = await self._images.find(public_id)
         if stored is None:
             raise InvalidImage("Image not found; upload it first")
+
+        item = await _get_item(self._items, tenant_id, item_id)
+        if await self._items.image_in_use(tenant_id, public_id, except_item_id=item_id):
+            # Sharing would let one item's cleanup delete the other's image.
+            raise InvalidImage("That image belongs to another item; upload a new one")
         try:
             validate_stored_image(stored, ImageKind.ITEM)
         except InvalidImage:
-            # The upload is inside this tenant's folder and useless: do not keep it.
+            # The upload is inside this tenant's folder, used by no item, and useless: do not keep it.
             await discard_image(self._images, public_id)
             raise
 

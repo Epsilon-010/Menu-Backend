@@ -10,7 +10,7 @@ from app.modules.catalog.domain.errors import CategoryNotEmpty
 from app.modules.staff.domain.user import STAFF_MEMBER_ROLES, User
 from app.modules.tables.domain.table import Table
 from app.modules.tenants.domain.tenant import Tenant
-from app.shared.domain.images import ImageVariant, StoredImage, UploadSignature
+from app.shared.domain.images import ImageStorageUnavailable, ImageVariant, StoredImage, UploadSignature
 
 
 class FakeClock:
@@ -201,6 +201,12 @@ class InMemoryItemRepository:
         item = self.items.get(item_id)
         return item if item is not None and item.tenant_id == tenant_id else None
 
+    async def image_in_use(self, tenant_id: uuid.UUID, public_id: str, except_item_id: uuid.UUID) -> bool:
+        return any(
+            i.tenant_id == tenant_id and i.image_public_id == public_id and i.id != except_item_id
+            for i in self.items.values()
+        )
+
     async def list_in_category(self, tenant_id: uuid.UUID, category_id: uuid.UUID) -> list[Item]:
         return [item for item in await self.list(tenant_id) if item.category_id == category_id]
 
@@ -233,6 +239,7 @@ class FakeImageStorage:
         self.stored: dict[str, StoredImage] = {}
         self.deleted: list[str] = []
         self.fail_deletes = False
+        self.fail_lookups = False
 
     def upload(self, public_id: str, image_format: str = "jpg", size: int = 1_000) -> None:
         self.stored[public_id] = StoredImage(public_id=public_id, format=image_format, bytes=size)
@@ -248,6 +255,8 @@ class FakeImageStorage:
         )
 
     async def find(self, public_id: str) -> StoredImage | None:
+        if self.fail_lookups:
+            raise ImageStorageUnavailable("Image storage is not reachable right now. Try again in a moment")
         return self.stored.get(public_id)
 
     async def delete(self, public_id: str) -> None:

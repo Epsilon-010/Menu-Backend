@@ -130,6 +130,7 @@ class UploadSignatureOut(BaseModel):
     signature: str
     public_id: str
     allowed_formats: list[str]
+    overwrite: bool
     max_bytes: int
 
 
@@ -171,8 +172,8 @@ async def _run(call: Awaitable[T]) -> T | JSONResponse:
         return problem(status.HTTP_404_NOT_FOUND, "Category not found")
     except ItemNotFound:
         return problem(status.HTTP_404_NOT_FOUND, "Item not found")
-    except ImageStorageUnavailable:
-        return problem(status.HTTP_503_SERVICE_UNAVAILABLE, "Image uploads are not configured")
+    except ImageStorageUnavailable as error:
+        return problem(status.HTTP_503_SERVICE_UNAVAILABLE, str(error) or "Image storage is not available")
 
 
 # --- Wiring ------------------------------------------------------------------------------------
@@ -349,6 +350,7 @@ async def sign_image_upload(
         signature=result.signature,
         public_id=result.public_id,
         allowed_formats=list(result.allowed_formats),
+        overwrite=result.overwrite,
         max_bytes=MAX_IMAGE_BYTES,
     )
 

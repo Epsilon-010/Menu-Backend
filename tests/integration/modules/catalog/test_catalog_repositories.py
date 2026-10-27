@@ -3,15 +3,15 @@
 import asyncio
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from typing import TypeVar
 
 import pytest
 from sqlalchemy import delete, func, select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.catalog.domain.catalog import Category, Item
-from app.modules.catalog.domain.errors import CategoryNotEmpty
+from app.modules.catalog.domain.errors import CategoryNotEmpty, CategoryNotFound
 from app.modules.catalog.infrastructure.models import CategoryModel, ItemModel
 from app.modules.catalog.infrastructure.repository import SqlAlchemyCategoryRepository, SqlAlchemyItemRepository
 from app.modules.tenants.infrastructure.models import TenantModel
@@ -54,12 +54,22 @@ def _add_item(tenant_id: uuid.UUID, category_id: uuid.UUID) -> Item:
     return item
 
 
-def test_an_item_cannot_point_to_another_tenant_category(tenants: tuple[SeedResult, SeedResult]) -> None:
+def test_an_item_cannot_point_to_another_tenant_or_a_deleted_category(
+    tenants: tuple[SeedResult, SeedResult],
+) -> None:
     tenant_a, tenant_b = tenants
     foreign = _add_category(tenant_b.tenant_id)
+    own = _add_category(tenant_a.tenant_id)
+    item = _add_item(tenant_a.tenant_id, own.id)
 
-    with pytest.raises(IntegrityError):
+    # The use case checked the category first; the foreign key still catches a concurrent delete.
+    with pytest.raises(CategoryNotFound):
         _add_item(tenant_a.tenant_id, foreign.id)
+    with pytest.raises(CategoryNotFound):
+        _add_item(tenant_a.tenant_id, uuid.uuid4())
+    moved = replace(item, category_id=foreign.id)
+    with pytest.raises(CategoryNotFound):
+        _in_session(lambda session: SqlAlchemyItemRepository(session).update(moved))
 
 
 def test_a_category_with_items_is_never_deleted(tenants: tuple[SeedResult, SeedResult]) -> None:

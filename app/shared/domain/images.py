@@ -39,12 +39,16 @@ class InvalidImage(ValueError):
 
 
 class ImageStorageUnavailable(Exception):
-    """The image storage is not configured (missing credentials)."""
+    """The image storage cannot be used: not configured, or failing right now. The message is for the admin."""
 
 
 @dataclass(frozen=True)
 class UploadSignature:
-    """Everything the browser sends to the storage along with the file."""
+    """Everything the browser sends to the storage along with the file.
+
+    `overwrite` is always False: an upload that was already checked cannot be replaced later
+    by another file under the same public id.
+    """
 
     upload_url: str
     api_key: str
@@ -52,6 +56,7 @@ class UploadSignature:
     signature: str
     public_id: str
     allowed_formats: tuple[str, ...]
+    overwrite: bool = False
 
 
 @dataclass(frozen=True)
