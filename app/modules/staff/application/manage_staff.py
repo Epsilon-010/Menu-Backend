@@ -7,7 +7,7 @@ and admins are reported as not found. There is no hard delete; deactivating is t
 import uuid
 from dataclasses import replace
 
-from app.modules.staff.domain.errors import StaffMemberNotFound, UsernameNotAvailable
+from app.modules.staff.domain.errors import StaffIdTaken, StaffMemberNotFound, UsernameNotAvailable
 from app.modules.staff.domain.user import (
     SessionRevoker,
     User,
@@ -20,7 +20,8 @@ from app.shared.domain.principal import Role
 
 
 async def _get_staff_member(users: UserRepository, tenant_id: uuid.UUID, user_id: uuid.UUID) -> User:
-    user = await users.get(tenant_id, user_id)
+    # Every caller rewrites the member: lock the row so concurrent edits never overwrite each other.
+    user = await users.get_for_update(tenant_id, user_id)
     if user is None or not user.is_staff_member:
         raise StaffMemberNotFound(user_id)
     return user
@@ -33,15 +34,35 @@ class CreateStaffMember:
         self._uow = uow
 
     async def execute(
-        self, tenant_id: uuid.UUID, username: str, full_name: str, role: Role, password: str
+        self,
+        tenant_id: uuid.UUID,
+        username: str,
+        full_name: str,
+        role: Role,
+        password: str,
+        user_id: uuid.UUID | None = None,
     ) -> User:
+        """`user_id` makes the create idempotent: repeating it returns the member already created."""
         validate_password(password)
         # Validate the rest before paying for the hash.
-        User.create_staff(tenant_id, username, full_name, role, password_hash="")
+        draft = User.create_staff(tenant_id, username, full_name, role, password_hash="")
+        if user_id is not None:
+            existing = await self._users.get(tenant_id, user_id)
+            if existing is not None:
+                same = (existing.username, existing.full_name, existing.role) == (
+                    draft.username,
+                    draft.full_name,
+                    draft.role,
+                )
+                if not (existing.is_staff_member and same):
+                    raise StaffIdTaken(user_id)
+                return existing
+            if await self._users.exists_anywhere(user_id):
+                raise StaffIdTaken(user_id)
         if await self._users.get_by_username(normalize_username(username)) is not None:
             raise UsernameNotAvailable(username)
 
-        member = User.create_staff(tenant_id, username, full_name, role, await self._hasher.hash(password))
+        member = User.create_staff(tenant_id, username, full_name, role, await self._hasher.hash(password), user_id)
         await self._users.add(member)
         await self._uow.commit()
         return member

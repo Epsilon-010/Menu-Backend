@@ -251,3 +251,21 @@ def test_a_tenant_never_sees_nor_changes_another_tenant_tables(
     assert other.post(f"{TABLES_URL}/{table['id']}/pin").status_code == 404
     assert owner.get(TABLES_URL).json()[0]["is_active"] is True
     assert tablet.get("/api/v1/auth/me").json()["tenant"]["id"] == str(tenant_a.tenant_id)
+
+
+def test_repeating_a_table_create_never_makes_a_second_table(new_client: ClientFactory, tenant_a: SeedResult) -> None:
+    import uuid
+
+    admin = admin_of(new_client)
+    body = {"id": str(uuid.uuid4()), "name": "Mesa 7"}
+
+    first = admin.post(TABLES_URL, json=body)
+    replay = admin.post(TABLES_URL, json=body)
+
+    assert first.status_code == 201 and first.json()["id"] == body["id"]
+    assert replay.status_code == 409
+    assert replay.json()["detail"] == "This table was already created; generate a new PIN to see its credentials"
+    assert [t["name"] for t in admin.get(TABLES_URL).json()] == ["Mesa 7"]
+    # Unknown fields are rejected, not silently ignored.
+    assert admin.post(TABLES_URL, json={"name": "Mesa 8", "tenant_id": "x"}).status_code == 422
+    assert admin.patch(f"{TABLES_URL}/{body['id']}", json={"code": "HACKED"}).status_code == 422

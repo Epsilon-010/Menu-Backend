@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auth.application.revoke_user_sessions import RevokeUserSessions
@@ -14,7 +14,7 @@ from app.modules.staff.application.manage_staff import (
     ResetStaffPassword,
     UpdateStaffMember,
 )
-from app.modules.staff.domain.errors import InvalidUserData, StaffMemberNotFound, UsernameNotAvailable
+from app.modules.staff.domain.errors import InvalidUserData, StaffIdTaken, StaffMemberNotFound, UsernameNotAvailable
 from app.modules.staff.domain.user import User
 from app.modules.staff.infrastructure.repository import SqlAlchemyUserRepository
 from app.shared.domain.principal import Principal, Role
@@ -33,20 +33,27 @@ StaffRole = Literal["waiter", "kitchen"]
 # --- Schemas -----------------------------------------------------------------------------------
 
 
-class StaffMemberIn(BaseModel):
+class _In(BaseModel):
+    # Unknown fields are rejected instead of silently ignored.
+    model_config = ConfigDict(extra="forbid")
+
+
+class StaffMemberIn(_In):
+    # Optional client-chosen id: repeating the create returns the same member.
+    id: uuid.UUID | None = None
     username: str = Field(max_length=100)
     full_name: str = Field(max_length=200)
     role: StaffRole
     password: str = Field(max_length=200)
 
 
-class StaffMemberUpdate(BaseModel):
+class StaffMemberUpdate(_In):
     full_name: str | None = Field(default=None, max_length=200)
     role: StaffRole | None = None
     is_active: bool | None = None
 
 
-class PasswordReset(BaseModel):
+class PasswordReset(_In):
     password: str = Field(max_length=200)
 
 
@@ -129,11 +136,15 @@ async def create_staff_member(
     body: StaffMemberIn, admin: Admin, use_case: Annotated[CreateStaffMember, Depends(get_create_staff_member)]
 ) -> StaffMemberOut | JSONResponse:
     try:
-        member = await use_case.execute(admin.tenant_id, body.username, body.full_name, Role(body.role), body.password)
+        member = await use_case.execute(
+            admin.tenant_id, body.username, body.full_name, Role(body.role), body.password, body.id
+        )
     except InvalidUserData as error:
         return _invalid(error)
     except UsernameNotAvailable:
         return problem(status.HTTP_409_CONFLICT, "Username not available")
+    except StaffIdTaken:
+        return problem(status.HTTP_409_CONFLICT, "That id is already used by something else")
     return _out(member)
 
 

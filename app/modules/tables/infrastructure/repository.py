@@ -5,10 +5,10 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.tables.domain.errors import TableNameNotAvailable
+from app.modules.tables.domain.errors import TableIdTaken, TableNameNotAvailable, TableNotFound
 from app.modules.tables.domain.table import PIN_LENGTH, TABLE_CODE_ALPHABET, TABLE_CODE_LENGTH, Table
 from app.modules.tables.infrastructure.models import TableModel
-from app.shared.infrastructure.database import violated_unique_constraint
+from app.shared.infrastructure.database import affected_rows, violated_unique_constraint
 
 _NAME_INDEX = "uq_tables_tenant_id_lower_name"
 
@@ -58,6 +58,9 @@ class SqlAlchemyTableRepository:
         try:
             await self._session.flush()
         except IntegrityError as error:
+            if violated_unique_constraint(error) == "pk_tables":
+                # A concurrent replay of the same create, or a clash with another tenant's id.
+                raise TableIdTaken(table.id) from error
             _raise_name_taken(error, table)
             raise
 
@@ -66,6 +69,15 @@ class SqlAlchemyTableRepository:
             select(TableModel).where(TableModel.tenant_id == tenant_id, TableModel.id == table_id)
         )
         return _to_entity(model) if model is not None else None
+
+    async def get_for_update(self, tenant_id: uuid.UUID, table_id: uuid.UUID) -> Table | None:
+        model = await self._session.scalar(
+            select(TableModel).where(TableModel.tenant_id == tenant_id, TableModel.id == table_id).with_for_update()
+        )
+        return _to_entity(model) if model is not None else None
+
+    async def exists_anywhere(self, table_id: uuid.UUID) -> bool:
+        return await self._session.scalar(select(TableModel.id).where(TableModel.id == table_id)) is not None
 
     async def get_by_code(self, code: str) -> Table | None:
         # The only query without a tenant filter: the device login runs before any tenant is known.
@@ -87,7 +99,7 @@ class SqlAlchemyTableRepository:
     async def update(self, table: Table) -> None:
         # Tenant-scoped like every other query; the code never changes.
         try:
-            await self._session.execute(
+            result = await self._session.execute(
                 update(TableModel)
                 .where(TableModel.tenant_id == table.tenant_id, TableModel.id == table.id)
                 .values(name=table.name, pin_hash=table.pin_hash, is_active=table.is_active)
@@ -95,3 +107,5 @@ class SqlAlchemyTableRepository:
         except IntegrityError as error:
             _raise_name_taken(error, table)
             raise
+        if not affected_rows(result):
+            raise TableNotFound(table.id)

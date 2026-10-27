@@ -66,6 +66,14 @@ def violated_unique_constraint(error: IntegrityError) -> str | None:
     return name if isinstance(name, str) else None
 
 
+def affected_rows(result: Any) -> int:
+    """Rows an UPDATE or DELETE touched: 0 means the row is gone (or never matched the tenant).
+
+    Repositories turn 0 into the module's not-found error instead of reporting a silent success.
+    """
+    return int(getattr(result, "rowcount", 0) or 0)
+
+
 def violated_foreign_key(error: IntegrityError) -> str | None:
     """Name of the foreign key a failed write broke (e.g. deleting a row others still reference)."""
     cause = _driver_error(error)

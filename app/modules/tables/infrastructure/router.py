@@ -3,7 +3,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auth.application.revoke_user_sessions import RevokeTableSessions
@@ -15,7 +15,13 @@ from app.modules.tables.application.manage_tables import (
     TableWithPin,
     UpdateTable,
 )
-from app.modules.tables.domain.errors import InvalidTableData, TableNameNotAvailable, TableNotFound
+from app.modules.tables.domain.errors import (
+    InvalidTableData,
+    TableAlreadyCreated,
+    TableIdTaken,
+    TableNameNotAvailable,
+    TableNotFound,
+)
 from app.modules.tables.domain.table import Table
 from app.modules.tables.infrastructure.repository import RandomTableCredentials, SqlAlchemyTableRepository
 from app.shared.domain.principal import Principal
@@ -33,11 +39,18 @@ Admin = Annotated[Principal, Depends(require_role("admin"))]
 # --- Schemas -----------------------------------------------------------------------------------
 
 
-class TableIn(BaseModel):
+class _In(BaseModel):
+    # Unknown fields are rejected instead of silently ignored.
+    model_config = ConfigDict(extra="forbid")
+
+
+class TableIn(_In):
+    # Optional client-chosen id: repeating the create never makes a second table.
+    id: uuid.UUID | None = None
     name: str = Field(max_length=200)
 
 
-class TableUpdate(BaseModel):
+class TableUpdate(_In):
     name: str | None = Field(default=None, max_length=200)
     is_active: bool | None = None
 
@@ -131,11 +144,15 @@ async def create_table(
     body: TableIn, admin: Admin, use_case: Annotated[CreateTable, Depends(get_create_table)]
 ) -> TableWithPinOut | JSONResponse:
     try:
-        result = await use_case.execute(admin.tenant_id, body.name)
+        result = await use_case.execute(admin.tenant_id, body.name, body.id)
     except InvalidTableData as error:
         return _invalid(error)
     except TableNameNotAvailable:
         return _name_taken()
+    except TableAlreadyCreated:
+        return problem(status.HTTP_409_CONFLICT, "This table was already created; generate a new PIN to see its credentials")
+    except TableIdTaken:
+        return problem(status.HTTP_409_CONFLICT, "That id is already used by something else")
     return _with_pin(result)
 
 

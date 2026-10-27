@@ -14,7 +14,7 @@ from app.modules.catalog.domain.catalog import (
     ensure_complete_order,
     validate_category_name,
 )
-from app.modules.catalog.domain.errors import CategoryNameNotAvailable, CategoryNotFound
+from app.modules.catalog.domain.errors import CatalogIdTaken, CategoryNameNotAvailable, CategoryNotFound
 from app.shared.domain.ports import UnitOfWork
 
 
@@ -24,8 +24,12 @@ class CategoryWithItems:
     items: list[Item]
 
 
-async def get_category(categories: CategoryRepository, tenant_id: uuid.UUID, category_id: uuid.UUID) -> Category:
-    category = await categories.get(tenant_id, category_id)
+async def get_category(
+    categories: CategoryRepository, tenant_id: uuid.UUID, category_id: uuid.UUID, for_update: bool = False
+) -> Category:
+    """`for_update` locks the row: use it whenever the category is read to be rewritten."""
+    load = categories.get_for_update if for_update else categories.get
+    category = await load(tenant_id, category_id)
     if category is None:
         raise CategoryNotFound(category_id)
     return category
@@ -40,17 +44,32 @@ async def _ensure_name_available(
 
 
 class CreateCategory:
-    """New categories go last in the menu."""
+    """New categories go last in the menu.
+
+    Idempotent when the client sends the id: repeating the same create (a retry after a lost
+    response, a double click) returns the category already created instead of a second one.
+    """
 
     def __init__(self, categories: CategoryRepository, uow: UnitOfWork) -> None:
         self._categories = categories
         self._uow = uow
 
-    async def execute(self, tenant_id: uuid.UUID, name: str) -> Category:
+    async def execute(self, tenant_id: uuid.UUID, name: str, category_id: uuid.UUID | None = None) -> Category:
         name = validate_category_name(name)
+        # Taken before the replay check, so a concurrent replay waits and then finds the first one.
+        await self._categories.lock_order(tenant_id)
+        if category_id is not None:
+            existing = await self._categories.get(tenant_id, category_id)
+            if existing is not None:
+                if existing.name != name:
+                    raise CatalogIdTaken(category_id)
+                return existing
+            if await self._categories.exists_anywhere(category_id):
+                raise CatalogIdTaken(category_id)
         await _ensure_name_available(self._categories, tenant_id, name)
 
-        category = Category.create(tenant_id, name, await self._categories.next_position(tenant_id))
+        position = await self._categories.next_position(tenant_id)
+        category = Category.create(tenant_id, name, position, category_id)
         await self._categories.add(category)
         await self._uow.commit()
         return category
@@ -83,7 +102,7 @@ class UpdateCategory:
     async def execute(
         self, tenant_id: uuid.UUID, category_id: uuid.UUID, name: str | None = None, is_visible: bool | None = None
     ) -> Category:
-        category = await get_category(self._categories, tenant_id, category_id)
+        category = await get_category(self._categories, tenant_id, category_id, for_update=True)
         updated = category.with_changes(name=name, is_visible=is_visible)
         if updated.name != category.name:
             await _ensure_name_available(self._categories, tenant_id, updated.name, category_id)
@@ -101,6 +120,7 @@ class DeleteCategory:
         self._uow = uow
 
     async def execute(self, tenant_id: uuid.UUID, category_id: uuid.UUID) -> None:
+        await self._categories.lock_order(tenant_id)
         await get_category(self._categories, tenant_id, category_id)
         await self._categories.delete(tenant_id, category_id)
         await self._uow.commit()
@@ -112,6 +132,8 @@ class ReorderCategories:
         self._uow = uow
 
     async def execute(self, tenant_id: uuid.UUID, ordered_ids: list[uuid.UUID]) -> None:
+        # Read under the lock: a concurrent create or delete cannot change the list being rewritten.
+        await self._categories.lock_order(tenant_id)
         current = await self._categories.list(tenant_id)
         ensure_complete_order((category.id for category in current), ordered_ids)
         await self._categories.set_positions(tenant_id, ordered_ids)

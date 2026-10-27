@@ -64,6 +64,8 @@ class InMemoryTenantRepository:
 class InMemoryUserRepository:
     def __init__(self) -> None:
         self.users: dict[uuid.UUID, User] = {}
+        # Ids read with get_for_update: proves a write use case locked its row.
+        self.locked: list[uuid.UUID] = []
 
     async def add(self, user: User) -> None:
         self.users[user.id] = user
@@ -71,6 +73,13 @@ class InMemoryUserRepository:
     async def get(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> User | None:
         user = self.users.get(user_id)
         return user if user is not None and user.tenant_id == tenant_id else None
+
+    async def get_for_update(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> User | None:
+        self.locked.append(user_id)
+        return await self.get(tenant_id, user_id)
+
+    async def exists_anywhere(self, user_id: uuid.UUID) -> bool:
+        return user_id in self.users
 
     async def get_by_email(self, email: str) -> User | None:
         return next((user for user in self.users.values() if user.email == email), None)
@@ -89,6 +98,7 @@ class InMemoryUserRepository:
 class InMemoryTableRepository:
     def __init__(self) -> None:
         self.tables: dict[uuid.UUID, Table] = {}
+        self.locked: list[uuid.UUID] = []
 
     async def add(self, table: Table) -> None:
         self.tables[table.id] = table
@@ -96,6 +106,13 @@ class InMemoryTableRepository:
     async def get(self, tenant_id: uuid.UUID, table_id: uuid.UUID) -> Table | None:
         table = self.tables.get(table_id)
         return table if table is not None and table.tenant_id == tenant_id else None
+
+    async def get_for_update(self, tenant_id: uuid.UUID, table_id: uuid.UUID) -> Table | None:
+        self.locked.append(table_id)
+        return await self.get(tenant_id, table_id)
+
+    async def exists_anywhere(self, table_id: uuid.UUID) -> bool:
+        return table_id in self.tables
 
     async def get_by_code(self, code: str) -> Table | None:
         return next((table for table in self.tables.values() if table.code == code), None)
@@ -146,6 +163,8 @@ class InMemoryCategoryRepository:
         self.categories: dict[uuid.UUID, Category] = {}
         # Item counts per category, kept by InMemoryItemRepository to mimic the RESTRICT foreign key.
         self.item_counts: dict[uuid.UUID, int] = {}
+        self.locked: list[uuid.UUID] = []
+        self.order_locks: list[uuid.UUID] = []
 
     async def add(self, category: Category) -> None:
         self.categories[category.id] = category
@@ -153,6 +172,16 @@ class InMemoryCategoryRepository:
     async def get(self, tenant_id: uuid.UUID, category_id: uuid.UUID) -> Category | None:
         category = self.categories.get(category_id)
         return category if category is not None and category.tenant_id == tenant_id else None
+
+    async def get_for_update(self, tenant_id: uuid.UUID, category_id: uuid.UUID) -> Category | None:
+        self.locked.append(category_id)
+        return await self.get(tenant_id, category_id)
+
+    async def exists_anywhere(self, category_id: uuid.UUID) -> bool:
+        return category_id in self.categories
+
+    async def lock_order(self, tenant_id: uuid.UUID) -> None:
+        self.order_locks.append(tenant_id)
 
     async def get_by_name(self, tenant_id: uuid.UUID, name: str) -> Category | None:
         return next(
@@ -187,6 +216,18 @@ class InMemoryItemRepository:
     def __init__(self, categories: InMemoryCategoryRepository) -> None:
         self.items: dict[uuid.UUID, Item] = {}
         self._categories = categories
+        self.locked: list[uuid.UUID] = []
+        self.order_locks: list[list[uuid.UUID]] = []
+
+    async def get_for_update(self, tenant_id: uuid.UUID, item_id: uuid.UUID) -> Item | None:
+        self.locked.append(item_id)
+        return await self.get(tenant_id, item_id)
+
+    async def exists_anywhere(self, item_id: uuid.UUID) -> bool:
+        return item_id in self.items
+
+    async def lock_order(self, tenant_id: uuid.UUID, category_ids: list[uuid.UUID]) -> None:
+        self.order_locks.append(sorted(set(category_ids)))
 
     def _recount(self) -> None:
         counts: dict[uuid.UUID, int] = {}

@@ -4,11 +4,11 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.staff.domain.errors import EmailAlreadyInUse, UsernameNotAvailable
+from app.modules.staff.domain.errors import EmailAlreadyInUse, StaffIdTaken, StaffMemberNotFound, UsernameNotAvailable
 from app.modules.staff.domain.user import STAFF_MEMBER_ROLES, User
 from app.modules.staff.infrastructure.models import UserModel
 from app.shared.domain.principal import Role
-from app.shared.infrastructure.database import violated_unique_constraint
+from app.shared.infrastructure.database import affected_rows, violated_unique_constraint
 
 
 def _to_entity(model: UserModel) -> User:
@@ -46,6 +46,9 @@ class SqlAlchemyUserRepository:
         except IntegrityError as error:
             # Another request took the login after the use case checked it.
             constraint = violated_unique_constraint(error)
+            if constraint == "pk_users":
+                # A concurrent replay of the same create, or a clash with another tenant's id.
+                raise StaffIdTaken(user.id) from error
             if constraint == "uq_users_username":
                 raise UsernameNotAvailable(user.username) from error
             if constraint == "uq_users_email":
@@ -57,6 +60,15 @@ class SqlAlchemyUserRepository:
             select(UserModel).where(UserModel.tenant_id == tenant_id, UserModel.id == user_id)
         )
         return _to_entity(model) if model is not None else None
+
+    async def get_for_update(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> User | None:
+        model = await self._session.scalar(
+            select(UserModel).where(UserModel.tenant_id == tenant_id, UserModel.id == user_id).with_for_update()
+        )
+        return _to_entity(model) if model is not None else None
+
+    async def exists_anywhere(self, user_id: uuid.UUID) -> bool:
+        return await self._session.scalar(select(UserModel.id).where(UserModel.id == user_id)) is not None
 
     async def get_by_email(self, email: str) -> User | None:
         model = await self._session.scalar(select(UserModel).where(UserModel.email == email))
@@ -76,7 +88,7 @@ class SqlAlchemyUserRepository:
 
     async def update(self, user: User) -> None:
         # Tenant-scoped like every other query; email and username never change.
-        await self._session.execute(
+        result = await self._session.execute(
             update(UserModel)
             .where(UserModel.tenant_id == user.tenant_id, UserModel.id == user.id)
             .values(
@@ -86,3 +98,5 @@ class SqlAlchemyUserRepository:
                 is_active=user.is_active,
             )
         )
+        if not affected_rows(result):
+            raise StaffMemberNotFound(user.id)

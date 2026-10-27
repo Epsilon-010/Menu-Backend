@@ -26,6 +26,7 @@ from app.modules.catalog.application.manage_items import (
 )
 from app.modules.catalog.domain.catalog import MAX_PRICE_CENTS, Category, Item
 from app.modules.catalog.domain.errors import (
+    CatalogIdTaken,
     CategoryNameNotAvailable,
     CategoryNotEmpty,
     CategoryNotFound,
@@ -71,6 +72,8 @@ class _In(BaseModel):
 
 
 class CategoryIn(_In):
+    # Optional client-chosen id: sending the same create again returns the same category.
+    id: uuid.UUID | None = None
     name: str = Field(max_length=200)
 
 
@@ -80,6 +83,8 @@ class CategoryUpdate(_In):
 
 
 class ItemIn(_In):
+    # Optional client-chosen id: sending the same create again returns the same item.
+    id: uuid.UUID | None = None
     category_id: uuid.UUID
     name: str = Field(max_length=200)
     description: str = Field(default="", max_length=2000)
@@ -175,6 +180,8 @@ async def _run(call: Awaitable[T]) -> T | JSONResponse:
         return problem(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error))
     except CategoryNameNotAvailable:
         return problem(status.HTTP_409_CONFLICT, "Category name already in use")
+    except CatalogIdTaken:
+        return problem(status.HTTP_409_CONFLICT, "That id is already used by something else")
     except CategoryNotEmpty:
         return problem(status.HTTP_409_CONFLICT, "Category still has items")
     except CategoryNotFound:
@@ -264,7 +271,7 @@ async def list_catalog(
 async def create_category(
     body: CategoryIn, admin: Admin, use_case: Annotated[CreateCategory, Depends(get_create_category)]
 ) -> CategoryOut | JSONResponse:
-    result = await _run(use_case.execute(admin.tenant_id, body.name))
+    result = await _run(use_case.execute(admin.tenant_id, body.name, body.id))
     return result if isinstance(result, JSONResponse) else _category_out(result)
 
 
@@ -312,7 +319,11 @@ async def create_item(
     body: ItemIn, admin: Admin, images: ImagesDep, use_case: Annotated[CreateItem, Depends(get_create_item)]
 ) -> ItemOut | JSONResponse:
     draft = ItemDraft(
-        category_id=body.category_id, name=body.name, description=body.description, price_cents=body.price_cents
+        category_id=body.category_id,
+        name=body.name,
+        description=body.description,
+        price_cents=body.price_cents,
+        id=body.id,
     )
     result = await _run(use_case.execute(admin.tenant_id, draft))
     return result if isinstance(result, JSONResponse) else _item_out(result, images)

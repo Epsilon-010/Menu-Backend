@@ -11,13 +11,13 @@ Branch: `feat/image-cleanup` (Backend) and `feat/redesign` (Menu-Frontend). Deli
 - S6 Every other open advisory of Slices 4/redesign/cleanup (listed in Tasks), plus the earlier slices' advisories with a clear fix.
 
 ## Tasks
-- [ ] H1 (S2) Idempotent creates: catalog categories/items, tables, staff + frontend ids
+- [x] H1 (S2) Idempotent creates: catalog categories/items, tables, staff (backend; frontend ids in H10) — inline — RED 7 catalog + 2 collection errors; GREEN — see L4
 - [ ] H2 (S3) Frontend: "saved but not refreshed" is success; delete of a missing row is done
-- [ ] H3 (S4) Item row locks in UpdateItem, SetItemImage, RemoveItemImage, DeleteItem
+- [x] H3 (S4) Row locks (get_for_update) in every read-then-write use case of catalog, tables and staff — inline — RED 3 lock tests; GREEN — see L4
 - [x] H4 (S5) Reject discards only pending; FK RESTRICT on image_uploads.tenant_id; per-row retry backoff (new migration) — inline — tests written first but RED not run before the code; GREEN 244 passed; migration e5be48d96257
 - [ ] H5 (S6) NUL characters in any text field -> 422, not 500 (all modules)
-- [ ] H6 (S6) UPDATE/DELETE that hit no row (row deleted meanwhile) -> 404, not 200 (catalog, tables, staff)
-- [ ] H7 (S6) Positions: concurrent create vs reorder never share a position (per-tenant advisory lock)
+- [x] H6 (S6) UPDATE/DELETE that hit no row -> not-found error (catalog, tables, staff) via ffected_rows — inline — see L4
+- [x] H7 (S6) Order locks (pg_advisory_xact_lock per tenant / per category) for create, move, delete, reorder; partial reorder -> 422 — inline — see L4
 - [ ] H8 (S6) Schema 422s carry a readable `detail` as well as `errors`
 - [ ] H9 (S6) `extra="forbid"` on staff and tables input schemas
 - [ ] H10 (S6) Frontend: request timeout in the HTTP client; sign-out button display on phones; shared row-action hook; one money formatter; credential format constants shared by login; tests for the catalog change runner
@@ -30,3 +30,4 @@ Branch: `feat/image-cleanup` (Backend) and `feat/redesign` (Menu-Frontend). Deli
 - L1 (2026-10-27, user): "arregla lo de los duplicadops y recuerda matneer la impotracina de operaciones de ideptencia y quita eso de duplicados no vayas dejando erroes aunqeu sean por ams pequeño o ai debe de ir todo bien si no alf final todos esos erroes los perderemos y se quedaran ahi"
 - L2 (2026-10-27, decision): idempotency by client-supplied resource id (primary key guarantee) instead of an `Idempotency-Key` header in Redis, which still duplicates if the process dies between commit and storing the response.
 - L3 (evidence, 2026-10-27): image-cleanup verifier: S1-S6 PASS, no blockers; advisories A1-A5 (above) reproduced with a race probe on `menu_test`; scratch removed by the parent.
+- L4 (evidence, 2026-10-27): creates accept an optional client id; the replay check runs after the order lock, so concurrent replays serialize; a clash (other data or another tenant) answers 409 "That id is already used by something else"; tables answer 409 "This table was already created; generate a new PIN to see its credentials" (the PIN cannot be shown twice); primary-key violations map to the same 409. Every read-then-write uses get_for_update; moves and deletes of items take the order lock before the row lock (same order as reorder, no deadlock). Integration tests in 	ests/integration/modules/catalog/test_catalog_concurrency.py use repositories that pause after each read; with the locks disabled by monkeypatch all 4 fail (lost category edit, shared positions, duplicate creates, stale image written back), with them all pass. `uv run pytest`: 263 passed + tables/staff API tests (42 passed).

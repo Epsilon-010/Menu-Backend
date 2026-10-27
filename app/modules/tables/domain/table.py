@@ -38,8 +38,17 @@ class Table:
     id: uuid.UUID = field(default_factory=uuid.uuid4)
 
     @classmethod
-    def create(cls, tenant_id: uuid.UUID, name: str, code: str, pin_hash: str) -> "Table":
-        return cls(tenant_id=tenant_id, name=validate_table_name(name), code=normalize_table_code(code), pin_hash=pin_hash)
+    def create(
+        cls, tenant_id: uuid.UUID, name: str, code: str, pin_hash: str, table_id: uuid.UUID | None = None
+    ) -> "Table":
+        """`table_id` comes from the client to make the create idempotent; None generates one."""
+        return cls(
+            tenant_id=tenant_id,
+            name=validate_table_name(name),
+            code=normalize_table_code(code),
+            pin_hash=pin_hash,
+            id=table_id or uuid.uuid4(),
+        )
 
     def with_changes(self, name: str | None = None, is_active: bool | None = None) -> "Table":
         return replace(
@@ -53,6 +62,14 @@ class TableRepository(Protocol):
     async def add(self, table: Table) -> None: ...
 
     async def get(self, tenant_id: uuid.UUID, table_id: uuid.UUID) -> Table | None: ...
+
+    async def get_for_update(self, tenant_id: uuid.UUID, table_id: uuid.UUID) -> Table | None:
+        """Same as `get`, locking the row until the transaction ends: for every read-then-write."""
+        ...
+
+    async def exists_anywhere(self, table_id: uuid.UUID) -> bool:
+        """Whether the id is taken in any tenant (to answer a clash without revealing that row)."""
+        ...
 
     async def get_by_code(self, code: str) -> Table | None:
         """Platform-wide lookup, used only by the device login before any tenant is known."""

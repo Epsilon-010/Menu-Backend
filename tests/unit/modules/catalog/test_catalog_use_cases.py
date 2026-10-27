@@ -1,4 +1,5 @@
 import uuid
+from dataclasses import replace
 
 import pytest
 
@@ -20,6 +21,7 @@ from app.modules.catalog.application.manage_items import (
 )
 from app.modules.catalog.domain.catalog import Category, Item
 from app.modules.catalog.domain.errors import (
+    CatalogIdTaken,
     CategoryNameNotAvailable,
     CategoryNotEmpty,
     CategoryNotFound,
@@ -426,3 +428,98 @@ async def test_changes_without_an_image_to_discard_do_not_ask_for_a_cleanup(worl
     await world.delete_item().execute(TENANT_A, (await world.item(await world.category("Bebidas"))).id)
 
     assert world.cleanup.requests == 0
+
+
+# --- Concurrency -------------------------------------------------------------------------------
+
+
+async def test_every_write_locks_the_row_it_rewrites(world: World) -> None:
+    category = await world.category()
+    item = await world.item(category)
+
+    await UpdateCategory(world.categories, world.uow).execute(TENANT_A, category.id, is_visible=False)
+    await world.update_item().execute(TENANT_A, item.id, ItemChanges(price_cents=100))
+    await world.set_image().execute(TENANT_A, item.id, await world.uploaded_image())
+    await world.remove_image().execute(TENANT_A, item.id)
+    await world.delete_item().execute(TENANT_A, item.id)
+
+    # Read FOR UPDATE: a concurrent write waits instead of being silently overwritten.
+    assert world.categories.locked == [category.id]
+    assert world.items.locked == [item.id] * 4
+
+
+async def test_changes_to_an_order_lock_that_order(world: World) -> None:
+    tacos = await world.category("Tacos")
+    drinks = await world.category("Bebidas")
+    item = await world.item(tacos)
+
+    await ReorderCategories(world.categories, world.uow).execute(TENANT_A, [drinks.id, tacos.id])
+    await world.update_item().execute(TENANT_A, item.id, ItemChanges(category_id=drinks.id))
+    await ReorderItems(world.categories, world.items, world.uow).execute(TENANT_A, drinks.id, [item.id])
+
+    # Positions are max + 1 or rewritten whole: concurrent changes of one list must not interleave.
+    assert world.categories.order_locks == [TENANT_A, TENANT_A, TENANT_A]
+    assert world.items.order_locks == [[tacos.id], sorted([tacos.id, drinks.id]), [drinks.id]]
+
+
+# --- Idempotent creates ------------------------------------------------------------------------
+
+
+async def test_repeating_a_category_create_with_its_id_returns_the_same_category(world: World) -> None:
+    category_id = uuid.uuid4()
+    create = CreateCategory(world.categories, world.uow)
+
+    first = await create.execute(TENANT_A, "Tacos", category_id)
+    replay = await create.execute(TENANT_A, " Tacos ", category_id)
+
+    assert replay == first
+    assert first.id == category_id
+    assert list(world.categories.categories) == [category_id]
+    assert world.uow.commits == 1
+
+
+async def test_a_category_id_reused_for_other_data_or_by_another_tenant_is_refused(world: World) -> None:
+    category_id = uuid.uuid4()
+    await CreateCategory(world.categories, world.uow).execute(TENANT_A, "Tacos", category_id)
+
+    with pytest.raises(CatalogIdTaken):
+        await CreateCategory(world.categories, world.uow).execute(TENANT_A, "Bebidas", category_id)
+    with pytest.raises(CatalogIdTaken):
+        await CreateCategory(world.categories, world.uow).execute(TENANT_B, "Tacos", category_id)
+
+    assert [c.name for c in world.categories.categories.values()] == ["Tacos"]
+
+
+async def test_repeating_an_item_create_with_its_id_returns_the_same_item(world: World) -> None:
+    tacos = await world.category()
+    item_id = uuid.uuid4()
+    draft = ItemDraft(category_id=tacos.id, name="Pastor", description="Con piña", price_cents=2500, id=item_id)
+    create = CreateItem(world.categories, world.items, world.uow)
+
+    first = await create.execute(TENANT_A, draft)
+    replay = await create.execute(TENANT_A, draft)
+
+    assert replay == first
+    assert first.id == item_id
+    assert list(world.items.items) == [item_id]
+
+
+@pytest.mark.parametrize("change", ["name", "price", "tenant"])
+async def test_an_item_id_reused_for_other_data_or_by_another_tenant_is_refused(world: World, change: str) -> None:
+    tacos = await world.category()
+    item_id = uuid.uuid4()
+    draft = ItemDraft(category_id=tacos.id, name="Pastor", description="", price_cents=2500, id=item_id)
+    await CreateItem(world.categories, world.items, world.uow).execute(TENANT_A, draft)
+    tenant = TENANT_A
+    if change == "name":
+        draft = replace(draft, name="Suadero")
+    elif change == "price":
+        draft = replace(draft, price_cents=2600)
+    else:
+        tenant = TENANT_B
+        draft = replace(draft, category_id=(await world.category("Otra", TENANT_B)).id)
+
+    with pytest.raises(CatalogIdTaken):
+        await CreateItem(world.categories, world.items, world.uow).execute(tenant, draft)
+
+    assert [(i.name, i.price_cents) for i in world.items.items.values()] == [("Pastor", 2500)]

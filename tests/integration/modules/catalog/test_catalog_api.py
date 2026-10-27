@@ -399,3 +399,43 @@ def test_a_tenant_never_sees_nor_changes_another_tenant_catalog(
     assert [(c["name"], c["is_visible"]) for c in listed] == [("Tacos", True)]
     assert [(i["name"], i["price_cents"], i["image"]) for i in listed[0]["items"]] == [("Pastor", 2500, None)]
     assert owner_image in images.stored
+
+
+# --- Idempotent creates ------------------------------------------------------------------------
+
+
+def test_repeating_a_create_with_its_id_returns_the_same_resource(
+    new_client: ClientFactory, tenant_a: SeedResult
+) -> None:
+    admin = admin_of(new_client)
+    category_id, item_id = str(uuid.uuid4()), str(uuid.uuid4())
+    category_body = {"id": category_id, "name": "Tacos"}
+
+    first = ok(admin.post(CATEGORIES_URL, json=category_body), 201)
+    replay = ok(admin.post(CATEGORIES_URL, json=category_body), 201)
+    item_body = {"id": item_id, "category_id": category_id, "name": "Pastor", "description": "", "price_cents": 2500}
+    first_item = ok(admin.post(ITEMS_URL, json=item_body), 201)
+    replay_item = ok(admin.post(ITEMS_URL, json=item_body), 201)
+
+    assert first["id"] == category_id and replay == first
+    assert first_item["id"] == item_id and replay_item == first_item
+    assert [(c["name"], len(c["items"])) for c in catalog(admin)] == [("Tacos", 1)]
+
+
+def test_an_id_reused_for_other_data_or_by_another_tenant_answers_409(
+    new_client: ClientFactory, tenant_a: SeedResult, tenant_b: SeedResult
+) -> None:
+    owner = admin_of(new_client)
+    category_id = str(uuid.uuid4())
+    ok(owner.post(CATEGORIES_URL, json={"id": category_id, "name": "Tacos"}), 201)
+    other = admin_of(new_client, "boss@example.com")
+
+    clashes = [
+        owner.post(CATEGORIES_URL, json={"id": category_id, "name": "Bebidas"}),
+        other.post(CATEGORIES_URL, json={"id": category_id, "name": "Tacos"}),
+    ]
+
+    assert [r.status_code for r in clashes] == [409, 409]
+    # The same generic answer either way: nothing says the id lives in another tenant.
+    assert {r.json()["detail"] for r in clashes} == {"That id is already used by something else"}
+    assert catalog(other) == []

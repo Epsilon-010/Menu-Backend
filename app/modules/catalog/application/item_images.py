@@ -65,7 +65,7 @@ class SetItemImage:
         if stored is None:
             raise InvalidImage("Image not found; upload it first")
 
-        item = await get_item(self._items, tenant_id, item_id)
+        item = await get_item(self._items, tenant_id, item_id, for_update=True)
         if item.image_public_id == public_id:
             return item
         try:
@@ -101,7 +101,7 @@ class RemoveItemImage:
         self._cleanup = cleanup
 
     async def execute(self, tenant_id: uuid.UUID, item_id: uuid.UUID) -> Item:
-        item = await get_item(self._items, tenant_id, item_id)
+        item = await get_item(self._items, tenant_id, item_id, for_update=True)
         if item.image_public_id is None:
             return item
         await self._registry.discard(tenant_id, item.image_public_id)

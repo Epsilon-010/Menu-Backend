@@ -265,3 +265,22 @@ def test_admins_are_not_managed_from_the_staff_endpoints(new_client: ClientFacto
 
     assert response.status_code == 404
     assert admin.get("/api/v1/auth/me").status_code == 200
+
+
+def test_repeating_a_staff_create_with_its_id_returns_the_same_member(
+    new_client: ClientFactory, tenant_a: SeedResult
+) -> None:
+    import uuid
+
+    admin = signed_in(new_client, "owner@example.com")
+    member_id = str(uuid.uuid4())
+
+    first = create_member(admin, "juan.taco", id=member_id)
+    replay = create_member(admin, "juan.taco", id=member_id)
+    clash = create_member(admin, "otro.mesero", id=member_id)
+
+    assert first.status_code == 201 and replay.status_code == 201
+    assert replay.json() == first.json()
+    assert clash.status_code == 409
+    assert [m["username"] for m in admin.get(STAFF_URL).json()] == ["juan.taco"]
+    assert create_member(admin, "nuevo", role_extra="x").status_code == 422
