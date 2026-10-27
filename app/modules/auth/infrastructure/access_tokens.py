@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from jose import JWTError, jwt
@@ -26,8 +26,9 @@ class JoseAccessTokens:
             "tenant_id": str(tenant_id),
             "role": role.value,
             "jti": str(uuid.uuid4()),
-            "iat": now,
-            "exp": expires_at,
+            # NumericDate with sub-second precision, compared against session revocations.
+            "iat": now.timestamp(),
+            "exp": expires_at.timestamp(),
         }
         if table_id is not None:
             claims["table_id"] = str(table_id)
@@ -47,6 +48,7 @@ class JoseAccessTokens:
                 tenant_id=uuid.UUID(claims["tenant_id"]),
                 role=role,
                 table_id=uuid.UUID(table_id) if role is Role.TABLE else None,
+                issued_at=datetime.fromtimestamp(float(claims["iat"]), UTC),
             )
-        except (JWTError, ValueError, TypeError) as error:
+        except (JWTError, ValueError, TypeError, OverflowError) as error:
             raise InvalidAccessToken() from error

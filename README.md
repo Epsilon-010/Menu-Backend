@@ -26,11 +26,15 @@ The password comes from `--admin-password`, the `SEED_ADMIN_PASSWORD` variable, 
 
 ## Authentication
 
-- `POST /api/v1/auth/login` (email + password) returns a 15-minute access JWT and sets the refresh token
-  as an `httpOnly`, `Secure`, `SameSite=Strict` cookie limited to `/api/v1/auth`.
-- `POST /api/v1/auth/refresh` rotates the refresh token; reusing an already rotated one revokes its whole family.
-- `POST /api/v1/auth/logout` revokes the current family. `GET /api/v1/auth/me` returns the user and the business.
-- Failed logins are rate limited per IP and per account in Redis (`LOGIN_*` settings in `.env.example`).
+- `POST /api/v1/auth/login` (email + password) sets two `httpOnly`, `Secure`, `SameSite=Strict` cookies:
+  the 15-minute access JWT (`access_token`, path `/api`) and the opaque refresh token (`refresh_token`,
+  path `/api/v1/auth`). Neither token appears in a response body; the body only carries `role` and `expires_in`.
+- `POST /api/v1/auth/refresh` rotates both cookies; reusing an already rotated refresh token revokes its whole family.
+- `POST /api/v1/auth/logout` revokes the current family and clears both cookies. `GET /api/v1/auth/me` returns
+  the user and the business.
+- Login attempts are rate limited per account (user) in Redis, whatever IP they come from
+  (`LOGIN_*` settings in `.env.example`).
+- CSRF: the API only accepts the access token from the cookie, and `SameSite=Strict` keeps other sites from sending it.
 - Routes declare their allowed roles with `Depends(require_role("admin", ...))`
   (`app/shared/infrastructure/http/auth.py`); the tenant always comes from the token.
 

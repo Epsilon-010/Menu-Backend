@@ -1,16 +1,21 @@
 import uuid
 
-from app.modules.staff.domain.user import User, UserRepository, normalize_email
+from app.modules.staff.domain.user import User, UserRepository, is_email_login, normalize_email, normalize_username
 
 
-class FindUserByEmail:
-    """Platform-wide lookup used only by login, before any tenant is known."""
+class FindUserByLogin:
+    """Platform-wide lookup used only by login, before any tenant is known.
+
+    The login is the admin's email or a staff member's username.
+    """
 
     def __init__(self, users: UserRepository) -> None:
         self._users = users
 
-    async def execute(self, email: str) -> User | None:
-        return await self._users.get_by_email(normalize_email(email))
+    async def execute(self, login: str) -> User | None:
+        if is_email_login(login):
+            return await self._users.get_by_email(normalize_email(login))
+        return await self._users.get_by_username(normalize_username(login))
 
 
 class GetUser:

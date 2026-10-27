@@ -1,5 +1,6 @@
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from typing import Protocol
 
@@ -26,6 +27,15 @@ class AccessTokenDecoder(Protocol):
         ...
 
 
+class AccessRevocations(Protocol):
+    """Port: access tokens are stateless, so ending a subject's sessions right away also records
+    when it happened; tokens issued at or before that moment are rejected until they expire."""
+
+    async def revoke(self, subject_id: uuid.UUID, at: datetime) -> None: ...
+
+    async def revoked_since(self, subject_id: uuid.UUID) -> datetime | None: ...
+
+
 @dataclass(frozen=True)
 class Principal:
     """Authenticated caller, always taken from the access token (never from the body or URL).
@@ -37,3 +47,4 @@ class Principal:
     tenant_id: uuid.UUID
     role: Role
     table_id: uuid.UUID | None = None
+    issued_at: datetime | None = None
