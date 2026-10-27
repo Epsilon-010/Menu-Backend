@@ -8,12 +8,15 @@ from app.modules.auth.application.get_current_account import GetCurrentAccount
 from app.modules.auth.application.login import Login
 from app.modules.auth.application.logout import Logout
 from app.modules.auth.application.refresh_session import RefreshSession
-from app.modules.auth.application.revoke_user_sessions import RevokeUserSessions
+from app.modules.auth.application.revoke_user_sessions import RevokeTableSessions, RevokeUserSessions
 from app.modules.auth.application.session_issuer import SessionIssuer
+from app.modules.auth.application.table_login import TableLogin
 from app.modules.auth.domain.errors import AccountNotFound, InvalidCredentials, InvalidRefreshToken, TooManyLoginAttempts
 from app.modules.auth.domain.refresh_token import IssuedAccessToken
 from app.modules.staff.application.find_user import FindUserByLogin, GetUser
 from app.modules.staff.domain.user import User
+from app.modules.tables.application.find_table import FindTableByCode, GetTable
+from app.modules.tables.domain.table import Table
 from app.modules.tenants.application.get_tenant import GetTenant
 from app.modules.tenants.domain.tenant import Tenant
 from app.shared.domain.principal import Principal, Role
@@ -24,6 +27,7 @@ from tests.unit.fakes import (
     FakePasswordHasher,
     FakeUnitOfWork,
     InMemoryRefreshTokenRepository,
+    InMemoryTableRepository,
     InMemoryTenantRepository,
     InMemoryUserRepository,
 )
@@ -31,11 +35,15 @@ from tests.unit.fakes import (
 pytestmark = pytest.mark.anyio
 
 PASSWORD = "s3cret-pass"
+PIN = "482913"
 
 
 class FakeAccessTokens:
-    def issue(self, subject_id: uuid.UUID, tenant_id: uuid.UUID, role: Role, now: datetime) -> IssuedAccessToken:
-        return IssuedAccessToken(token=f"access:{subject_id}:{tenant_id}:{role}", expires_at=now + timedelta(minutes=15))
+    def issue(
+        self, subject_id: uuid.UUID, tenant_id: uuid.UUID, role: Role, now: datetime, table_id: uuid.UUID | None = None
+    ) -> IssuedAccessToken:
+        token = f"access:{subject_id}:{tenant_id}:{role}" + (f":{table_id}" if table_id is not None else "")
+        return IssuedAccessToken(token=token, expires_at=now + timedelta(minutes=15))
 
 
 class FakeRefreshCodec:
@@ -61,6 +69,7 @@ class World:
         self.codec = FakeRefreshCodec()
         self.users = InMemoryUserRepository()
         self.tenants = InMemoryTenantRepository()
+        self.tables = InMemoryTableRepository()
         self.refresh_tokens = InMemoryRefreshTokenRepository()
         self.access_revocations = FakeAccessRevocations()
         self.sessions = SessionIssuer(self.refresh_tokens, self.codec, FakeAccessTokens(), self.clock)
@@ -84,20 +93,41 @@ class World:
         await self.users.add(user)
         return user
 
+    async def add_table(self, tenant: Tenant, name: str = "Mesa 4", code: str = "K7M2QX", active: bool = True) -> Table:
+        await self.tenants.add(tenant)
+        table = Table.create(tenant.id, name, code, await self.hasher.hash(PIN))
+        table = replace(table, is_active=active)
+        await self.tables.add(table)
+        return table
+
     def login(self) -> Login:
         return Login(FindUserByLogin(self.users), self.hasher, self.limiter, self.sessions, self.uow)
+
+    def table_login(self) -> TableLogin:
+        return TableLogin(FindTableByCode(self.tables), self.hasher, self.limiter, self.sessions, self.uow)
 
     def revoke_user_sessions(self) -> RevokeUserSessions:
         return RevokeUserSessions(self.refresh_tokens, self.access_revocations, self.clock)
 
+    def revoke_table_sessions(self) -> RevokeTableSessions:
+        return RevokeTableSessions(self.refresh_tokens, self.access_revocations, self.clock)
+
     def refresh(self) -> RefreshSession:
-        return RefreshSession(self.refresh_tokens, self.codec, GetUser(self.users), self.sessions, self.clock, self.uow)
+        return RefreshSession(
+            self.refresh_tokens,
+            self.codec,
+            GetUser(self.users),
+            GetTable(self.tables),
+            self.sessions,
+            self.clock,
+            self.uow,
+        )
 
     def logout(self) -> Logout:
         return Logout(self.refresh_tokens, self.codec, self.clock, self.uow)
 
     def current_account(self) -> GetCurrentAccount:
-        return GetCurrentAccount(GetUser(self.users), GetTenant(self.tenants))
+        return GetCurrentAccount(GetUser(self.users), GetTable(self.tables), GetTenant(self.tenants))
 
 
 @pytest.fixture
@@ -330,6 +360,7 @@ async def test_current_account_returns_the_user_and_its_tenant(world: World, adm
     account = await world.current_account().execute(Principal(admin.id, admin.tenant_id, Role.ADMIN))
 
     assert account.user == admin
+    assert account.table is None
     assert account.tenant.name == "La Taquería"
 
 
@@ -338,3 +369,128 @@ async def test_current_account_never_crosses_tenants(world: World, admin: User) 
 
     with pytest.raises(AccountNotFound):
         await world.current_account().execute(Principal(admin.id, other.tenant_id, Role.ADMIN))
+
+
+# --- Table devices -----------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def table(world: World) -> Table:
+    return await world.add_table(Tenant(name="La Taquería"))
+
+
+async def test_table_logs_in_with_code_and_pin_and_gets_a_30_day_session_bound_to_the_table(
+    world: World, table: Table
+) -> None:
+    session = await world.table_login().execute(" k7m2qx ", PIN)
+
+    assert session.role is Role.TABLE
+    assert session.access_token == f"access:{table.id}:{table.tenant_id}:table:{table.id}"
+    assert session.refresh_expires_at == world.clock.now() + timedelta(days=30)
+    [stored] = world.refresh_tokens.tokens.values()
+    assert (stored.table_id, stored.user_id, stored.tenant_id) == (table.id, None, table.tenant_id)
+    assert world.limiter.acquired == ["table:K7M2QX"]
+    assert world.limiter.succeeded_logins == ["table:K7M2QX"]
+    assert world.uow.commits == 1
+
+
+async def test_table_login_with_a_wrong_pin_fails_generically(world: World, table: Table) -> None:
+    with pytest.raises(InvalidCredentials):
+        await world.table_login().execute("K7M2QX", "000000")
+
+    assert world.limiter.succeeded_logins == []
+    assert world.refresh_tokens.tokens == {}
+    assert world.uow.commits == 0
+
+
+async def test_table_login_with_an_unknown_code_still_spends_a_hash(world: World) -> None:
+    with pytest.raises(InvalidCredentials):
+        await world.table_login().execute("NOPE22", PIN)
+
+    assert world.hasher.verified == ["dummy"]
+    assert world.limiter.acquired == ["table:NOPE22"]
+
+
+async def test_inactive_tables_cannot_log_in(world: World) -> None:
+    await world.add_table(Tenant(name="Closed"), active=False)
+
+    with pytest.raises(InvalidCredentials):
+        await world.table_login().execute("K7M2QX", PIN)
+
+    assert world.refresh_tokens.tokens == {}
+
+
+async def test_table_login_is_blocked_while_the_limiter_says_so(world: World, table: Table) -> None:
+    world.limiter.blocked_for = 60
+
+    with pytest.raises(TooManyLoginAttempts):
+        await world.table_login().execute("K7M2QX", PIN)
+
+    assert world.hasher.verified == []
+
+
+async def test_table_refresh_rotates_inside_the_table_family(world: World, table: Table) -> None:
+    first = await world.table_login().execute("K7M2QX", PIN)
+    world.clock.advance(timedelta(days=1))
+
+    second = await world.refresh().execute(first.refresh_token)
+
+    assert second.role is Role.TABLE
+    assert second.access_token == f"access:{table.id}:{table.tenant_id}:table:{table.id}"
+    assert second.refresh_expires_at == world.clock.now() + timedelta(days=30)
+    new = await world.refresh_tokens.get_by_hash(f"hash:{second.refresh_token}")
+    assert new is not None and new.table_id == table.id and new.user_id is None
+
+
+async def test_refresh_of_a_deactivated_table_fails_and_revokes_the_family(world: World, table: Table) -> None:
+    session = await world.table_login().execute("K7M2QX", PIN)
+    world.tables.tables[table.id] = replace(table, is_active=False)
+
+    with pytest.raises(InvalidRefreshToken):
+        await world.refresh().execute(session.refresh_token)
+
+    assert all(token.revoked_at is not None for token in world.refresh_tokens.tokens.values())
+
+
+async def test_revoking_a_table_ends_its_sessions_but_not_the_staff_ones(world: World, table: Table) -> None:
+    tablet = await world.table_login().execute("K7M2QX", PIN)
+    waiter = await world.add_staff(Tenant(name="La Taquería"), "juan.taco")
+    shift = await world.login().execute("juan.taco", PASSWORD)
+    commits = world.uow.commits
+
+    await world.revoke_table_sessions().execute(table.tenant_id, table.id)
+
+    assert world.uow.commits == commits
+    assert world.access_revocations.revoked == {table.id: world.clock.now()}
+    with pytest.raises(InvalidRefreshToken):
+        await world.refresh().execute(tablet.refresh_token)
+    assert (await world.refresh().execute(shift.refresh_token)).role is Role.WAITER
+    assert waiter.id not in world.access_revocations.revoked
+
+
+async def test_revoking_a_table_never_touches_another_tenant(world: World, table: Table) -> None:
+    tablet = await world.table_login().execute("K7M2QX", PIN)
+
+    await world.revoke_table_sessions().execute(uuid.uuid4(), table.id)
+
+    assert (await world.refresh().execute(tablet.refresh_token)).role is Role.TABLE
+
+
+async def test_current_account_of_a_table_returns_the_table_and_its_tenant(world: World, table: Table) -> None:
+    account = await world.current_account().execute(Principal(table.id, table.tenant_id, Role.TABLE, table.id))
+
+    assert account.user is None
+    assert account.table == table
+    assert account.tenant.name == "La Taquería"
+
+
+async def test_current_account_of_a_table_never_crosses_tenants_and_rejects_inactive_tables(
+    world: World, table: Table
+) -> None:
+    other = await world.add_table(Tenant(name="Other Diner"), code="OTHER2")
+
+    with pytest.raises(AccountNotFound):
+        await world.current_account().execute(Principal(table.id, other.tenant_id, Role.TABLE, table.id))
+    world.tables.tables[table.id] = replace(table, is_active=False)
+    with pytest.raises(AccountNotFound):
+        await world.current_account().execute(Principal(table.id, table.tenant_id, Role.TABLE, table.id))

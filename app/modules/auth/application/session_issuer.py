@@ -10,6 +10,7 @@ from app.modules.auth.domain.refresh_token import (
     refresh_token_ttl,
 )
 from app.modules.staff.domain.user import User
+from app.modules.tables.domain.table import Table
 from app.shared.domain.ports import Clock
 from app.shared.domain.principal import Role
 
@@ -42,22 +43,38 @@ class SessionIssuer:
         self._clock = clock
 
     async def issue(self, user: User, family_id: uuid.UUID | None = None) -> AuthSession:
+        return await self._issue(user.id, user.tenant_id, user.role, family_id, user_id=user.id)
+
+    async def issue_for_table(self, table: Table, family_id: uuid.UUID | None = None) -> AuthSession:
+        """The table is both the token subject and its `table_id` claim."""
+        return await self._issue(table.id, table.tenant_id, Role.TABLE, family_id, table_id=table.id)
+
+    async def _issue(
+        self,
+        subject_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        role: Role,
+        family_id: uuid.UUID | None,
+        user_id: uuid.UUID | None = None,
+        table_id: uuid.UUID | None = None,
+    ) -> AuthSession:
         now = self._clock.now()
         plain = self._codec.generate()
         refresh = RefreshToken(
-            tenant_id=user.tenant_id,
-            user_id=user.id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            table_id=table_id,
             family_id=family_id or uuid.uuid4(),
             token_hash=self._codec.hash(plain),
             created_at=now,
-            expires_at=now + refresh_token_ttl(user.role),
+            expires_at=now + refresh_token_ttl(role),
         )
         await self._refresh_tokens.add(refresh)
-        access = self._access_tokens.issue(user.id, user.tenant_id, user.role, now)
+        access = self._access_tokens.issue(subject_id, tenant_id, role, now, table_id=table_id)
         return AuthSession(
             access_token=access.token,
             access_expires_at=access.expires_at,
             refresh_token=plain,
             refresh_expires_at=refresh.expires_at,
-            role=user.role,
+            role=role,
         )

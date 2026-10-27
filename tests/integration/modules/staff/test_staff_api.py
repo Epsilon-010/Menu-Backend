@@ -207,7 +207,7 @@ def test_a_username_taken_in_another_tenant_is_not_available(
     response = create_member(signed_in(new_client, "boss@example.com"), "JUAN")
 
     assert response.status_code == 409
-    assert response.json() == {"detail": "Username not available"}
+    assert response.json() == {"type": "about:blank", "title": "Conflict", "status": 409, "detail": "Username not available"}
 
 
 @pytest.mark.parametrize(
