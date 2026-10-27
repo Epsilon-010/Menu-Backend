@@ -59,8 +59,8 @@ def test_two_workers_never_claim_the_same_image(tenant: SeedResult) -> None:
         await _register(factory, tenant, *ids)
         async with factory() as first, factory() as second:
             # Pending uploads created before `soon` are all due.
-            claimed_first = await SqlAlchemyImageUploads(first).claim_due(soon, limit=2)
-            claimed_second = await SqlAlchemyImageUploads(second).claim_due(soon, limit=10)
+            claimed_first = [i.public_id for i in await SqlAlchemyImageUploads(first).claim_due(soon, soon, limit=2)]
+            claimed_second = [i.public_id for i in await SqlAlchemyImageUploads(second).claim_due(soon, soon, limit=10)]
             await first.rollback()
             await second.rollback()
         return claimed_first, claimed_second
@@ -90,8 +90,25 @@ def test_attached_images_are_never_due_and_discarded_ones_always_are(tenant: See
             await session.commit()
         async with factory() as session:
             # `long_ago` as the pending cut-off: only discarded rows are due.
-            due = await SqlAlchemyImageUploads(session).claim_due(long_ago, limit=10)
+            due = await SqlAlchemyImageUploads(session).claim_due(datetime.now(UTC), long_ago, limit=10)
             await session.rollback()
-            return due
+            return [image.public_id for image in due]
 
     assert asyncio.run(_with_factory(work)) == [dropped]
+
+
+def test_a_tenant_with_tracked_images_cannot_be_deleted_silently(tenant: SeedResult) -> None:
+    from sqlalchemy import delete
+    from sqlalchemy.exc import IntegrityError
+
+    from app.modules.tenants.infrastructure.models import TenantModel
+
+    async def work(factory: async_sessionmaker) -> None:  # type: ignore[type-arg]
+        await _register(factory, tenant, f"tenants/{tenant.tenant_id}/items/kept")
+        async with factory() as session:
+            await session.execute(delete(TenantModel).where(TenantModel.id == tenant.tenant_id))
+            await session.commit()
+
+    # Its images must go through the cleanup first; dropping the records would orphan them for good.
+    with pytest.raises(IntegrityError):
+        asyncio.run(_with_factory(work))

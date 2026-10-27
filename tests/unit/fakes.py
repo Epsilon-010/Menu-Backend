@@ -1,12 +1,13 @@
 """In-memory fakes for the domain ports, shared by the unit tests."""
 
 import uuid
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
 from app.modules.auth.domain.refresh_token import RefreshToken
 from app.modules.catalog.domain.catalog import Category, Item
 from app.modules.catalog.domain.errors import CategoryNotEmpty
+from app.modules.media.domain.uploads import DueImage
 from app.modules.staff.domain.user import STAFF_MEMBER_ROLES, User
 from app.modules.tables.domain.table import Table
 from app.modules.tenants.domain.tenant import Tenant
@@ -233,6 +234,7 @@ class FakeImageStorage:
         self.stored: dict[str, StoredImage] = {}
         self.deleted: list[str] = []
         self.fail_deletes = False
+        self.fail_deletes_for: set[str] = set()
         self.fail_lookups = False
 
     def upload(self, public_id: str, image_format: str = "jpg", size: int = 1_000) -> None:
@@ -254,7 +256,7 @@ class FakeImageStorage:
         return self.stored.get(public_id)
 
     async def delete(self, public_id: str) -> None:
-        if self.fail_deletes:
+        if self.fail_deletes or public_id in self.fail_deletes_for:
             raise ConnectionError("storage down")
         self.stored.pop(public_id, None)
         self.deleted.append(public_id)
@@ -263,44 +265,62 @@ class FakeImageStorage:
         return f"https://images.test/{variant.value}/{public_id}"
 
 
+@dataclass
+class _UploadRecord:
+    tenant_id: uuid.UUID
+    status: str
+    created_at: datetime
+    attempts: int = 0
+    next_attempt_at: datetime | None = None
+
+
 class InMemoryImageRegistry:
     """Fake of the media module's image records: implements `ImageRegistry` and `CleanupRepository`."""
 
     def __init__(self, clock: FakeClock | None = None) -> None:
         self.clock = clock or FakeClock()
-        # public_id -> (tenant_id, status, created_at)
-        self.records: dict[str, tuple[uuid.UUID, str, datetime]] = {}
+        self.records: dict[str, _UploadRecord] = {}
 
     def status(self, public_id: str) -> str | None:
         record = self.records.get(public_id)
-        return record[1] if record is not None else None
+        return record.status if record is not None else None
 
     async def register(self, tenant_id: uuid.UUID, public_id: str) -> None:
-        self.records[public_id] = (tenant_id, "pending", self.clock.now())
+        self.records[public_id] = _UploadRecord(tenant_id, "pending", self.clock.now())
 
     async def attach(self, tenant_id: uuid.UUID, public_id: str) -> bool:
         record = self.records.get(public_id)
-        if record is None or record[0] != tenant_id or record[1] != "pending":
+        if record is None or record.tenant_id != tenant_id or record.status != "pending":
             return False
-        self.records[public_id] = (tenant_id, "attached", record[2])
+        record.status = "attached"
         return True
 
     async def discard(self, tenant_id: uuid.UUID, public_id: str) -> None:
         record = self.records.get(public_id)
-        if record is not None and record[0] == tenant_id:
-            self.records[public_id] = (tenant_id, "discarded", record[2])
+        if record is not None and record.tenant_id == tenant_id:
+            record.status = "discarded"
 
-    async def claim_due(self, pending_before: datetime, limit: int) -> list[str]:
+    async def reject(self, tenant_id: uuid.UUID, public_id: str) -> None:
+        record = self.records.get(public_id)
+        if record is not None and record.tenant_id == tenant_id and record.status == "pending":
+            record.status = "discarded"
+
+    async def claim_due(self, now: datetime, pending_before: datetime, limit: int) -> list[DueImage]:
         due = [
-            (created_at, public_id)
-            for public_id, (_, status, created_at) in self.records.items()
-            if status == "discarded" or (status == "pending" and created_at < pending_before)
+            (record.next_attempt_at or record.created_at, public_id, record.attempts)
+            for public_id, record in self.records.items()
+            if (record.status == "discarded" or (record.status == "pending" and record.created_at < pending_before))
+            and (record.next_attempt_at is None or record.next_attempt_at <= now)
         ]
-        return [public_id for _, public_id in sorted(due)][:limit]
+        return [DueImage(public_id, attempts) for _, public_id, attempts in sorted(due)][:limit]
 
     async def forget(self, public_id: str) -> None:
         self.records.pop(public_id, None)
 
+    async def postpone(self, public_id: str, until: datetime) -> None:
+        record = self.records[public_id]
+        record.attempts += 1
+        record.next_attempt_at = until
 
 class FakeCleanupScheduler:
     def __init__(self) -> None:

@@ -71,8 +71,8 @@ class SetItemImage:
         try:
             validate_stored_image(stored, ImageKind.ITEM)
         except InvalidImage:
-            # Useless upload: let the worker delete it.
-            await self._registry.discard(tenant_id, public_id)
+            # Useless upload: let the worker delete it (only if no item uses it).
+            await self._registry.reject(tenant_id, public_id)
             await self._uow.commit()
             await self._cleanup.request_cleanup()
             raise

@@ -114,6 +114,10 @@ class ImageRegistry(Protocol):
         """Marks the image for deletion from the storage."""
         ...
 
+    async def reject(self, tenant_id: uuid.UUID, public_id: str) -> None:
+        """Marks an upload for deletion only while it is still pending (never an image in use)."""
+        ...
+
 
 class ImageCleanupScheduler(Protocol):
     """Port: asks the background worker to clean up discarded images soon.

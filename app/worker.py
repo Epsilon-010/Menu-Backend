@@ -27,7 +27,7 @@ celery_app = create_celery(get_settings())
 
 
 async def clean_up_images_now(storage: ImageStorage | None = None) -> int:
-    """Runs cleanup batches until nothing is due (or a batch fails). Returns how many images were deleted.
+    """Runs cleanup batches until nothing is due (at most MAX_BATCHES). Returns how many images were deleted.
 
     `storage` defaults to the configured one; tests pass a fake so they never call Cloudinary.
     """
@@ -47,7 +47,8 @@ async def clean_up_images_now(storage: ImageStorage | None = None) -> int:
                     batch_size=BATCH_SIZE,
                 ).execute()
             deleted += result.deleted
-            if result.failed or result.deleted < BATCH_SIZE:
+            # Failed images are postponed, so a full batch with failures still means more may be due.
+            if result.deleted + result.failed < BATCH_SIZE:
                 break
     finally:
         await engine.dispose()

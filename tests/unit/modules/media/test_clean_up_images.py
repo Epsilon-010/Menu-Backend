@@ -3,7 +3,7 @@ from datetime import timedelta
 
 import pytest
 
-from app.modules.media.application.clean_up_images import CleanUpImages
+from app.modules.media.application.clean_up_images import CleanUpImages, retry_delay
 from tests.unit.fakes import FakeClock, FakeImageStorage, FakeUnitOfWork, InMemoryImageRegistry
 
 pytestmark = pytest.mark.anyio
@@ -63,17 +63,43 @@ async def test_deletes_pending_uploads_only_after_the_ttl(world: World) -> None:
     assert world.registry.status(fresh) == "pending"
 
 
-async def test_a_failed_delete_keeps_the_record_for_the_next_run(world: World) -> None:
+async def test_a_failed_delete_is_retried_later_with_a_growing_delay(world: World) -> None:
     discarded = await world.image("discarded", "discarded")
     world.storage.fail_deletes = True
 
     failed = await world.clean_up().execute()
+    right_after = await world.clean_up().execute()
+    world.clock.advance(retry_delay(1))
     world.storage.fail_deletes = False
     retried = await world.clean_up().execute()
 
     assert (failed.deleted, failed.failed) == (0, 1)
+    # Postponed: an image that keeps failing does not take a place in every run.
+    assert (right_after.deleted, right_after.failed) == (0, 0)
     assert (retried.deleted, retried.failed) == (1, 0)
     assert world.registry.status(discarded) is None
+
+
+async def test_a_failing_image_never_blocks_the_others(world: World) -> None:
+    broken = await world.image("broken", "discarded")
+    healthy = await world.image("healthy", "discarded")
+    world.storage.fail_deletes_for = {broken}
+
+    first = await world.clean_up(batch_size=1).execute()
+    second = await world.clean_up(batch_size=1).execute()
+
+    assert (first.failed, second.deleted) == (1, 1)
+    assert world.storage.deleted == [healthy]
+    assert world.registry.status(broken) == "discarded"
+
+
+def test_retry_delay_doubles_up_to_six_hours() -> None:
+    assert [retry_delay(attempt) for attempt in (1, 2, 3)] == [
+        timedelta(minutes=2),
+        timedelta(minutes=4),
+        timedelta(minutes=8),
+    ]
+    assert retry_delay(30) == timedelta(hours=6)
 
 
 async def test_handles_one_batch_per_run(world: World) -> None:

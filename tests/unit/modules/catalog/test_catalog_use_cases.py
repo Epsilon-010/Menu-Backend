@@ -359,6 +359,22 @@ async def test_rejects_and_discards_uploads_with_a_wrong_format_or_size(
     assert world.items.items[item.id].image_public_id is None
 
 
+async def test_rejecting_an_image_in_use_never_marks_it_for_deletion(world: World) -> None:
+    category = await world.category()
+    owner = await world.item(category, "Pastor")
+    other = await world.item(category, "Suadero")
+    in_use = await world.uploaded_image()
+    await world.set_image().execute(TENANT_A, owner.id, in_use)
+    # Its stored file later fails validation (for example a stricter rule).
+    world.images.upload(in_use, "gif")
+
+    with pytest.raises(InvalidImage):
+        await world.set_image().execute(TENANT_A, other.id, in_use)
+
+    assert world.registry.status(in_use) == "attached"
+    assert world.items.items[owner.id].image_public_id == in_use
+
+
 async def test_an_image_already_used_by_another_item_is_rejected(world: World) -> None:
     category = await world.category()
     first = await world.item(category, "Pastor")
