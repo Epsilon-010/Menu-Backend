@@ -1,0 +1,2 @@
+class InvalidTenantData(ValueError):
+    pass
