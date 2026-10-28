@@ -61,11 +61,18 @@ class RedisTableEvents:
         self._redis = redis
 
     async def publish(
-        self, tenant_id: uuid.UUID, table_id: uuid.UUID, kind: str, cart_version: int | None = None
+        self,
+        tenant_id: uuid.UUID,
+        table_id: uuid.UUID,
+        kind: str,
+        cart_version: int | None = None,
+        order_id: uuid.UUID | None = None,
     ) -> None:
         fields = {"kind": kind, "table_id": str(table_id)}
         if cart_version is not None:
             fields["cart_version"] = str(cart_version)
+        if order_id is not None:
+            fields["order_id"] = str(order_id)
         try:
             await self._redis.xadd(table_events_stream(tenant_id), fields, maxlen=_STREAM_LENGTH, approximate=True)  # type: ignore[arg-type]
         except RedisError:
