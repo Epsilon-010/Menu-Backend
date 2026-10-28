@@ -11,6 +11,7 @@ from app.modules.staff.application.manage_staff import (
     UpdateStaffMember,
 )
 from app.modules.staff.domain.errors import (
+    StaffIdTaken,
     EmailAlreadyInUse,
     InvalidUserData,
     StaffMemberNotFound,
@@ -293,3 +294,65 @@ async def test_staff_management_never_reaches_another_tenant_nor_an_admin(
     assert users.users[member.id] == member
     assert users.users[admin.id] == admin
     assert sessions.revoked == []
+
+
+async def test_every_write_locks_the_member_it_rewrites(
+    users: InMemoryUserRepository, uow: FakeUnitOfWork, sessions: FakeSessionRevoker
+) -> None:
+    member = await add_waiter(users, uow)
+
+    await UpdateStaffMember(users, sessions, uow).execute(TENANT_A, member.id, full_name="Juan P.")
+    await ResetStaffPassword(users, FakePasswordHasher(), sessions, uow).execute(TENANT_A, member.id, "n3w-secret-pass")
+
+    assert users.locked == [member.id, member.id]
+
+
+async def test_repeating_a_staff_create_with_its_id_returns_the_same_member(
+    users: InMemoryUserRepository, uow: FakeUnitOfWork
+) -> None:
+    member_id = uuid.uuid4()
+    create = CreateStaffMember(users, FakePasswordHasher(), uow)
+
+    first = await create.execute(TENANT_A, "juan.burger", "Juan Pérez", Role.WAITER, "s3cret-pass", member_id)
+    replay = await create.execute(TENANT_A, " Juan.Burger ", "Juan Pérez", Role.WAITER, "s3cret-pass", member_id)
+
+    assert replay == first
+    assert first.id == member_id
+    assert list(users.users) == [member_id]
+    assert uow.commits == 1
+
+
+async def test_a_staff_id_reused_for_another_member_or_tenant_is_refused(
+    users: InMemoryUserRepository, uow: FakeUnitOfWork
+) -> None:
+    member_id = uuid.uuid4()
+    create = CreateStaffMember(users, FakePasswordHasher(), uow)
+    await create.execute(TENANT_A, "juan.burger", "Juan Pérez", Role.WAITER, "s3cret-pass", member_id)
+
+    with pytest.raises(StaffIdTaken):
+        await create.execute(TENANT_A, "ana.cocina", "Ana", Role.KITCHEN, "s3cret-pass", member_id)
+    with pytest.raises(StaffIdTaken):
+        await create.execute(TENANT_B, "juan.burger", "Juan Pérez", Role.WAITER, "s3cret-pass", member_id)
+
+    assert [u.username for u in users.users.values()] == ["juan.burger"]
+
+
+async def test_a_staff_replay_with_another_password_is_refused(users: InMemoryUserRepository, uow: FakeUnitOfWork) -> None:
+    member_id = uuid.uuid4()
+    create = CreateStaffMember(users, FakePasswordHasher(), uow)
+    await create.execute(TENANT_A, "juan.burger", "Juan Pérez", Role.WAITER, "first-pass-123", member_id)
+
+    # Same id, same names, other password: not the same request, so it must not succeed silently.
+    with pytest.raises(StaffIdTaken):
+        await create.execute(TENANT_A, "juan.burger", "Juan Pérez", Role.WAITER, "second-pass-456", member_id)
+
+    assert users.users[member_id].password_hash == "hashed:first-pass-123"
+
+
+async def test_staff_creates_of_a_tenant_are_serialized(users: InMemoryUserRepository, uow: FakeUnitOfWork) -> None:
+    await CreateStaffMember(users, FakePasswordHasher(), uow).execute(
+        TENANT_A, "juan.burger", "Juan Pérez", Role.WAITER, "s3cret-pass", uuid.uuid4()
+    )
+
+    # Taken before the replay check, so a concurrent replay waits and then finds the first one.
+    assert users.create_locks == [TENANT_A]

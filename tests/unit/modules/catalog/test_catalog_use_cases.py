@@ -1,4 +1,5 @@
 import uuid
+from dataclasses import replace
 
 import pytest
 
@@ -20,6 +21,7 @@ from app.modules.catalog.application.manage_items import (
 )
 from app.modules.catalog.domain.catalog import Category, Item
 from app.modules.catalog.domain.errors import (
+    CatalogIdTaken,
     CategoryNameNotAvailable,
     CategoryNotEmpty,
     CategoryNotFound,
@@ -27,7 +29,14 @@ from app.modules.catalog.domain.errors import (
     ItemNotFound,
 )
 from app.shared.domain.images import MAX_IMAGE_BYTES, ImageStorageUnavailable, InvalidImage
-from tests.unit.fakes import FakeImageStorage, FakeUnitOfWork, InMemoryCategoryRepository, InMemoryItemRepository
+from tests.unit.fakes import (
+    FakeCleanupScheduler,
+    FakeImageStorage,
+    FakeUnitOfWork,
+    InMemoryCategoryRepository,
+    InMemoryImageRegistry,
+    InMemoryItemRepository,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -40,6 +49,8 @@ class World:
         self.categories = InMemoryCategoryRepository()
         self.items = InMemoryItemRepository(self.categories)
         self.images = FakeImageStorage()
+        self.registry = InMemoryImageRegistry()
+        self.cleanup = FakeCleanupScheduler()
         self.uow = FakeUnitOfWork()
 
     async def category(self, name: str = "Tacos", tenant_id: uuid.UUID = TENANT_A) -> Category:
@@ -55,10 +66,20 @@ class World:
         return UpdateItem(self.categories, self.items, self.uow)
 
     def set_image(self) -> SetItemImage:
-        return SetItemImage(self.items, self.images, self.uow)
+        return SetItemImage(self.items, self.images, self.registry, self.uow, self.cleanup)
+
+    def remove_image(self) -> RemoveItemImage:
+        return RemoveItemImage(self.items, self.registry, self.uow, self.cleanup)
+
+    def delete_item(self) -> DeleteItem:
+        return DeleteItem(self.items, self.registry, self.uow, self.cleanup)
+
+    async def signed(self, tenant_id: uuid.UUID = TENANT_A) -> str:
+        return (await RequestImageUpload(self.images, self.registry, self.uow).execute(tenant_id)).public_id
 
     async def uploaded_image(self, tenant_id: uuid.UUID = TENANT_A, image_format: str = "jpg", size: int = 1_000) -> str:
-        public_id = (await RequestImageUpload(self.images).execute(tenant_id)).public_id
+        """Signs an upload, then plays the browser uploading the file straight to the storage."""
+        public_id = await self.signed(tenant_id)
         self.images.upload(public_id, image_format, size)
         return public_id
 
@@ -258,56 +279,75 @@ async def test_another_tenant_item_is_not_found(world: World) -> None:
     with pytest.raises(ItemNotFound):
         await world.update_item().execute(TENANT_A, foreign.id, ItemChanges(is_available=False))
     with pytest.raises(ItemNotFound):
-        await DeleteItem(world.items, world.images, world.uow).execute(TENANT_A, foreign.id)
+        await world.delete_item().execute(TENANT_A, foreign.id)
+    image = await world.uploaded_image()
     with pytest.raises(ItemNotFound):
-        await world.set_image().execute(TENANT_A, foreign.id, await world.uploaded_image())
+        await world.set_image().execute(TENANT_A, foreign.id, image)
 
     assert world.items.items[foreign.id] == foreign
+    assert world.registry.status(image) == "pending"
 
 
 # --- Images ------------------------------------------------------------------------------------
 
 
-async def test_upload_signatures_target_a_new_public_id_in_the_tenant_folder(world: World) -> None:
-    first = await RequestImageUpload(world.images).execute(TENANT_A)
-    second = await RequestImageUpload(world.images).execute(TENANT_A)
+async def test_signing_records_a_pending_upload_at_a_new_public_id_in_the_tenant_folder(world: World) -> None:
+    first = await RequestImageUpload(world.images, world.registry, world.uow).execute(TENANT_A)
+    second = await RequestImageUpload(world.images, world.registry, world.uow).execute(TENANT_A)
 
     assert first.public_id.startswith(f"tenants/{TENANT_A}/items/")
     assert first.public_id != second.public_id
     assert first.allowed_formats == ("jpg", "png", "webp")
+    # Recorded before the browser uploads, so an upload that is never attached can be cleaned up.
+    assert world.registry.status(first.public_id) == "pending"
+    assert world.uow.commits == 2
 
 
-async def test_sets_replaces_and_removes_an_item_image_deleting_the_previous_one(world: World) -> None:
+async def test_sets_replaces_and_removes_an_item_image_discarding_the_previous_one(world: World) -> None:
     item = await world.item(await world.category())
     first = await world.uploaded_image()
     second = await world.uploaded_image()
 
     with_image = await world.set_image().execute(TENANT_A, item.id, first)
+    assert world.registry.status(first) == "attached"
     replaced = await world.set_image().execute(TENANT_A, item.id, second)
-    assert world.images.deleted == [first]
-    removed = await RemoveItemImage(world.items, world.images, world.uow).execute(TENANT_A, item.id)
+    assert (world.registry.status(first), world.registry.status(second)) == ("discarded", "attached")
+    removed = await world.remove_image().execute(TENANT_A, item.id)
 
     assert (with_image.image_public_id, replaced.image_public_id, removed.image_public_id) == (first, second, None)
-    assert world.images.deleted == [first, second]
+    assert world.registry.status(second) == "discarded"
     assert world.items.items[item.id].image_public_id is None
+    # The request never deletes from the storage itself: it asks the worker.
+    assert world.images.deleted == []
+    assert world.cleanup.requests == 2
 
 
-async def test_rejects_images_outside_the_tenant_folder_or_not_uploaded(world: World) -> None:
+async def test_rejects_images_not_signed_for_this_tenant_or_not_uploaded(world: World) -> None:
     item = await world.item(await world.category())
     foreign = await world.uploaded_image(TENANT_B)
-    never_uploaded = (await RequestImageUpload(world.images).execute(TENANT_A)).public_id
-    tricks = [foreign, never_uploaded, f"tenants/{TENANT_A}/items", f"tenants/{TENANT_A}/items/../x", "https://x/y.jpg"]
+    never_uploaded = await world.signed()
+    unsigned = f"tenants/{TENANT_A}/items/{uuid.uuid4().hex}"
+    world.images.upload(unsigned)
+    tricks = [
+        foreign,
+        never_uploaded,
+        unsigned,
+        f"tenants/{TENANT_A}/items",
+        f"tenants/{TENANT_A}/items/../x",
+        "https://x/y.jpg",
+    ]
 
     for public_id in tricks:
         with pytest.raises(InvalidImage):
             await world.set_image().execute(TENANT_A, item.id, public_id)
 
     assert world.items.items[item.id].image_public_id is None
-    assert foreign in world.images.stored
+    assert world.registry.status(foreign) == "pending"
+    assert world.registry.status(never_uploaded) == "pending"
 
 
 @pytest.mark.parametrize(("image_format", "size"), [("gif", 1_000), ("svg", 1_000), ("jpg", MAX_IMAGE_BYTES + 1)])
-async def test_rejects_and_deletes_uploads_with_a_wrong_format_or_size(
+async def test_rejects_and_discards_uploads_with_a_wrong_format_or_size(
     world: World, image_format: str, size: int
 ) -> None:
     item = await world.item(await world.category())
@@ -316,8 +356,25 @@ async def test_rejects_and_deletes_uploads_with_a_wrong_format_or_size(
     with pytest.raises(InvalidImage):
         await world.set_image().execute(TENANT_A, item.id, public_id)
 
-    assert world.images.deleted == [public_id]
+    assert world.registry.status(public_id) == "discarded"
+    assert world.cleanup.requests == 1
     assert world.items.items[item.id].image_public_id is None
+
+
+async def test_rejecting_an_image_in_use_never_marks_it_for_deletion(world: World) -> None:
+    category = await world.category()
+    owner = await world.item(category, "Pastor")
+    other = await world.item(category, "Suadero")
+    in_use = await world.uploaded_image()
+    await world.set_image().execute(TENANT_A, owner.id, in_use)
+    # Its stored file later fails validation (for example a stricter rule).
+    world.images.upload(in_use, "gif")
+
+    with pytest.raises(InvalidImage):
+        await world.set_image().execute(TENANT_A, other.id, in_use)
+
+    assert world.registry.status(in_use) == "attached"
+    assert world.items.items[owner.id].image_public_id == in_use
 
 
 async def test_an_image_already_used_by_another_item_is_rejected(world: World) -> None:
@@ -334,7 +391,7 @@ async def test_an_image_already_used_by_another_item_is_rejected(world: World) -
 
     assert world.items.items[second.id].image_public_id is None
     assert again.image_public_id == public_id
-    assert world.images.deleted == []
+    assert world.registry.status(public_id) == "attached"
 
 
 async def test_a_failing_storage_lookup_changes_nothing(world: World) -> None:
@@ -347,26 +404,122 @@ async def test_a_failing_storage_lookup_changes_nothing(world: World) -> None:
         await world.set_image().execute(TENANT_A, item.id, public_id)
 
     assert world.items.items[item.id].image_public_id is None
+    assert world.registry.status(public_id) == "pending"
     assert world.uow.commits == commits
 
 
-async def test_deleting_an_item_deletes_its_image(world: World) -> None:
+async def test_deleting_an_item_discards_its_image(world: World) -> None:
     item = await world.item(await world.category())
     public_id = await world.uploaded_image()
     await world.set_image().execute(TENANT_A, item.id, public_id)
 
-    await DeleteItem(world.items, world.images, world.uow).execute(TENANT_A, item.id)
+    await world.delete_item().execute(TENANT_A, item.id)
 
     assert world.items.items == {}
-    assert world.images.deleted == [public_id]
+    assert world.registry.status(public_id) == "discarded"
+    assert world.cleanup.requests == 1
 
 
-async def test_a_failing_image_cleanup_does_not_undo_the_committed_change(world: World) -> None:
+async def test_changes_without_an_image_to_discard_do_not_ask_for_a_cleanup(world: World) -> None:
     item = await world.item(await world.category())
+
+    await world.remove_image().execute(TENANT_A, item.id)
     await world.set_image().execute(TENANT_A, item.id, await world.uploaded_image())
-    world.images.fail_deletes = True
+    await world.delete_item().execute(TENANT_A, (await world.item(await world.category("Bebidas"))).id)
 
-    removed = await RemoveItemImage(world.items, world.images, world.uow).execute(TENANT_A, item.id)
+    assert world.cleanup.requests == 0
 
-    assert removed.image_public_id is None
-    assert world.items.items[item.id].image_public_id is None
+
+# --- Concurrency -------------------------------------------------------------------------------
+
+
+async def test_every_write_locks_the_row_it_rewrites(world: World) -> None:
+    category = await world.category()
+    item = await world.item(category)
+
+    await UpdateCategory(world.categories, world.uow).execute(TENANT_A, category.id, is_visible=False)
+    await world.update_item().execute(TENANT_A, item.id, ItemChanges(price_cents=100))
+    await world.set_image().execute(TENANT_A, item.id, await world.uploaded_image())
+    await world.remove_image().execute(TENANT_A, item.id)
+    await world.delete_item().execute(TENANT_A, item.id)
+
+    # Read FOR UPDATE: a concurrent write waits instead of being silently overwritten.
+    assert world.categories.locked == [category.id]
+    assert world.items.locked == [item.id] * 4
+
+
+async def test_changes_to_an_order_lock_that_order(world: World) -> None:
+    tacos = await world.category("Tacos")
+    drinks = await world.category("Bebidas")
+    item = await world.item(tacos)
+
+    await ReorderCategories(world.categories, world.uow).execute(TENANT_A, [drinks.id, tacos.id])
+    await world.update_item().execute(TENANT_A, item.id, ItemChanges(category_id=drinks.id))
+    await ReorderItems(world.categories, world.items, world.uow).execute(TENANT_A, drinks.id, [item.id])
+
+    # Positions are max + 1 or rewritten whole: concurrent changes of one list must not interleave.
+    assert world.categories.order_locks == [TENANT_A, TENANT_A, TENANT_A]
+    assert world.items.order_locks == [[tacos.id], sorted([tacos.id, drinks.id]), [drinks.id]]
+
+
+# --- Idempotent creates ------------------------------------------------------------------------
+
+
+async def test_repeating_a_category_create_with_its_id_returns_the_same_category(world: World) -> None:
+    category_id = uuid.uuid4()
+    create = CreateCategory(world.categories, world.uow)
+
+    first = await create.execute(TENANT_A, "Tacos", category_id)
+    replay = await create.execute(TENANT_A, " Tacos ", category_id)
+
+    assert replay == first
+    assert first.id == category_id
+    assert list(world.categories.categories) == [category_id]
+    assert world.uow.commits == 1
+
+
+async def test_a_category_id_reused_for_other_data_or_by_another_tenant_is_refused(world: World) -> None:
+    category_id = uuid.uuid4()
+    await CreateCategory(world.categories, world.uow).execute(TENANT_A, "Tacos", category_id)
+
+    with pytest.raises(CatalogIdTaken):
+        await CreateCategory(world.categories, world.uow).execute(TENANT_A, "Bebidas", category_id)
+    with pytest.raises(CatalogIdTaken):
+        await CreateCategory(world.categories, world.uow).execute(TENANT_B, "Tacos", category_id)
+
+    assert [c.name for c in world.categories.categories.values()] == ["Tacos"]
+
+
+async def test_repeating_an_item_create_with_its_id_returns_the_same_item(world: World) -> None:
+    tacos = await world.category()
+    item_id = uuid.uuid4()
+    draft = ItemDraft(category_id=tacos.id, name="Pastor", description="Con piña", price_cents=2500, id=item_id)
+    create = CreateItem(world.categories, world.items, world.uow)
+
+    first = await create.execute(TENANT_A, draft)
+    replay = await create.execute(TENANT_A, draft)
+
+    assert replay == first
+    assert first.id == item_id
+    assert list(world.items.items) == [item_id]
+
+
+@pytest.mark.parametrize("change", ["name", "price", "tenant"])
+async def test_an_item_id_reused_for_other_data_or_by_another_tenant_is_refused(world: World, change: str) -> None:
+    tacos = await world.category()
+    item_id = uuid.uuid4()
+    draft = ItemDraft(category_id=tacos.id, name="Pastor", description="", price_cents=2500, id=item_id)
+    await CreateItem(world.categories, world.items, world.uow).execute(TENANT_A, draft)
+    tenant = TENANT_A
+    if change == "name":
+        draft = replace(draft, name="Suadero")
+    elif change == "price":
+        draft = replace(draft, price_cents=2600)
+    else:
+        tenant = TENANT_B
+        draft = replace(draft, category_id=(await world.category("Otra", TENANT_B)).id)
+
+    with pytest.raises(CatalogIdTaken):
+        await CreateItem(world.categories, world.items, world.uow).execute(tenant, draft)
+
+    assert [(i.name, i.price_cents) for i in world.items.items.values()] == [("Pastor", 2500)]

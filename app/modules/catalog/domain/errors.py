@@ -16,3 +16,7 @@ class CategoryNotEmpty(Exception):
 
 class ItemNotFound(Exception):
     """No item with that id in the caller's tenant."""
+
+
+class CatalogIdTaken(Exception):
+    """A client-supplied id already belongs to another category or item (other data or another tenant)."""

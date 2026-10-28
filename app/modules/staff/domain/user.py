@@ -77,8 +77,15 @@ class User:
 
     @classmethod
     def create_staff(
-        cls, tenant_id: uuid.UUID, username: str, full_name: str, role: Role, password_hash: str
+        cls,
+        tenant_id: uuid.UUID,
+        username: str,
+        full_name: str,
+        role: Role,
+        password_hash: str,
+        user_id: uuid.UUID | None = None,
     ) -> "User":
+        """`user_id` comes from the client to make the create idempotent; None generates one."""
         username = normalize_username(username)
         if not _USERNAME_PATTERN.match(username):
             raise InvalidUserData(
@@ -91,6 +98,7 @@ class User:
             full_name=_validate_full_name(full_name),
             role=_validate_staff_member_role(role),
             password_hash=password_hash,
+            id=user_id or uuid.uuid4(),
         )
 
     @property
@@ -112,6 +120,19 @@ class UserRepository(Protocol):
     async def add(self, user: User) -> None: ...
 
     async def get(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> User | None: ...
+
+    async def get_for_update(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> User | None:
+        """Same as `get`, locking the row until the transaction ends: for every read-then-write."""
+        ...
+
+    async def exists_anywhere(self, user_id: uuid.UUID) -> bool:
+        """Whether the id is taken in any tenant (to answer a clash without revealing that row)."""
+        ...
+
+    async def lock_creates(self, tenant_id: uuid.UUID) -> None:
+        """Serializes the tenant's staff creates until the transaction ends, so a concurrent replay
+        of a create waits for the first one and then finds it."""
+        ...
 
     async def get_by_email(self, email: str) -> User | None: ...
 

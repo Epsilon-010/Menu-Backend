@@ -1,12 +1,13 @@
 """In-memory fakes for the domain ports, shared by the unit tests."""
 
 import uuid
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
 from app.modules.auth.domain.refresh_token import RefreshToken
 from app.modules.catalog.domain.catalog import Category, Item
 from app.modules.catalog.domain.errors import CategoryNotEmpty
+from app.modules.media.domain.uploads import DueImage
 from app.modules.staff.domain.user import STAFF_MEMBER_ROLES, User
 from app.modules.tables.domain.table import Table
 from app.modules.tenants.domain.tenant import Tenant
@@ -63,6 +64,9 @@ class InMemoryTenantRepository:
 class InMemoryUserRepository:
     def __init__(self) -> None:
         self.users: dict[uuid.UUID, User] = {}
+        # Ids read with get_for_update: proves a write use case locked its row.
+        self.locked: list[uuid.UUID] = []
+        self.create_locks: list[uuid.UUID] = []
 
     async def add(self, user: User) -> None:
         self.users[user.id] = user
@@ -70,6 +74,16 @@ class InMemoryUserRepository:
     async def get(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> User | None:
         user = self.users.get(user_id)
         return user if user is not None and user.tenant_id == tenant_id else None
+
+    async def get_for_update(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> User | None:
+        self.locked.append(user_id)
+        return await self.get(tenant_id, user_id)
+
+    async def exists_anywhere(self, user_id: uuid.UUID) -> bool:
+        return user_id in self.users
+
+    async def lock_creates(self, tenant_id: uuid.UUID) -> None:
+        self.create_locks.append(tenant_id)
 
     async def get_by_email(self, email: str) -> User | None:
         return next((user for user in self.users.values() if user.email == email), None)
@@ -88,6 +102,8 @@ class InMemoryUserRepository:
 class InMemoryTableRepository:
     def __init__(self) -> None:
         self.tables: dict[uuid.UUID, Table] = {}
+        self.locked: list[uuid.UUID] = []
+        self.create_locks: list[uuid.UUID] = []
 
     async def add(self, table: Table) -> None:
         self.tables[table.id] = table
@@ -95,6 +111,16 @@ class InMemoryTableRepository:
     async def get(self, tenant_id: uuid.UUID, table_id: uuid.UUID) -> Table | None:
         table = self.tables.get(table_id)
         return table if table is not None and table.tenant_id == tenant_id else None
+
+    async def get_for_update(self, tenant_id: uuid.UUID, table_id: uuid.UUID) -> Table | None:
+        self.locked.append(table_id)
+        return await self.get(tenant_id, table_id)
+
+    async def exists_anywhere(self, table_id: uuid.UUID) -> bool:
+        return table_id in self.tables
+
+    async def lock_creates(self, tenant_id: uuid.UUID) -> None:
+        self.create_locks.append(tenant_id)
 
     async def get_by_code(self, code: str) -> Table | None:
         return next((table for table in self.tables.values() if table.code == code), None)
@@ -145,6 +171,8 @@ class InMemoryCategoryRepository:
         self.categories: dict[uuid.UUID, Category] = {}
         # Item counts per category, kept by InMemoryItemRepository to mimic the RESTRICT foreign key.
         self.item_counts: dict[uuid.UUID, int] = {}
+        self.locked: list[uuid.UUID] = []
+        self.order_locks: list[uuid.UUID] = []
 
     async def add(self, category: Category) -> None:
         self.categories[category.id] = category
@@ -152,6 +180,16 @@ class InMemoryCategoryRepository:
     async def get(self, tenant_id: uuid.UUID, category_id: uuid.UUID) -> Category | None:
         category = self.categories.get(category_id)
         return category if category is not None and category.tenant_id == tenant_id else None
+
+    async def get_for_update(self, tenant_id: uuid.UUID, category_id: uuid.UUID) -> Category | None:
+        self.locked.append(category_id)
+        return await self.get(tenant_id, category_id)
+
+    async def exists_anywhere(self, category_id: uuid.UUID) -> bool:
+        return category_id in self.categories
+
+    async def lock_order(self, tenant_id: uuid.UUID) -> None:
+        self.order_locks.append(tenant_id)
 
     async def get_by_name(self, tenant_id: uuid.UUID, name: str) -> Category | None:
         return next(
@@ -186,6 +224,18 @@ class InMemoryItemRepository:
     def __init__(self, categories: InMemoryCategoryRepository) -> None:
         self.items: dict[uuid.UUID, Item] = {}
         self._categories = categories
+        self.locked: list[uuid.UUID] = []
+        self.order_locks: list[list[uuid.UUID]] = []
+
+    async def get_for_update(self, tenant_id: uuid.UUID, item_id: uuid.UUID) -> Item | None:
+        self.locked.append(item_id)
+        return await self.get(tenant_id, item_id)
+
+    async def exists_anywhere(self, item_id: uuid.UUID) -> bool:
+        return item_id in self.items
+
+    async def lock_order(self, tenant_id: uuid.UUID, category_ids: list[uuid.UUID]) -> None:
+        self.order_locks.append(sorted(set(category_ids)))
 
     def _recount(self) -> None:
         counts: dict[uuid.UUID, int] = {}
@@ -200,12 +250,6 @@ class InMemoryItemRepository:
     async def get(self, tenant_id: uuid.UUID, item_id: uuid.UUID) -> Item | None:
         item = self.items.get(item_id)
         return item if item is not None and item.tenant_id == tenant_id else None
-
-    async def image_in_use(self, tenant_id: uuid.UUID, public_id: str, except_item_id: uuid.UUID) -> bool:
-        return any(
-            i.tenant_id == tenant_id and i.image_public_id == public_id and i.id != except_item_id
-            for i in self.items.values()
-        )
 
     async def list_in_category(self, tenant_id: uuid.UUID, category_id: uuid.UUID) -> list[Item]:
         return [item for item in await self.list(tenant_id) if item.category_id == category_id]
@@ -239,6 +283,7 @@ class FakeImageStorage:
         self.stored: dict[str, StoredImage] = {}
         self.deleted: list[str] = []
         self.fail_deletes = False
+        self.fail_deletes_for: set[str] = set()
         self.fail_lookups = False
 
     def upload(self, public_id: str, image_format: str = "jpg", size: int = 1_000) -> None:
@@ -260,13 +305,78 @@ class FakeImageStorage:
         return self.stored.get(public_id)
 
     async def delete(self, public_id: str) -> None:
-        if self.fail_deletes:
+        if self.fail_deletes or public_id in self.fail_deletes_for:
             raise ConnectionError("storage down")
         self.stored.pop(public_id, None)
         self.deleted.append(public_id)
 
     def url(self, public_id: str, variant: ImageVariant) -> str | None:
         return f"https://images.test/{variant.value}/{public_id}"
+
+
+@dataclass
+class _UploadRecord:
+    tenant_id: uuid.UUID
+    status: str
+    created_at: datetime
+    attempts: int = 0
+    next_attempt_at: datetime | None = None
+
+
+class InMemoryImageRegistry:
+    """Fake of the media module's image records: implements `ImageRegistry` and `CleanupRepository`."""
+
+    def __init__(self, clock: FakeClock | None = None) -> None:
+        self.clock = clock or FakeClock()
+        self.records: dict[str, _UploadRecord] = {}
+
+    def status(self, public_id: str) -> str | None:
+        record = self.records.get(public_id)
+        return record.status if record is not None else None
+
+    async def register(self, tenant_id: uuid.UUID, public_id: str) -> None:
+        self.records[public_id] = _UploadRecord(tenant_id, "pending", self.clock.now())
+
+    async def attach(self, tenant_id: uuid.UUID, public_id: str) -> bool:
+        record = self.records.get(public_id)
+        if record is None or record.tenant_id != tenant_id or record.status != "pending":
+            return False
+        record.status = "attached"
+        return True
+
+    async def discard(self, tenant_id: uuid.UUID, public_id: str) -> None:
+        record = self.records.get(public_id)
+        if record is not None and record.tenant_id == tenant_id:
+            record.status = "discarded"
+
+    async def reject(self, tenant_id: uuid.UUID, public_id: str) -> None:
+        record = self.records.get(public_id)
+        if record is not None and record.tenant_id == tenant_id and record.status == "pending":
+            record.status = "discarded"
+
+    async def claim_due(self, now: datetime, pending_before: datetime, limit: int) -> list[DueImage]:
+        due = [
+            (record.next_attempt_at or record.created_at, public_id, record.attempts)
+            for public_id, record in self.records.items()
+            if (record.status == "discarded" or (record.status == "pending" and record.created_at < pending_before))
+            and (record.next_attempt_at is None or record.next_attempt_at <= now)
+        ]
+        return [DueImage(public_id, attempts) for _, public_id, attempts in sorted(due)][:limit]
+
+    async def forget(self, public_id: str) -> None:
+        self.records.pop(public_id, None)
+
+    async def postpone(self, public_id: str, until: datetime) -> None:
+        record = self.records[public_id]
+        record.attempts += 1
+        record.next_attempt_at = until
+
+class FakeCleanupScheduler:
+    def __init__(self) -> None:
+        self.requests = 0
+
+    async def request_cleanup(self) -> None:
+        self.requests += 1
 
 
 class InMemoryRefreshTokenRepository:
@@ -300,6 +410,12 @@ class InMemoryRefreshTokenRepository:
         for token_id, token in self.tokens.items():
             if token.tenant_id == tenant_id and token.table_id == table_id and token.revoked_at is None:
                 self.tokens[token_id] = replace(token, revoked_at=at)
+
+    async def delete_expired(self, before: datetime, limit: int) -> int:
+        expired = [token_id for token_id, token in self.tokens.items() if token.expires_at < before][:limit]
+        for token_id in expired:
+            del self.tokens[token_id]
+        return len(expired)
 
 
 class FakeAccessRevocations:

@@ -4,7 +4,14 @@ import pytest
 
 from app.modules.tables.application.find_table import FindTableByCode, GetTable
 from app.modules.tables.application.manage_tables import CreateTable, ListTables, RegenerateTablePin, UpdateTable
-from app.modules.tables.domain.errors import InvalidTableData, TableNameNotAvailable, TableNotFound
+from app.modules.tables.domain.errors import (
+    InvalidTableData,
+    TableAlreadyCreated,
+    TableCodeTaken,
+    TableIdTaken,
+    TableNameNotAvailable,
+    TableNotFound,
+)
 from app.modules.tables.domain.table import Table
 from tests.unit.fakes import FakePasswordHasher, FakeTableCredentials, FakeUnitOfWork, InMemoryTableRepository
 
@@ -186,3 +193,55 @@ async def test_gets_a_table_only_inside_its_tenant(world: World) -> None:
 
     assert await GetTable(world.tables).execute(TENANT_A, table.id) == table
     assert await GetTable(world.tables).execute(TENANT_B, table.id) is None
+
+
+async def test_every_write_locks_the_table_it_rewrites(world: World) -> None:
+    table = await world.add()
+
+    await world.update().execute(TENANT_A, table.id, name="Terraza 1")
+    await world.regenerate().execute(TENANT_A, table.id)
+
+    assert world.tables.locked == [table.id, table.id]
+
+
+async def test_repeating_a_table_create_never_makes_a_second_table(world: World) -> None:
+    table_id = uuid.uuid4()
+    created = await world.create().execute(TENANT_A, "Mesa 4", table_id)
+
+    # The PIN exists only in the first response (it is stored hashed), so a replay cannot show it.
+    with pytest.raises(TableAlreadyCreated):
+        await world.create().execute(TENANT_A, "Mesa 4", table_id)
+    with pytest.raises(TableIdTaken):
+        await world.create().execute(TENANT_B, "Mesa 4", table_id)
+
+    assert created.table.id == table_id
+    assert list(world.tables.tables) == [table_id]
+
+
+class RacyTables(InMemoryTableRepository):
+    """Another request inserts the same code between our check and our insert."""
+
+    async def get_by_code(self, code: str) -> Table | None:
+        return None
+
+    async def add(self, table: Table) -> None:
+        if any(existing.code == table.code for existing in self.tables.values()):
+            raise TableCodeTaken(table.code)
+        await super().add(table)
+
+
+async def test_a_code_taken_by_a_concurrent_create_is_redrawn_not_a_500(world: World) -> None:
+    racy = RacyTables()
+    world.tables = racy
+    world.credentials.codes = ["SAME22", "SAME22", "OTHER3"]
+    first = (await world.create().execute(TENANT_A, "Mesa 1")).table
+
+    second = (await world.create().execute(TENANT_B, "Mesa 1")).table
+
+    assert (first.code, second.code) == ("SAME22", "OTHER3")
+
+
+async def test_table_creates_of_a_tenant_are_serialized(world: World) -> None:
+    await world.create().execute(TENANT_A, "Mesa 4", uuid.uuid4())
+
+    assert world.tables.create_locks == [TENANT_A]

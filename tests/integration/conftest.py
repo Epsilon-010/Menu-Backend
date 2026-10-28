@@ -30,6 +30,8 @@ def _derive_test_urls() -> tuple[str, str]:
 TEST_DATABASE_URL, TEST_REDIS_URL = _derive_test_urls()
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["REDIS_URL"] = TEST_REDIS_URL
+# Celery publishes to an in-process broker: the suite never needs RabbitMQ.
+os.environ["CELERY_BROKER_URL"] = "memory://"
 
 from app.shared.infrastructure.config import get_settings  # noqa: E402
 

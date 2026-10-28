@@ -26,6 +26,7 @@ from app.modules.catalog.application.manage_items import (
 )
 from app.modules.catalog.domain.catalog import MAX_PRICE_CENTS, Category, Item
 from app.modules.catalog.domain.errors import (
+    CatalogIdTaken,
     CategoryNameNotAvailable,
     CategoryNotEmpty,
     CategoryNotFound,
@@ -33,7 +34,15 @@ from app.modules.catalog.domain.errors import (
     ItemNotFound,
 )
 from app.modules.catalog.infrastructure.repository import SqlAlchemyCategoryRepository, SqlAlchemyItemRepository
-from app.shared.domain.images import MAX_IMAGE_BYTES, ImageStorage, ImageStorageUnavailable, ImageVariant, InvalidImage
+from app.modules.media.infrastructure.jobs import image_cleanup_scheduler, image_registry
+from app.shared.domain.images import (
+    MAX_IMAGE_BYTES,
+    ImageCleanupScheduler,
+    ImageStorage,
+    ImageStorageUnavailable,
+    ImageVariant,
+    InvalidImage,
+)
 from app.shared.domain.principal import Principal
 from app.shared.infrastructure.database import SqlAlchemyUnitOfWork, get_session
 from app.shared.infrastructure.http.auth import require_role
@@ -52,6 +61,7 @@ def get_image_storage(request: Request) -> ImageStorage:
 
 
 ImagesDep = Annotated[ImageStorage, Depends(get_image_storage)]
+CleanupDep = Annotated[ImageCleanupScheduler, Depends(image_cleanup_scheduler)]
 
 
 # --- Schemas (unknown fields are rejected; prices are strict integers: no floats, no strings) ---
@@ -62,6 +72,8 @@ class _In(BaseModel):
 
 
 class CategoryIn(_In):
+    # Optional client-chosen id: sending the same create again returns the same category.
+    id: uuid.UUID | None = None
     name: str = Field(max_length=200)
 
 
@@ -71,6 +83,8 @@ class CategoryUpdate(_In):
 
 
 class ItemIn(_In):
+    # Optional client-chosen id: sending the same create again returns the same item.
+    id: uuid.UUID | None = None
     category_id: uuid.UUID
     name: str = Field(max_length=200)
     description: str = Field(default="", max_length=2000)
@@ -166,6 +180,8 @@ async def _run(call: Awaitable[T]) -> T | JSONResponse:
         return problem(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error))
     except CategoryNameNotAvailable:
         return problem(status.HTTP_409_CONFLICT, "Category name already in use")
+    except CatalogIdTaken:
+        return problem(status.HTTP_409_CONFLICT, "That id is already used by something else")
     except CategoryNotEmpty:
         return problem(status.HTTP_409_CONFLICT, "Category still has items")
     except CategoryNotFound:
@@ -215,24 +231,24 @@ def get_update_item(session: SessionDep) -> UpdateItem:
     return UpdateItem(_categories(session), _items(session), SqlAlchemyUnitOfWork(session))
 
 
-def get_delete_item(session: SessionDep, images: ImagesDep) -> DeleteItem:
-    return DeleteItem(_items(session), images, SqlAlchemyUnitOfWork(session))
+def get_delete_item(session: SessionDep, cleanup: CleanupDep) -> DeleteItem:
+    return DeleteItem(_items(session), image_registry(session), SqlAlchemyUnitOfWork(session), cleanup)
 
 
 def get_reorder_items(session: SessionDep) -> ReorderItems:
     return ReorderItems(_categories(session), _items(session), SqlAlchemyUnitOfWork(session))
 
 
-def get_request_image_upload(images: ImagesDep) -> RequestImageUpload:
-    return RequestImageUpload(images)
+def get_request_image_upload(session: SessionDep, images: ImagesDep) -> RequestImageUpload:
+    return RequestImageUpload(images, image_registry(session), SqlAlchemyUnitOfWork(session))
 
 
-def get_set_item_image(session: SessionDep, images: ImagesDep) -> SetItemImage:
-    return SetItemImage(_items(session), images, SqlAlchemyUnitOfWork(session))
+def get_set_item_image(session: SessionDep, images: ImagesDep, cleanup: CleanupDep) -> SetItemImage:
+    return SetItemImage(_items(session), images, image_registry(session), SqlAlchemyUnitOfWork(session), cleanup)
 
 
-def get_remove_item_image(session: SessionDep, images: ImagesDep) -> RemoveItemImage:
-    return RemoveItemImage(_items(session), images, SqlAlchemyUnitOfWork(session))
+def get_remove_item_image(session: SessionDep, cleanup: CleanupDep) -> RemoveItemImage:
+    return RemoveItemImage(_items(session), image_registry(session), SqlAlchemyUnitOfWork(session), cleanup)
 
 
 # --- Routes (admin only; the tenant always comes from the token) -------------------------------
@@ -255,7 +271,7 @@ async def list_catalog(
 async def create_category(
     body: CategoryIn, admin: Admin, use_case: Annotated[CreateCategory, Depends(get_create_category)]
 ) -> CategoryOut | JSONResponse:
-    result = await _run(use_case.execute(admin.tenant_id, body.name))
+    result = await _run(use_case.execute(admin.tenant_id, body.name, body.id))
     return result if isinstance(result, JSONResponse) else _category_out(result)
 
 
@@ -303,7 +319,11 @@ async def create_item(
     body: ItemIn, admin: Admin, images: ImagesDep, use_case: Annotated[CreateItem, Depends(get_create_item)]
 ) -> ItemOut | JSONResponse:
     draft = ItemDraft(
-        category_id=body.category_id, name=body.name, description=body.description, price_cents=body.price_cents
+        category_id=body.category_id,
+        name=body.name,
+        description=body.description,
+        price_cents=body.price_cents,
+        id=body.id,
     )
     result = await _run(use_case.execute(admin.tenant_id, draft))
     return result if isinstance(result, JSONResponse) else _item_out(result, images)

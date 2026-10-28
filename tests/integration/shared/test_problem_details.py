@@ -87,7 +87,82 @@ def test_request_validation_lists_the_errors_without_echoing_the_input(client: T
         {"loc": ["body", "username"], "msg": "String should have at least 3 characters", "type": "string_too_short"}
     ]
     assert "super-secret-value" not in response.text
-    assert "detail" not in body
+    # Every problem carries a readable detail (CLAUDE.md): it names the fields, never their values.
+    assert body["detail"] == "Invalid field: username"
+
+
+def test_validation_detail_names_every_invalid_field_once(admin: TestClient) -> None:
+    response = admin.post("/api/v1/catalog/items", json={"category_id": "nope", "name": "x" * 300, "price_cents": 1.5})
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Invalid fields: category_id, name, price_cents"
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/api/v1/catalog/categories", {"name": "Ta\u0000cos"}),
+        ("/api/v1/tables", {"name": "Mesa\u00004"}),
+        ("/api/v1/staff", {"username": "juan", "full_name": "Ju\u0000an", "role": "waiter", "password": "s3cret-pass"}),
+    ],
+)
+def test_nul_characters_are_a_422_problem_in_every_module(admin: TestClient, path: str, body: dict[str, str]) -> None:
+    # Postgres cannot store U+0000 in text; it used to surface as a 500.
+    assert_problem(
+        admin.post(path, json=body),
+        problem(422, "Unprocessable Content", "Text cannot contain NUL characters"),
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"name": "ok", "nested": {"deep": ["fine", "bad\u0000"]}},
+        {"name": "ok", "list": [{"x": "a\u0000"}]},
+        {"name": "ok", "ke\u0000y": "value"},
+    ],
+)
+def test_nul_characters_anywhere_in_the_body_are_refused(admin: TestClient, body: dict[str, Any]) -> None:
+    response = admin.post("/api/v1/catalog/categories", json=body)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Text cannot contain NUL characters"
+
+
+def test_nul_characters_are_refused_before_login_too(client: TestClient) -> None:
+    response = client.post("/api/v1/auth/login", json={"username": "owner\u0000@example.com", "password": "x"})
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Text cannot contain NUL characters"
+
+
+def test_deeply_nested_bodies_never_end_in_a_500(client: TestClient) -> None:
+    # Within what json.loads accepts but beyond what a recursive walk (two frames per level) could:
+    # the NUL check must not crash, so the route's own validation answers.
+    decodable = '{"username": ' + "[" * 700 + "]" * 700 + ', "password": "x"}'
+    response = client.post("/api/v1/auth/login", content=decodable, headers={"Content-Type": "application/json"})
+    assert response.status_code == 422
+    assert response.headers["content-type"] == PROBLEM_JSON
+
+    # Beyond the decoder itself: FastAPI refuses the body as a 400 problem before any route code runs.
+    too_deep = "[" * 50_000 + "]" * 50_000
+    response = client.post("/api/v1/auth/login", content=too_deep, headers={"Content-Type": "application/json"})
+    assert response.status_code == 400
+    assert response.headers["content-type"] == PROBLEM_JSON
+
+
+def test_a_malformed_json_body_is_left_to_route_validation(client: TestClient) -> None:
+    response = client.post("/api/v1/auth/login", content="{not json", headers={"Content-Type": "application/json"})
+
+    assert response.status_code == 422
+    assert response.json()["detail"] != "Text cannot contain NUL characters"
+
+
+def test_a_backslash_followed_by_u0000_is_ordinary_text(admin: TestClient) -> None:
+    response = admin.post("/api/v1/catalog/categories", json={"name": "Ta\\u0000cos"})
+
+    assert response.status_code == 201
+    assert response.json()["name"] == "Ta\\u0000cos"
 
 
 def test_rate_limited_login_is_a_429_problem_with_retry_after(client: TestClient, tenant_a: SeedResult) -> None:

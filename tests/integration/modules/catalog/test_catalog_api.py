@@ -1,15 +1,25 @@
 import asyncio
+import time
+import uuid
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack
+from datetime import timedelta
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
+from sqlalchemy import func, update
 
+from app.modules.media.infrastructure.jobs import CeleryImageCleanupScheduler
+from app.modules.media.infrastructure.models import ImageUploadModel
 from app.seed import SeedResult
 from app.shared.domain.images import MAX_IMAGE_BYTES
+from app.shared.infrastructure.celery_app import create_celery
+from app.shared.infrastructure.config import get_settings
+from app.shared.infrastructure.database import create_engine, create_session_factory
 from app.shared.infrastructure.images import UnconfiguredImageStorage
+from app.worker import clean_up_images_now
 from tests.integration.modules.auth.test_auth_api import _seed, login
 from tests.integration.modules.staff.test_staff_api import STAFF_PASSWORD, create_member, member_id
 from tests.integration.modules.tables.test_tables_api import create_table, created, tablet_of
@@ -197,7 +207,26 @@ def test_only_empty_categories_can_be_deleted(new_client: ClientFactory, tenant_
 # --- Images ------------------------------------------------------------------------------------
 
 
-def test_replacing_removing_or_deleting_deletes_the_previous_image(
+async def _age_upload(public_id: str, age: timedelta) -> None:
+    engine = create_engine(get_settings().database_url)
+    try:
+        async with create_session_factory(engine)() as session:
+            await session.execute(
+                update(ImageUploadModel)
+                .where(ImageUploadModel.public_id == public_id)
+                .values(created_at=func.now() - age)
+            )
+            await session.commit()
+    finally:
+        await engine.dispose()
+
+
+def clean_up(images: FakeImageStorage) -> int:
+    """Runs the worker's cleanup in-process against the test database and the fake storage."""
+    return asyncio.run(clean_up_images_now(images))
+
+
+def test_replacing_removing_or_deleting_discards_the_image_and_the_worker_deletes_it(
     new_client: ClientFactory, tenant_a: SeedResult, images: FakeImageStorage
 ) -> None:
     admin = admin_of(new_client)
@@ -206,17 +235,19 @@ def test_replacing_removing_or_deleting_deletes_the_previous_image(
 
     ok(admin.put(f"{ITEMS_URL}/{item['id']}/image", json={"public_id": first}))
     ok(admin.put(f"{ITEMS_URL}/{item['id']}/image", json={"public_id": second}))
-    assert images.deleted == [first]
     assert ok(admin.delete(f"{ITEMS_URL}/{item['id']}/image"))["image"] is None
-    assert images.deleted == [first, second]
     ok(admin.put(f"{ITEMS_URL}/{item['id']}/image", json={"public_id": third}))
     assert admin.delete(f"{ITEMS_URL}/{item['id']}").status_code == 204
+    # Requests never delete from the storage themselves.
+    assert images.deleted == []
 
-    assert images.deleted == [first, second, third]
+    assert clean_up(images) == 3
+    assert sorted(images.deleted) == sorted([first, second, third])
+    assert clean_up(images) == 0
 
 
 @pytest.mark.parametrize(("image_format", "size"), [("gif", 1_000), ("svg", 1_000), ("png", MAX_IMAGE_BYTES + 1)])
-def test_uploads_with_a_wrong_format_or_size_are_rejected_and_deleted(
+def test_uploads_with_a_wrong_format_or_size_are_rejected_and_cleaned_up(
     new_client: ClientFactory, tenant_a: SeedResult, images: FakeImageStorage, image_format: str, size: int
 ) -> None:
     admin = admin_of(new_client)
@@ -226,9 +257,57 @@ def test_uploads_with_a_wrong_format_or_size_are_rejected_and_deleted(
     response = admin.put(f"{ITEMS_URL}/{item['id']}/image", json={"public_id": public_id})
 
     assert response.status_code == 422
+    assert catalog(admin)[0]["items"][0]["image"] is None
+    assert clean_up(images) == 1
     assert images.deleted == [public_id]
+
+
+def test_an_upload_never_attached_is_cleaned_up_after_the_ttl(
+    new_client: ClientFactory, tenant_a: SeedResult, images: FakeImageStorage
+) -> None:
+    admin = admin_of(new_client)
+    abandoned = upload_image(admin, images)
+    fresh = upload_image(admin, images)
+    # The browser uploaded `abandoned` two hours ago and the attach never arrived.
+    asyncio.run(_age_upload(abandoned, timedelta(hours=2)))
+
+    assert clean_up(images) == 1
+    assert images.deleted == [abandoned]
+    assert fresh in images.stored
+
+
+def test_only_ids_signed_by_the_backend_can_be_attached(
+    new_client: ClientFactory, tenant_a: SeedResult, images: FakeImageStorage
+) -> None:
+    admin = admin_of(new_client)
+    item = ok(create_item(admin, ok(create_category(admin), 201)["id"]), 201)
+    # A file in the tenant folder that this backend never signed (e.g. uploaded with a leaked key).
+    unsigned = f"tenants/{tenant_a.tenant_id}/items/{uuid.uuid4().hex}"
+    images.upload(unsigned)
+
+    response = admin.put(f"{ITEMS_URL}/{item['id']}/image", json={"public_id": unsigned})
+
+    assert response.status_code == 422
     assert catalog(admin)[0]["items"][0]["image"] is None
 
+
+def test_a_broker_outage_never_fails_the_request(
+    new_client: ClientFactory, tenant_a: SeedResult, images: FakeImageStorage
+) -> None:
+    admin = admin_of(new_client)
+    unreachable = get_settings().model_copy(update={"celery_broker_url": "amqp://guest:guest@127.0.0.1:1//"})
+    admin.app.state.image_cleanup = CeleryImageCleanupScheduler(create_celery(unreachable))  # type: ignore[attr-defined]
+    item = ok(create_item(admin, ok(create_category(admin), 201)["id"]), 201)
+    public_id = upload_image(admin, images)
+    ok(admin.put(f"{ITEMS_URL}/{item['id']}/image", json={"public_id": public_id}))
+
+    started = time.monotonic()
+    response = admin.delete(f"{ITEMS_URL}/{item['id']}/image")
+
+    assert response.status_code == 200
+    assert time.monotonic() - started < 5
+    # The periodic run still cleans it up: the work is recorded in Postgres, not in the broker.
+    assert clean_up(images) == 1
 
 def test_without_storage_credentials_signing_answers_503(new_client: ClientFactory, tenant_a: SeedResult) -> None:
     admin = admin_of(new_client)
@@ -320,3 +399,43 @@ def test_a_tenant_never_sees_nor_changes_another_tenant_catalog(
     assert [(c["name"], c["is_visible"]) for c in listed] == [("Tacos", True)]
     assert [(i["name"], i["price_cents"], i["image"]) for i in listed[0]["items"]] == [("Pastor", 2500, None)]
     assert owner_image in images.stored
+
+
+# --- Idempotent creates ------------------------------------------------------------------------
+
+
+def test_repeating_a_create_with_its_id_returns_the_same_resource(
+    new_client: ClientFactory, tenant_a: SeedResult
+) -> None:
+    admin = admin_of(new_client)
+    category_id, item_id = str(uuid.uuid4()), str(uuid.uuid4())
+    category_body = {"id": category_id, "name": "Tacos"}
+
+    first = ok(admin.post(CATEGORIES_URL, json=category_body), 201)
+    replay = ok(admin.post(CATEGORIES_URL, json=category_body), 201)
+    item_body = {"id": item_id, "category_id": category_id, "name": "Pastor", "description": "", "price_cents": 2500}
+    first_item = ok(admin.post(ITEMS_URL, json=item_body), 201)
+    replay_item = ok(admin.post(ITEMS_URL, json=item_body), 201)
+
+    assert first["id"] == category_id and replay == first
+    assert first_item["id"] == item_id and replay_item == first_item
+    assert [(c["name"], len(c["items"])) for c in catalog(admin)] == [("Tacos", 1)]
+
+
+def test_an_id_reused_for_other_data_or_by_another_tenant_answers_409(
+    new_client: ClientFactory, tenant_a: SeedResult, tenant_b: SeedResult
+) -> None:
+    owner = admin_of(new_client)
+    category_id = str(uuid.uuid4())
+    ok(owner.post(CATEGORIES_URL, json={"id": category_id, "name": "Tacos"}), 201)
+    other = admin_of(new_client, "boss@example.com")
+
+    clashes = [
+        owner.post(CATEGORIES_URL, json={"id": category_id, "name": "Bebidas"}),
+        other.post(CATEGORIES_URL, json={"id": category_id, "name": "Tacos"}),
+    ]
+
+    assert [r.status_code for r in clashes] == [409, 409]
+    # The same generic answer either way: nothing says the id lives in another tenant.
+    assert {r.json()["detail"] for r in clashes} == {"That id is already used by something else"}
+    assert catalog(other) == []

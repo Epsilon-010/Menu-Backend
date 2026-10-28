@@ -3,11 +3,12 @@ import secrets
 import uuid
 from datetime import datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auth.domain.refresh_token import RefreshToken
 from app.modules.auth.infrastructure.models import RefreshTokenModel
+from app.shared.infrastructure.database import affected_rows
 
 
 class OpaqueRefreshTokenCodec:
@@ -100,3 +101,14 @@ class SqlAlchemyRefreshTokenRepository:
             )
             .values(revoked_at=at)
         )
+
+    async def delete_expired(self, before: datetime, limit: int) -> int:
+        # Platform housekeeping (all tenants), in bounded batches so one run never holds long locks.
+        batch = (
+            select(RefreshTokenModel.id)
+            .where(RefreshTokenModel.expires_at < before)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        result = await self._session.execute(delete(RefreshTokenModel).where(RefreshTokenModel.id.in_(batch)))
+        return affected_rows(result)

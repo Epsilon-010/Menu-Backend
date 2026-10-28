@@ -95,6 +95,39 @@ def validate_stored_image(image: StoredImage, kind: ImageKind) -> None:
         raise InvalidImage(f"Image must be at most {MAX_IMAGE_BYTES // (1024 * 1024)} MB")
 
 
+class ImageRegistry(Protocol):
+    """Port: Postgres record of every image the backend signed (implemented by the media module).
+
+    Cloudinary and Postgres share no transaction, so this record is what guarantees cleanup: an
+    image is `pending` from signing until attached, and `discarded` once no longer used; a
+    background job deletes discarded and expired pending images from the storage. None of these
+    methods commit: the calling use case owns the transaction.
+    """
+
+    async def register(self, tenant_id: uuid.UUID, public_id: str) -> None: ...
+
+    async def attach(self, tenant_id: uuid.UUID, public_id: str) -> bool:
+        """Marks a pending image of the tenant as used. False if it is unknown, used or discarded."""
+        ...
+
+    async def discard(self, tenant_id: uuid.UUID, public_id: str) -> None:
+        """Marks the image for deletion from the storage."""
+        ...
+
+    async def reject(self, tenant_id: uuid.UUID, public_id: str) -> None:
+        """Marks an upload for deletion only while it is still pending (never an image in use)."""
+        ...
+
+
+class ImageCleanupScheduler(Protocol):
+    """Port: asks the background worker to clean up discarded images soon.
+
+    Best effort, called after the commit: it never raises, and a periodic run catches anything missed.
+    """
+
+    async def request_cleanup(self) -> None: ...
+
+
 class ImageStorage(Protocol):
     def sign_upload(self, public_id: str, allowed_formats: tuple[str, ...]) -> UploadSignature:
         """Signs a direct browser upload to exactly that public id. Raises ImageStorageUnavailable."""

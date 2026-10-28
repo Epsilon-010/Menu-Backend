@@ -7,7 +7,13 @@ found. There is no hard delete; deactivating is the removal.
 import uuid
 from dataclasses import dataclass, replace
 
-from app.modules.tables.domain.errors import TableNameNotAvailable, TableNotFound
+from app.modules.tables.domain.errors import (
+    TableAlreadyCreated,
+    TableCodeTaken,
+    TableIdTaken,
+    TableNameNotAvailable,
+    TableNotFound,
+)
 from app.modules.tables.domain.table import (
     SessionRevoker,
     Table,
@@ -30,7 +36,8 @@ class TableWithPin:
 
 
 async def _get_table(tables: TableRepository, tenant_id: uuid.UUID, table_id: uuid.UUID) -> Table:
-    table = await tables.get(tenant_id, table_id)
+    # Every caller rewrites the table: lock the row so concurrent edits never overwrite each other.
+    table = await tables.get_for_update(tenant_id, table_id)
     if table is None:
         raise TableNotFound(table_id)
     return table
@@ -53,15 +60,31 @@ class CreateTable:
         self._hasher = hasher
         self._uow = uow
 
-    async def execute(self, tenant_id: uuid.UUID, name: str) -> TableWithPin:
+    async def execute(self, tenant_id: uuid.UUID, name: str, table_id: uuid.UUID | None = None) -> TableWithPin:
+        """`table_id` makes the create idempotent: a repeat never makes a second table. It cannot return
+        the PIN again (only its hash exists), so it raises TableAlreadyCreated instead."""
         name = validate_table_name(name)
+        # Taken before the replay check, so a concurrent replay waits and then finds the first one.
+        await self._tables.lock_creates(tenant_id)
+        if table_id is not None:
+            if await self._tables.get(tenant_id, table_id) is not None:
+                raise TableAlreadyCreated(table_id)
+            if await self._tables.exists_anywhere(table_id):
+                raise TableIdTaken(table_id)
         await _ensure_name_available(self._tables, tenant_id, name)
 
         pin = self._credentials.new_pin()
-        table = Table.create(tenant_id, name, await self._unused_code(), await self._hasher.hash(pin))
-        await self._tables.add(table)
-        await self._uow.commit()
-        return TableWithPin(table=table, pin=pin)
+        pin_hash = await self._hasher.hash(pin)
+        for _ in range(_MAX_CODE_ATTEMPTS):
+            table = Table.create(tenant_id, name, await self._unused_code(), pin_hash, table_id)
+            try:
+                await self._tables.add(table)
+            except TableCodeTaken:
+                # A concurrent create took this code after our check: draw another one.
+                continue
+            await self._uow.commit()
+            return TableWithPin(table=table, pin=pin)
+        raise RuntimeError("Could not insert a table with an unused code")
 
     async def _unused_code(self) -> str:
         for _ in range(_MAX_CODE_ATTEMPTS):

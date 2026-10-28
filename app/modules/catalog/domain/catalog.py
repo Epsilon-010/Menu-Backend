@@ -56,8 +56,16 @@ class Category:
     id: uuid.UUID = field(default_factory=uuid.uuid4)
 
     @classmethod
-    def create(cls, tenant_id: uuid.UUID, name: str, position: int) -> "Category":
-        return cls(tenant_id=tenant_id, name=validate_category_name(name), position=position)
+    def create(
+        cls, tenant_id: uuid.UUID, name: str, position: int, category_id: uuid.UUID | None = None
+    ) -> "Category":
+        """`category_id` comes from the client to make the create idempotent; None generates one."""
+        return cls(
+            tenant_id=tenant_id,
+            name=validate_category_name(name),
+            position=position,
+            id=category_id or uuid.uuid4(),
+        )
 
     def with_changes(self, name: str | None = None, is_visible: bool | None = None) -> "Category":
         return replace(
@@ -86,8 +94,16 @@ class Item:
 
     @classmethod
     def create(
-        cls, tenant_id: uuid.UUID, category_id: uuid.UUID, name: str, description: str, price_cents: int, position: int
+        cls,
+        tenant_id: uuid.UUID,
+        category_id: uuid.UUID,
+        name: str,
+        description: str,
+        price_cents: int,
+        position: int,
+        item_id: uuid.UUID | None = None,
     ) -> "Item":
+        """`item_id` comes from the client to make the create idempotent; None generates one."""
         return cls(
             tenant_id=tenant_id,
             category_id=category_id,
@@ -95,6 +111,16 @@ class Item:
             description=validate_description(description),
             price_cents=validate_price(price_cents),
             position=position,
+            id=item_id or uuid.uuid4(),
+        )
+
+    def same_draft(self, category_id: uuid.UUID, name: str, description: str, price_cents: int) -> bool:
+        """Whether a repeated create asks for exactly this item (after the same normalization)."""
+        return (self.category_id, self.name, self.description, self.price_cents) == (
+            category_id,
+            validate_item_name(name),
+            validate_description(description),
+            validate_price(price_cents),
         )
 
     def with_changes(
@@ -117,6 +143,18 @@ class CategoryRepository(Protocol):
     async def add(self, category: Category) -> None: ...
 
     async def get(self, tenant_id: uuid.UUID, category_id: uuid.UUID) -> Category | None: ...
+
+    async def get_for_update(self, tenant_id: uuid.UUID, category_id: uuid.UUID) -> Category | None:
+        """Same as `get`, locking the row until the transaction ends: for every read-then-write."""
+        ...
+
+    async def exists_anywhere(self, category_id: uuid.UUID) -> bool:
+        """Whether the id is taken in any tenant (to answer a clash without revealing that row)."""
+        ...
+
+    async def lock_order(self, tenant_id: uuid.UUID) -> None:
+        """Serializes changes to the tenant's category order until the transaction ends."""
+        ...
 
     async def get_by_name(self, tenant_id: uuid.UUID, name: str) -> Category | None:
         """Case-insensitive match inside the tenant."""
@@ -143,8 +181,16 @@ class ItemRepository(Protocol):
 
     async def get(self, tenant_id: uuid.UUID, item_id: uuid.UUID) -> Item | None: ...
 
-    async def image_in_use(self, tenant_id: uuid.UUID, public_id: str, except_item_id: uuid.UUID) -> bool:
-        """Whether another item of the tenant already shows that image."""
+    async def get_for_update(self, tenant_id: uuid.UUID, item_id: uuid.UUID) -> Item | None:
+        """Same as `get`, locking the row until the transaction ends: for every read-then-write."""
+        ...
+
+    async def exists_anywhere(self, item_id: uuid.UUID) -> bool:
+        """Whether the id is taken in any tenant (to answer a clash without revealing that row)."""
+        ...
+
+    async def lock_order(self, tenant_id: uuid.UUID, category_ids: list[uuid.UUID]) -> None:
+        """Serializes changes to the item order of those categories until the transaction ends."""
         ...
 
     async def list_in_category(self, tenant_id: uuid.UUID, category_id: uuid.UUID) -> list[Item]: ...
