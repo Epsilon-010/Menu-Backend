@@ -19,6 +19,14 @@ if count(KEYS[2]) > tonumber(ARGV[3]) then return wait(KEYS[2]) end
 return 0
 """
 
+# KEYS: client counter, account counter. A successful attempt was counted on both (acquire let it
+# through), so it is taken back from the account; failures from other addresses still count.
+_SUCCEEDED = """
+redis.call('DEL', KEYS[1])
+if tonumber(redis.call('GET', KEYS[2]) or '0') > 0 then redis.call('DECR', KEYS[2]) end
+return 0
+"""
+
 
 class RedisLoginAttemptLimiter:
     """Fixed-window counters of login attempts per client (IP) + account, plus a per-account backstop.
@@ -29,9 +37,10 @@ class RedisLoginAttemptLimiter:
     attempts. Attempts a client makes while it is already blocked never reach the account counter,
     so one device retrying in a loop cannot exhaust the backstop for everyone else. Each attempt is
     counted *before* the password is checked, in one atomic script, so concurrent requests cannot
-    slip through between a check and an increment. A successful login clears that client's count
-    only: failures from other addresses still count towards the backstop. Each window starts at its
-    first attempt; over a limit, logins are refused until the key expires.
+    slip through between a check and an increment. A successful login clears that client's count and
+    takes its own attempt back from the account, so signing in often never reaches the backstop;
+    failures from other addresses still count towards it. Each window starts at its first attempt;
+    over a limit, logins are refused until the key expires.
     """
 
     def __init__(self, redis: Redis, window_seconds: int, max_per_client: int, max_per_account: int) -> None:
@@ -61,4 +70,4 @@ class RedisLoginAttemptLimiter:
         return int(wait) if int(wait) > 0 else None
 
     async def succeeded(self, account: str, client: str) -> None:
-        await self._redis.delete(self._client_key(account, client))
+        await self._redis.eval(_SUCCEEDED, 2, self._client_key(account, client), self._account_key(account))

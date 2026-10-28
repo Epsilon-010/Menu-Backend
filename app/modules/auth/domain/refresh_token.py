@@ -113,5 +113,5 @@ class LoginAttemptLimiter(Protocol):
         ...
 
     async def succeeded(self, account: str, client: str) -> None:
-        """Clears this client's count for the account after a successful login."""
+        """After a successful login: clears this client's count and takes the attempt back from the account."""
         ...

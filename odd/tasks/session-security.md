@@ -57,3 +57,7 @@ Test runner: `uv run pytest` (Backend), `npm test` (Menu-Frontend).
   validation had no test (now 6 cases in `test_me_rejects_invalid_access_tokens`); deploy cutover (tokens without `sv` get
   one 401 and the frontend refreshes: accepted). Frontend review approved; its finding (lost `changeOrigin`) fixed in
   `ce4c1c2`. `uv run pytest` 312 passed.
+- L8 (2026-10-27, user): "si arregla el 4 y ya has push de lo qeu llevamos abrire otra sesion". Advisory 4 fixed: a
+  successful login takes its own attempt back from the account backstop (Lua, never below 0), so a device that signs in
+  often is never blocked (test `test_successful_logins_never_count_towards_the_account_backstop`). 313 passed. Next: the
+  user opens the PRs (`fix/session-security`, `fix/forward-client-ip`) and merges; Slice 5 only when the user asks.

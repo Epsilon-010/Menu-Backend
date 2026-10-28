@@ -87,3 +87,14 @@ def test_attempts_refused_for_one_device_never_count_towards_the_account() -> No
 
     assert results[:60].count(None) == 5
     assert results[60] is None
+
+
+def test_successful_logins_never_count_towards_the_account_backstop() -> None:
+    # A tablet that signs in again and again (each attempt followed by a success) must never be blocked.
+    steps: list[Step] = []
+    for _ in range(60):
+        steps += _attempts(1) + [("succeed", "owner@example.com", "10.0.0.1")]
+
+    results = asyncio.run(_run(steps, max_per_account=50))
+
+    assert results == [None] * 60
