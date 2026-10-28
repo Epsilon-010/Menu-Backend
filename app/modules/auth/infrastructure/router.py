@@ -1,3 +1,4 @@
+import ipaddress
 import uuid
 from datetime import datetime
 from typing import Annotated
@@ -105,14 +106,22 @@ def _login_limiter(request: Request) -> RedisLoginAttemptLimiter:
         request.app.state.redis,
         window_seconds=settings.login_failure_window_seconds,
         max_per_client=settings.login_max_failures_per_client,
-        max_per_account=settings.login_max_failures_per_account,
+        max_per_account=settings.login_max_failures_backstop,
     )
 
 
 def _client_address(request: Request) -> str:
     """The caller's IP. Behind the frontend proxy, uvicorn takes it from X-Forwarded-For only when the
     request comes from an address in FORWARDED_ALLOW_IPS, so a direct caller cannot choose it."""
-    return request.client.host if request.client else "unknown"
+    if request.client is None:
+        return "unknown"
+    try:
+        address = ipaddress.ip_address(request.client.host)
+    except ValueError:
+        return request.client.host
+    # The same device can arrive as IPv4 or IPv4-mapped IPv6 (::ffff:a.b.c.d): count it once.
+    mapped = address.ipv4_mapped if isinstance(address, ipaddress.IPv6Address) else None
+    return str(mapped or address)
 
 
 def get_login(request: Request, session: SessionDep) -> Login:

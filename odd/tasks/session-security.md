@@ -13,7 +13,7 @@ Test runner: `uv run pytest` (Backend), `npm test` (Menu-Frontend).
     row; access: compared with a Redis floor written after the commit, fail-open as before).
 - S2. "en la 2 que sea por ip y cuenta": login attempts are limited per client IP + account
   (`LOGIN_MAX_FAILURES_PER_CLIENT`, default 5), so failures from one device no longer lock the account for others.
-  A higher per-account backstop (`LOGIN_MAX_FAILURES_PER_ACCOUNT`, default 50) keeps a spoofed or rotating IP from
+  A higher per-account backstop (`LOGIN_MAX_FAILURES_BACKSTOP`, default 50; renamed from the old per-account setting so an old value of 5 cannot silently undo S2) keeps a spoofed or rotating IP from
   turning it into unlimited guessing (proposed as option (b), accepted: "si hazlo").
   - The client IP is only taken from `X-Forwarded-For` when the request comes from the frontend proxy
     (uvicorn `FORWARDED_ALLOW_IPS`); a direct request to the API port cannot choose its IP.
@@ -40,3 +40,14 @@ Test runner: `uv run pytest` (Backend), `npm test` (Menu-Frontend).
   same account; spoofed X-Forwarded-For straight to :8020 ignored (6th is 429); PIN change makes the tablet /me and its
   refresh 401. Once, before a test fix, a full `uv run pytest` hung >600 s with no DB connections; the rerun and every
   later run finished in ~60 s. Not reproduced.
+- L6: Verifier (independent): S1 PASS (40 concurrent refresh-vs-PIN rounds, no token escaped; forged `sv` values
+  rejected; migration down/up OK). S2 FAIL, blocker B1: attempts refused by the per-client limit still incremented the
+  account backstop, so one device retrying 51 times locked every other device out. Fix: one Lua script counts the client
+  first and only moves the account counter while the client is within its limit (RED test
+  `test_attempts_refused_for_one_device_never_count_towards_the_account`). Advisories fixed too: IPv4-mapped IPv6
+  (`::ffff:a.b.c.d`, how requests arrive through Vite) is normalized to IPv4 so a device has one counter; the backstop
+  setting is renamed `LOGIN_MAX_FAILURES_BACKSTOP` so an old `LOGIN_MAX_FAILURES_PER_ACCOUNT=5` is ignored instead of
+  silently undoing S2. Known limit (environment, not code): on Docker Desktop (Windows/macOS) every request through a
+  published port reaches the containers from the Docker gateway (10.213.57.1), so LAN tablets in dev share one device
+  counter; a Linux Docker host keeps the real client IP. Accepted advisories: the backstop also counts successful
+  logins; fail-open access floor if Redis is down; production nginx not exercised. `uv run pytest` 305 passed.

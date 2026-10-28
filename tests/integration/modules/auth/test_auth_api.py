@@ -174,6 +174,20 @@ def test_failures_from_one_device_never_lock_the_account_on_another_device(tenan
         assert login(owner).status_code == 200
 
 
+def test_an_ipv4_mapped_ipv6_address_counts_as_the_same_device(tenant_a: SeedResult) -> None:
+    from app.main import create_app
+
+    # One app per client: each TestClient runs its own event loop, and an app's pools belong to one loop.
+    with (
+        TestClient(create_app(), base_url="https://testserver", client=("::ffff:198.51.100.1", 50000)) as mapped,
+        TestClient(create_app(), base_url="https://testserver", client=("198.51.100.1", 50000)) as plain,
+    ):
+        for _ in range(get_settings().login_max_failures_per_client):
+            assert login(mapped, password="wrong-pass").status_code == 401
+
+        assert login(plain).status_code == 429
+
+
 def test_failures_on_other_accounts_never_block_this_user(client: TestClient, tenant_a: SeedResult) -> None:
     # One client failing on many accounts does not lock out the rest.
     for attempt in range(30):

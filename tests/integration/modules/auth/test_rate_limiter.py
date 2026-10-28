@@ -79,3 +79,11 @@ def test_a_successful_login_clears_only_that_device_count() -> None:
     assert results[7:13].count(None) == 5
     # The other device keeps its 3 failures: only 2 more get through.
     assert results[13:].count(None) == 2
+
+
+def test_attempts_refused_for_one_device_never_count_towards_the_account() -> None:
+    # A device that keeps retrying after its own block must not exhaust the backstop and lock out the others.
+    results = asyncio.run(_run(_attempts(60) + [("acquire", "owner@example.com", "10.0.0.2")], max_per_account=50))
+
+    assert results[:60].count(None) == 5
+    assert results[60] is None
