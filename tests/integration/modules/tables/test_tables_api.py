@@ -90,11 +90,21 @@ def test_admin_creates_a_table_and_its_tablet_signs_in_as_that_table(
 
     table = created(create_table(admin, " Mesa 4 "))
 
-    assert table == {"id": table["id"], "name": "Mesa 4", "code": table["code"], "is_active": True, "pin": table["pin"]}
+    assert table == {
+        "id": table["id"],
+        "name": "Mesa 4",
+        "code": table["code"],
+        "is_active": True,
+        "qr_token": table["qr_token"],
+        "pin": table["pin"],
+    }
     assert CODE_PATTERN.match(table["code"])
+    assert len(table["qr_token"]) >= 32
     assert re.fullmatch(r"\d{6}", table["pin"])
     # The PIN is shown only once: the list never returns it.
-    assert admin.get(TABLES_URL).json() == [{"id": table["id"], "name": "Mesa 4", "code": table["code"], "is_active": True}]
+    assert admin.get(TABLES_URL).json() == [
+        {"id": table["id"], "name": "Mesa 4", "code": table["code"], "is_active": True, "qr_token": table["qr_token"]}
+    ]
 
     tablet = new_client()
     session = table_login(tablet, table["code"].lower(), table["pin"])
@@ -107,6 +117,7 @@ def test_admin_creates_a_table_and_its_tablet_signs_in_as_that_table(
     assert me.json() == {
         "user": None,
         "table": {"id": table["id"], "name": "Mesa 4"},
+        "guest": None,
         "tenant": {"id": str(tenant_a.tenant_id), "name": "La Taquería"},
     }
     # The 30-day session renews itself as the same table.
@@ -139,7 +150,7 @@ def test_admin_renames_a_table_without_signing_its_tablet_out(
     response = admin.patch(f"{TABLES_URL}/{table['id']}", json={"name": "Terraza 1"})
 
     assert response.status_code == 200
-    assert response.json() == {"id": table["id"], "name": "Terraza 1", "code": table["code"], "is_active": True}
+    assert response.json() == {"id": table["id"], "name": "Terraza 1", "code": table["code"], "is_active": True, "qr_token": table["qr_token"]}
     assert tablet.get("/api/v1/auth/me").json()["table"]["name"] == "Terraza 1"
 
 

@@ -3,7 +3,13 @@ import uuid
 import pytest
 
 from app.modules.tables.application.find_table import FindTableByCode, GetTable
-from app.modules.tables.application.manage_tables import CreateTable, ListTables, RegenerateTablePin, UpdateTable
+from app.modules.tables.application.manage_tables import (
+    CreateTable,
+    ListTables,
+    RegenerateTablePin,
+    RegenerateTableQr,
+    UpdateTable,
+)
 from app.modules.tables.domain.errors import (
     InvalidTableData,
     TableAlreadyCreated,
@@ -13,7 +19,13 @@ from app.modules.tables.domain.errors import (
     TableNotFound,
 )
 from app.modules.tables.domain.table import Table
-from tests.unit.fakes import FakePasswordHasher, FakeTableCredentials, FakeUnitOfWork, InMemoryTableRepository
+from tests.unit.fakes import (
+    FakePasswordHasher,
+    FakeTableCredentials,
+    FakeTableGuests,
+    FakeUnitOfWork,
+    InMemoryTableRepository,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -39,13 +51,17 @@ class World:
         self.credentials = FakeTableCredentials(codes)
         self.hasher = FakePasswordHasher()
         self.sessions = FakeSessionRevoker()
+        self.guests = FakeTableGuests()
         self.uow = FakeUnitOfWork()
 
     def create(self) -> CreateTable:
         return CreateTable(self.tables, self.credentials, self.hasher, self.uow)
 
     def update(self) -> UpdateTable:
-        return UpdateTable(self.tables, self.sessions, self.uow)
+        return UpdateTable(self.tables, self.sessions, self.guests, self.uow)
+
+    def regenerate_qr(self) -> RegenerateTableQr:
+        return RegenerateTableQr(self.tables, self.credentials, self.guests, self.uow)
 
     def regenerate(self) -> RegenerateTablePin:
         return RegenerateTablePin(self.tables, self.credentials, self.hasher, self.sessions, self.uow)
@@ -282,3 +298,42 @@ async def test_access_is_only_ended_once_the_new_session_version_is_committed(wo
 
     # Ending access before the commit would reject every new login until the floor expires.
     assert world.sessions.access_ended == []
+
+
+async def test_every_table_gets_its_own_qr_token(world: World) -> None:
+    first, second = await world.add("Mesa 1"), await world.add("Mesa 2")
+
+    assert first.qr_token and second.qr_token
+    assert first.qr_token != second.qr_token
+
+
+async def test_a_new_qr_replaces_the_old_one_and_ends_its_guests_but_not_the_tablet(world: World) -> None:
+    table = await world.add()
+
+    updated = await world.regenerate_qr().execute(TENANT_A, table.id)
+
+    assert updated.qr_token != table.qr_token
+    assert await world.tables.get_by_qr_token(table.qr_token or "") is None
+    assert world.guests.ended == [(TENANT_A, table.id)]
+    assert world.guests.access_ended == 1
+    assert world.sessions.revoked == []
+    assert world.uow.commits == 2
+
+
+async def test_deactivating_a_table_also_ends_its_qr_guests(world: World) -> None:
+    table = await world.add()
+
+    await world.update().execute(TENANT_A, table.id, name="Mesa 9")
+    assert world.guests.ended == []
+    await world.update().execute(TENANT_A, table.id, is_active=False)
+
+    assert world.guests.ended == [(TENANT_A, table.id)]
+    assert world.guests.access_ended == 1
+
+
+async def test_another_tenant_cannot_regenerate_the_qr(world: World) -> None:
+    table = await world.add()
+
+    with pytest.raises(TableNotFound):
+        await world.regenerate_qr().execute(TENANT_B, table.id)
+    assert world.guests.ended == []

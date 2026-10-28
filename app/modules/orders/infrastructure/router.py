@@ -49,7 +49,8 @@ from app.modules.orders.domain.model import (
     OrderStatus,
     PaymentMethod,
 )
-from app.modules.orders.infrastructure.adapters import CatalogMenu, RedisTableEvents, RevokedGuestAccess, TablesModule
+from app.modules.orders.infrastructure.adapters import CatalogMenu, RedisTableEvents, TablesModule
+from app.modules.orders.infrastructure.guest_sessions import RevokedGuestAccess
 from app.modules.orders.infrastructure.repository import (
     PostgresTableLocks,
     SqlAlchemyBillRepository,

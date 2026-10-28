@@ -6,7 +6,7 @@ unsent cart in the same transaction, and an order is always sent on the table's 
 
 import uuid
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 
 from app.modules.orders.domain.errors import InvalidOrderData
@@ -15,6 +15,8 @@ MAX_QUANTITY = 50
 MAX_NOTE_LENGTH = 200
 MAX_CART_LINES = 100
 MAX_GUEST_NAME_LENGTH = 30
+# However long the table stays open, a guest's visit (and every session from it) ends after this.
+GUEST_VISIT_LIMIT = timedelta(hours=12)
 
 
 class PaymentMethod(StrEnum):
@@ -67,8 +69,11 @@ class Guest:
     id: uuid.UUID = field(default_factory=uuid.uuid4)
 
     @property
-    def is_active(self) -> bool:
-        return self.ended_at is None
+    def ends_at(self) -> datetime:
+        return self.joined_at + GUEST_VISIT_LIMIT
+
+    def is_active_at(self, now: datetime) -> bool:
+        return self.ended_at is None and now < self.ends_at
 
 
 @dataclass(frozen=True)

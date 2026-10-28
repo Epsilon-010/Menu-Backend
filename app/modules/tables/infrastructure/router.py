@@ -8,10 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auth.application.revoke_user_sessions import RevokeTableSessions
 from app.modules.auth.infrastructure.session_revocation import revoke_table_sessions
+from app.modules.orders.infrastructure.guest_sessions import table_guest_sessions
 from app.modules.tables.application.manage_tables import (
     CreateTable,
     ListTables,
     RegenerateTablePin,
+    RegenerateTableQr,
     TableWithPin,
     UpdateTable,
 )
@@ -60,6 +62,8 @@ class TableOut(BaseModel):
     name: str
     code: str
     is_active: bool
+    # The random part of the table's QR link (`/q/<qr_token>`); printing it again needs no new QR.
+    qr_token: str | None
 
 
 class TableWithPinOut(TableOut):
@@ -69,7 +73,7 @@ class TableWithPinOut(TableOut):
 
 
 def _out(table: Table) -> TableOut:
-    return TableOut(id=table.id, name=table.name, code=table.code, is_active=table.is_active)
+    return TableOut(id=table.id, name=table.name, code=table.code, is_active=table.is_active, qr_token=table.qr_token)
 
 
 def _with_pin(result: TableWithPin) -> TableWithPinOut:
@@ -120,7 +124,19 @@ def get_list_tables(session: SessionDep) -> ListTables:
 
 def get_update_table(request: Request, session: SessionDep) -> UpdateTable:
     return UpdateTable(
-        SqlAlchemyTableRepository(session), _session_revoker(request, session), SqlAlchemyUnitOfWork(session)
+        SqlAlchemyTableRepository(session),
+        _session_revoker(request, session),
+        table_guest_sessions(request, session),
+        SqlAlchemyUnitOfWork(session),
+    )
+
+
+def get_regenerate_table_qr(request: Request, session: SessionDep) -> RegenerateTableQr:
+    return RegenerateTableQr(
+        SqlAlchemyTableRepository(session),
+        RandomTableCredentials(),
+        table_guest_sessions(request, session),
+        SqlAlchemyUnitOfWork(session),
     )
 
 
@@ -183,3 +199,14 @@ async def regenerate_table_pin(
     except TableNotFound:
         return _not_found()
     return _with_pin(result)
+
+
+@router.post("/{table_id}/qr", response_model=TableOut)
+async def regenerate_table_qr(
+    table_id: uuid.UUID, admin: Admin, use_case: Annotated[RegenerateTableQr, Depends(get_regenerate_table_qr)]
+) -> TableOut | JSONResponse:
+    try:
+        table = await use_case.execute(admin.tenant_id, table_id)
+    except TableNotFound:
+        return _not_found()
+    return _out(table)

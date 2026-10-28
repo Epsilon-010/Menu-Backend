@@ -3,6 +3,7 @@ from typing import NoReturn
 from app.modules.auth.application.session_issuer import AuthSession, SessionIssuer
 from app.modules.auth.domain.errors import InvalidRefreshToken
 from app.modules.auth.domain.refresh_token import RefreshToken, RefreshTokenCodec, RefreshTokenRepository
+from app.modules.orders.application.guests import GetActiveGuest
 from app.modules.staff.application.find_user import GetUser
 from app.modules.tables.application.find_table import GetTable
 from app.shared.domain.ports import Clock, UnitOfWork
@@ -21,6 +22,7 @@ class RefreshSession:
         codec: RefreshTokenCodec,
         get_user: GetUser,
         get_table: GetTable,
+        get_guest: GetActiveGuest,
         sessions: SessionIssuer,
         clock: Clock,
         uow: UnitOfWork,
@@ -29,6 +31,7 @@ class RefreshSession:
         self._codec = codec
         self._get_user = get_user
         self._get_table = get_table
+        self._get_guest = get_guest
         self._sessions = sessions
         self._clock = clock
         self._uow = uow
@@ -52,6 +55,13 @@ class RefreshSession:
                 await self._revoke_family_and_reject(token)
             await self._rotate(token)
             session = await self._sessions.issue_for_table(table, family_id=token.family_id)
+        elif token.guest_id is not None:
+            # A paid or closed bill, a new QR or the visit limit ends the guest: the refresh dies with it.
+            guest = await self._get_guest.execute(token.tenant_id, token.guest_id)
+            if guest is None:
+                await self._revoke_family_and_reject(token)
+            await self._rotate(token)
+            session = await self._sessions.issue_for_guest(guest, family_id=token.family_id)
         elif token.user_id is not None:
             user = await self._get_user.execute(token.tenant_id, token.user_id)
             if user is None or not user.is_active or user.session_version != token.session_version:

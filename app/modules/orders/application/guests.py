@@ -38,15 +38,16 @@ class JoinTable:
 
 
 class GetActiveGuest:
-    """The guest while their visit lasts (active and on the table's open bill), else None."""
+    """The guest while their visit lasts (not ended, within the time limit, on the table's open bill), else None."""
 
-    def __init__(self, bills: BillRepository, guests: GuestRepository) -> None:
+    def __init__(self, bills: BillRepository, guests: GuestRepository, clock: Clock) -> None:
         self._bills = bills
         self._guests = guests
+        self._clock = clock
 
     async def execute(self, tenant_id: uuid.UUID, guest_id: uuid.UUID) -> Guest | None:
         guest = await self._guests.get(tenant_id, guest_id)
-        if guest is None or not guest.is_active:
+        if guest is None or not guest.is_active_at(self._clock.now()):
             return None
         bill = await self._bills.get_open(tenant_id, guest.table_id)
         return guest if bill is not None and bill.id == guest.bill_id else None

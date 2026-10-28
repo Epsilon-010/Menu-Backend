@@ -21,6 +21,7 @@ from app.modules.tenants.application.get_tenant import GetTenant
 from app.modules.tenants.domain.tenant import Tenant
 from app.shared.domain.principal import Principal, Role
 from tests.unit.fakes import (
+    NoActiveGuests,
     FakeAccessRevocations,
     FakeClock,
     FakeLoginAttemptLimiter,
@@ -49,6 +50,7 @@ class FakeAccessTokens:
         *,
         session_version: int,
         table_id: uuid.UUID | None = None,
+        bill_id: uuid.UUID | None = None,
     ) -> IssuedAccessToken:
         token = f"access:{subject_id}:{tenant_id}:{role}" + (f":{table_id}" if table_id is not None else "")
         if session_version != 1:
@@ -128,6 +130,7 @@ class World:
             self.codec,
             GetUser(self.users),
             GetTable(self.tables),
+            NoActiveGuests(),  # type: ignore[arg-type]
             self.sessions,
             self.clock,
             self.uow,
@@ -137,7 +140,9 @@ class World:
         return Logout(self.refresh_tokens, self.codec, self.clock, self.uow)
 
     def current_account(self) -> GetCurrentAccount:
-        return GetCurrentAccount(GetUser(self.users), GetTable(self.tables), GetTenant(self.tenants))
+        return GetCurrentAccount(
+            GetUser(self.users), GetTable(self.tables), GetTenant(self.tenants), NoActiveGuests()  # type: ignore[arg-type]
+        )
 
 
 @pytest.fixture

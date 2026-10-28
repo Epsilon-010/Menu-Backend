@@ -12,11 +12,13 @@ _REFRESH_TOKEN_TTL = {
     Role.WAITER: timedelta(hours=12),
     Role.KITCHEN: timedelta(hours=12),
     Role.TABLE: timedelta(days=30),
+    # Never past the guest's visit limit either: see SessionIssuer.issue_for_guest.
+    Role.GUEST: timedelta(hours=12),
 }
 
 
 def refresh_token_ttl(role: Role) -> timedelta:
-    """Admin: 7 days; waiter and kitchen: one 12-hour shift; table devices: 30 days."""
+    """Admin: 7 days; waiter and kitchen: one 12-hour shift; table devices: 30 days; QR guests: 12 hours."""
     return _REFRESH_TOKEN_TTL[role]
 
 
@@ -29,7 +31,7 @@ class RefreshToken:
     """
 
     tenant_id: uuid.UUID
-    # Exactly one of them: the staff member or the table device the session belongs to.
+    # Exactly one of user_id, table_id and guest_id: the staff member, table device or QR guest it belongs to.
     user_id: uuid.UUID | None
     family_id: uuid.UUID
     token_hash: str
@@ -40,11 +42,12 @@ class RefreshToken:
     table_id: uuid.UUID | None = None
     # The owner's session version when it was issued; a credential change makes it stale.
     session_version: int = 1
+    guest_id: uuid.UUID | None = None
     id: uuid.UUID = field(default_factory=uuid.uuid4)
 
     def __post_init__(self) -> None:
-        if (self.user_id is None) == (self.table_id is None):
-            raise ValueError("A refresh token belongs to exactly one user or table")
+        if sum(owner is not None for owner in (self.user_id, self.table_id, self.guest_id)) != 1:
+            raise ValueError("A refresh token belongs to exactly one user, table or guest")
 
     def is_expired(self, now: datetime) -> bool:
         return now >= self.expires_at

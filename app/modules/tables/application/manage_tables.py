@@ -18,6 +18,7 @@ from app.modules.tables.domain.table import (
     SessionRevoker,
     Table,
     TableCredentials,
+    TableGuests,
     TableRepository,
     validate_table_name,
 )
@@ -76,7 +77,9 @@ class CreateTable:
         pin = self._credentials.new_pin()
         pin_hash = await self._hasher.hash(pin)
         for _ in range(_MAX_CODE_ATTEMPTS):
-            table = Table.create(tenant_id, name, await self._unused_code(), pin_hash, table_id)
+            table = Table.create(
+                tenant_id, name, await self._unused_code(), pin_hash, table_id, self._credentials.new_qr_token()
+            )
             try:
                 await self._tables.add(table)
             except TableCodeTaken:
@@ -103,11 +106,13 @@ class ListTables:
 
 
 class UpdateTable:
-    """Renames or (de)activates. Deactivating ends every session of the table's device right away."""
+    """Renames or (de)activates. Deactivating ends every session of the table's device and every guest
+    who joined it by QR right away."""
 
-    def __init__(self, tables: TableRepository, sessions: SessionRevoker, uow: UnitOfWork) -> None:
+    def __init__(self, tables: TableRepository, sessions: SessionRevoker, guests: TableGuests, uow: UnitOfWork) -> None:
         self._tables = tables
         self._sessions = sessions
+        self._guests = guests
         self._uow = uow
 
     async def execute(
@@ -124,9 +129,11 @@ class UpdateTable:
         await self._tables.update(updated)
         if deactivated:
             await self._sessions.revoke_all(tenant_id, table_id)
+            await self._guests.end_all(tenant_id, table_id)
         await self._uow.commit()
         if deactivated:
             await self._sessions.end_access(table_id, updated.session_version)
+            await self._guests.end_access()
         return updated
 
 
@@ -157,3 +164,25 @@ class RegenerateTablePin:
         await self._uow.commit()
         await self._sessions.end_access(table_id, updated.session_version)
         return TableWithPin(table=updated, pin=pin)
+
+
+class RegenerateTableQr:
+    """Prints a new QR for the table: the old one stops letting anyone in, and every guest who joined
+    with it is signed out (the tablet is not)."""
+
+    def __init__(
+        self, tables: TableRepository, credentials: TableCredentials, guests: TableGuests, uow: UnitOfWork
+    ) -> None:
+        self._tables = tables
+        self._credentials = credentials
+        self._guests = guests
+        self._uow = uow
+
+    async def execute(self, tenant_id: uuid.UUID, table_id: uuid.UUID) -> Table:
+        table = await _get_table(self._tables, tenant_id, table_id)
+        updated = replace(table, qr_token=self._credentials.new_qr_token())
+        await self._tables.update(updated)
+        await self._guests.end_all(tenant_id, table_id)
+        await self._uow.commit()
+        await self._guests.end_access()
+        return updated

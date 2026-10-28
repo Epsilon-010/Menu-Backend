@@ -105,7 +105,7 @@ async def authorize(ctx: Ordering, diner: Diner, *, lock: bool) -> Visit:
     guest = await ctx.guests.get(diner.tenant_id, diner.guest_id)
     if (
         guest is None
-        or not guest.is_active
+        or not guest.is_active_at(ctx.clock.now())
         or guest.table_id != diner.table_id
         or bill is None
         or guest.bill_id != bill.id

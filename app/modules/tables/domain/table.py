@@ -30,6 +30,8 @@ class Table:
     The code is generated once and never changes; the PIN is only stored as a hash.
     `session_version` goes up whenever the device must be signed out (new PIN, deactivation): every
     session token carries the version it was issued for, so an older one is rejected.
+    `qr_token` is the random part of the table's QR (`/q/<token>`): it only says which table a guest
+    scans, it is printed on the table, and it lets nobody in while the table has no open bill.
     """
 
     tenant_id: uuid.UUID
@@ -38,11 +40,18 @@ class Table:
     pin_hash: str
     is_active: bool = True
     session_version: int = 1
+    qr_token: str | None = None
     id: uuid.UUID = field(default_factory=uuid.uuid4)
 
     @classmethod
     def create(
-        cls, tenant_id: uuid.UUID, name: str, code: str, pin_hash: str, table_id: uuid.UUID | None = None
+        cls,
+        tenant_id: uuid.UUID,
+        name: str,
+        code: str,
+        pin_hash: str,
+        table_id: uuid.UUID | None = None,
+        qr_token: str | None = None,
     ) -> "Table":
         """`table_id` comes from the client to make the create idempotent; None generates one."""
         return cls(
@@ -50,6 +59,7 @@ class Table:
             name=validate_table_name(name),
             code=normalize_table_code(code),
             pin_hash=pin_hash,
+            qr_token=qr_token,
             id=table_id or uuid.uuid4(),
         )
 
@@ -86,6 +96,10 @@ class TableRepository(Protocol):
         """Platform-wide lookup, used only by the device login before any tenant is known."""
         ...
 
+    async def get_by_qr_token(self, qr_token: str) -> Table | None:
+        """Platform-wide lookup, used only by the QR sign-in before any tenant is known."""
+        ...
+
     async def get_by_name(self, tenant_id: uuid.UUID, name: str) -> Table | None:
         """Case-insensitive match inside the tenant."""
         ...
@@ -104,6 +118,8 @@ class TableCredentials(Protocol):
 
     def new_pin(self) -> str: ...
 
+    def new_qr_token(self) -> str: ...
+
 
 class SessionRevoker(Protocol):
     """Port: ends every session of a table right away (implemented by the auth module).
@@ -116,4 +132,16 @@ class SessionRevoker(Protocol):
     async def end_access(self, table_id: uuid.UUID, session_version: int) -> None:
         """Rejects live access tokens older than `session_version`. Call it after the commit that
         stored that version: before it, a failed commit would leave new logins rejected."""
+        ...
+
+
+class TableGuests(Protocol):
+    """Port: ends the visit of everyone who joined the table by QR (implemented by the orders module)."""
+
+    async def end_all(self, tenant_id: uuid.UUID, table_id: uuid.UUID) -> None:
+        """Ends them in the caller's transaction (it does not commit)."""
+        ...
+
+    async def end_access(self) -> None:
+        """Rejects the live access tokens of the guests `end_all` ended. Call it after the commit."""
         ...
