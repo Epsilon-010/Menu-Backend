@@ -375,3 +375,25 @@ def test_wrong_qrs_are_limited_but_scanning_a_closed_table_never_locks_anyone_ou
     for _ in range(get_settings().login_max_failures_per_client):
         assert scan(guesser, "guessed-token").status_code == 401
     assert scan(guesser, "guessed-token").status_code == 429
+
+
+def test_an_order_id_from_a_previous_visit_is_never_returned_to_the_next_people(
+    new_client: ClientFactory, tenant_a: SeedResult
+) -> None:
+    admin = admin_of(new_client)
+    items = menu_items(admin)
+    table = created(create_table(admin))
+    order_id = str(uuid.uuid4())
+    first_visit = open_table(admin, table)
+    ana = guest_of(new_client, table["qr_token"], "Ana")
+    ok(add(ana, items["pastor"], note="sin cebolla"))
+    ok(submit(ana, cart(ana)["version"], id=order_id), 201)
+    pay(admin, first_visit)
+
+    open_table(admin, table)
+    next_guest = guest_of(new_client, table["qr_token"])
+    ok(add(next_guest, items["suadero"]))
+    replayed = submit(next_guest, cart(next_guest)["version"], id=order_id)
+
+    assert (replayed.status_code, replayed.json()["detail"]) == (409, "That id is already used by something else")
+    assert ok(next_guest.get(ORDERS_URL)) == []

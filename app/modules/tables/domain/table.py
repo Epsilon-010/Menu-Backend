@@ -138,6 +138,11 @@ class SessionRevoker(Protocol):
 class TableGuests(Protocol):
     """Port: ends the visit of everyone who joined the table by QR (implemented by the orders module)."""
 
+    async def lock(self, tenant_id: uuid.UUID, table_id: uuid.UUID) -> None:
+        """Takes the table's visit lock, the one guests and tablets take before writing. Call it before
+        locking or updating the table row: the same order everywhere means no deadlock."""
+        ...
+
     async def end_all(self, tenant_id: uuid.UUID, table_id: uuid.UUID) -> None:
         """Ends them in the caller's transaction (it does not commit)."""
         ...

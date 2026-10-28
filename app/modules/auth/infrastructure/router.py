@@ -22,6 +22,7 @@ from app.modules.auth.infrastructure.refresh_tokens import OpaqueRefreshTokenCod
 from app.modules.orders.application.guests import GetActiveGuest, JoinTable
 from app.modules.orders.domain.errors import InvalidOrderData, TableNotOpen
 from app.modules.orders.domain.model import MAX_GUEST_NAME_LENGTH
+from app.modules.orders.infrastructure.adapters import TablesModule
 from app.modules.orders.infrastructure.repository import (
     PostgresTableLocks,
     SqlAlchemyBillRepository,
@@ -176,7 +177,11 @@ def get_qr_login(request: Request, session: SessionDep) -> QrLogin:
     return QrLogin(
         FindTableByQrToken(SqlAlchemyTableRepository(session)),
         JoinTable(
-            PostgresTableLocks(session), SqlAlchemyBillRepository(session), SqlAlchemyGuestRepository(session), SystemClock()
+            PostgresTableLocks(session),
+            TablesModule(session),
+            SqlAlchemyBillRepository(session),
+            SqlAlchemyGuestRepository(session),
+            SystemClock(),
         ),
         _login_limiter(request),
         _session_issuer(request, session),

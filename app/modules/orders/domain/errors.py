@@ -14,6 +14,10 @@ class TableNotOpen(Exception):
     """A guest tried to join, or act on, a table whose bill is closed (or was never opened)."""
 
 
+class QrNotValid(Exception):
+    """The QR is not (or no longer) the table's: it was replaced, or the table was deactivated."""
+
+
 class DinerNotAllowed(Exception):
     """The guest's visit has ended or the tablet was signed out: nothing more can be ordered."""
 

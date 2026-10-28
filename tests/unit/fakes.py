@@ -456,6 +456,10 @@ class FakeTableGuests:
     def __init__(self) -> None:
         self.ended: list[tuple[uuid.UUID, uuid.UUID]] = []
         self.access_ended = 0
+        self.locked: list[uuid.UUID] = []
+
+    async def lock(self, tenant_id: uuid.UUID, table_id: uuid.UUID) -> None:
+        self.locked.append(table_id)
 
     async def end_all(self, tenant_id: uuid.UUID, table_id: uuid.UUID) -> None:
         self.ended.append((tenant_id, table_id))

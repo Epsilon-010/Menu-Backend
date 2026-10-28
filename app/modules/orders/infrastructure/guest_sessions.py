@@ -26,10 +26,14 @@ class RevokedGuestAccess:
 class TableGuestSessions:
     """Adapter of the tables `TableGuests` port: ends in the caller's transaction, revokes after its commit."""
 
-    def __init__(self, end_guests: EndTableGuests, access: RevokedGuestAccess) -> None:
+    def __init__(self, locks: PostgresTableLocks, end_guests: EndTableGuests, access: RevokedGuestAccess) -> None:
+        self._locks = locks
         self._end_guests = end_guests
         self._access = access
         self._ended: list[uuid.UUID] = []
+
+    async def lock(self, tenant_id: uuid.UUID, table_id: uuid.UUID) -> None:
+        await self._locks.lock(tenant_id, table_id)
 
     async def end_all(self, tenant_id: uuid.UUID, table_id: uuid.UUID) -> None:
         self._ended += await self._end_guests.execute(tenant_id, table_id)
@@ -41,7 +45,9 @@ class TableGuestSessions:
 
 def table_guest_sessions(request: Request, session: AsyncSession) -> TableGuestSessions:
     """Runs in the caller's transaction (`session`); the caller commits."""
+    locks = PostgresTableLocks(session)
     return TableGuestSessions(
-        EndTableGuests(PostgresTableLocks(session), SqlAlchemyGuestRepository(session), SystemClock()),
+        locks,
+        EndTableGuests(locks, SqlAlchemyGuestRepository(session), SystemClock()),
         RevokedGuestAccess(request.app.state.access_revocations),
     )

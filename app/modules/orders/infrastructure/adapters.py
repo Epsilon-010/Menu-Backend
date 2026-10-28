@@ -45,7 +45,9 @@ class TablesModule:
         table = await self._get.execute(tenant_id, table_id)
         if table is None:
             return None
-        return TableInfo(name=table.name, is_active=table.is_active, session_version=table.session_version)
+        return TableInfo(
+            name=table.name, is_active=table.is_active, session_version=table.session_version, qr_token=table.qr_token
+        )
 
     async def list_active(self, tenant_id: uuid.UUID) -> list[tuple[uuid.UUID, str]]:
         return [(table.id, table.name) for table in await self._list.execute(tenant_id) if table.is_active]

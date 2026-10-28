@@ -164,8 +164,10 @@ class AddCartLine:
                 item_id, quantity, note
             ):
                 return await _cart_view(ctx, diner)
+            if existing is None and await ctx.carts.line_sent_by_table(diner.tenant_id, diner.table_id, line_id):
+                # Someone sent the cart before this repeat arrived: the line is in that order, never added twice.
+                return await _cart_view(ctx, diner)
             if existing is not None or await ctx.carts.line_exists_anywhere(line_id):
-                # Also a line already sent in an order: answered as a clash, never added twice.
                 raise OrderIdTaken(line_id)
 
         item = (await ctx.menu.orderable(diner.tenant_id, {item_id})).get(item_id)
@@ -238,7 +240,8 @@ class SubmitCart:
         visit = await authorize(ctx, diner, lock=True)
         if order_id is not None:
             existing = await ctx.orders.get(diner.tenant_id, order_id)
-            if existing is not None and existing.table_id == diner.table_id:
+            same_visit = visit.bill is None or (existing is not None and existing.bill_id == visit.bill.id)
+            if existing is not None and existing.table_id == diner.table_id and same_visit:
                 return existing
             if existing is not None or await ctx.orders.exists_anywhere(order_id):
                 raise OrderIdTaken(order_id)

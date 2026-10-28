@@ -140,9 +140,12 @@ def test_repeating_a_send_with_its_id_returns_the_same_order(new_client: ClientF
     again = ok(submit(tablet, version, id=order_id), 201)
 
     assert again == first
-    # The line was sent in that order: repeating its add now must not put it in the next round.
-    assert add(tablet, items["pastor"], id=line_id).status_code == 409
+    # The line was sent in that order: a late repeat of its add answers the cart and adds nothing.
+    assert ok(add(tablet, items["pastor"], id=line_id))["lines"] == []
     assert cart(tablet)["lines"] == []
+    # The same line id from another table is a clash, never a replay.
+    other = tablet_of(new_client, created(create_table(admin, "Mesa 9")))
+    assert add(other, items["pastor"], id=line_id).status_code == 409
 
 
 def test_prices_always_come_from_the_menu_at_the_moment_of_sending(

@@ -118,6 +118,8 @@ class UpdateTable:
     async def execute(
         self, tenant_id: uuid.UUID, table_id: uuid.UUID, name: str | None = None, is_active: bool | None = None
     ) -> Table:
+        # Visit lock before the row lock (see TableGuests.lock): deactivating ends the guests.
+        await self._guests.lock(tenant_id, table_id)
         table = await _get_table(self._tables, tenant_id, table_id)
         updated = table.with_changes(name=name, is_active=is_active)
         if updated.name != table.name:
@@ -179,6 +181,9 @@ class RegenerateTableQr:
         self._uow = uow
 
     async def execute(self, tenant_id: uuid.UUID, table_id: uuid.UUID) -> Table:
+        # Visit lock before the row lock (see TableGuests.lock); a scan of the old QR waiting on it
+        # re-checks the token once it gets it.
+        await self._guests.lock(tenant_id, table_id)
         table = await _get_table(self._tables, tenant_id, table_id)
         updated = replace(table, qr_token=self._credentials.new_qr_token())
         await self._tables.update(updated)

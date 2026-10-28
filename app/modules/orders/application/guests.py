@@ -3,25 +3,35 @@
 
 import uuid
 
-from app.modules.orders.domain.errors import TableNotOpen
+from app.modules.orders.domain.errors import QrNotValid, TableNotOpen
 from app.modules.orders.domain.model import Guest, validate_guest_name
-from app.modules.orders.domain.ports import BillRepository, GuestRepository, TableLocks
+from app.modules.orders.domain.ports import BillRepository, GuestRepository, TableLocks, Tables
 from app.shared.domain.ports import Clock
 
 
 class JoinTable:
-    """Adds a guest to the table's open bill; raises TableNotOpen when the waiter has not opened it."""
+    """Adds a guest to the table's open bill; raises TableNotOpen when the waiter has not opened it and
+    QrNotValid when the scanned QR is no longer the table's."""
 
-    def __init__(self, locks: TableLocks, bills: BillRepository, guests: GuestRepository, clock: Clock) -> None:
+    def __init__(
+        self, locks: TableLocks, tables: Tables, bills: BillRepository, guests: GuestRepository, clock: Clock
+    ) -> None:
         self._locks = locks
+        self._tables = tables
         self._bills = bills
         self._guests = guests
         self._clock = clock
 
-    async def execute(self, tenant_id: uuid.UUID, table_id: uuid.UUID, name: str | None = None) -> Guest:
+    async def execute(
+        self, tenant_id: uuid.UUID, table_id: uuid.UUID, qr_token: str, name: str | None = None
+    ) -> Guest:
         name = validate_guest_name(name)
-        # Same lock as paying: a guest never joins a bill that is being closed.
+        # Same lock as paying, a new QR and deactivating: a guest never joins a visit being ended.
         await self._locks.lock(tenant_id, table_id)
+        # Checked again under the lock: the QR may have been replaced while this scan waited for it.
+        table = await self._tables.get(tenant_id, table_id)
+        if table is None or not table.is_active or table.qr_token != qr_token:
+            raise QrNotValid(table_id)
         bill = await self._bills.get_open(tenant_id, table_id)
         if bill is None:
             raise TableNotOpen(table_id)

@@ -46,6 +46,10 @@ class CartRepository(Protocol):
 
     async def line_exists_anywhere(self, line_id: uuid.UUID) -> bool: ...
 
+    async def line_sent_by_table(self, tenant_id: uuid.UUID, table_id: uuid.UUID, line_id: uuid.UUID) -> bool:
+        """Whether this table already sent the line in one of its orders (the order item keeps its id)."""
+        ...
+
     async def add_line(self, line: CartLine) -> None: ...
 
     async def update_line(self, line: CartLine) -> None: ...
@@ -93,6 +97,7 @@ class TableInfo:
     name: str
     is_active: bool
     session_version: int
+    qr_token: str | None = None
 
 
 class Tables(Protocol):
