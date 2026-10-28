@@ -1,8 +1,9 @@
-"""Server-Sent Events for a table: everyone at it hears that the cart or its orders changed.
+"""Server-Sent Events from the tenant's order stream (`orders:{tenant_id}`).
 
-Events carry no data beyond their kind and the new cart version; the client reloads from the API,
-which is the source of truth (and re-checks the visit). A stream lasts at most a few minutes, so a
-guest whose visit ended is cut off on the next reconnect, when their session is checked again.
+A table hears that its cart or its orders changed; the staff hear that orders and bills changed. Events
+carry no data beyond their kind and a few ids (never prices); clients reload from the API, which is the
+source of truth (and re-checks who may see what). A stream lasts at most a few minutes, so a session
+that ended is cut off on the next reconnect, when it is checked again.
 """
 
 import asyncio
@@ -10,7 +11,7 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
@@ -23,6 +24,11 @@ BLOCK_MS = 15_000
 STREAM_SECONDS = 300.0
 # Ends a guest's stream: their visit is over (the client then finds its session ended).
 _CLOSING_KINDS = frozenset({"bill.closed"})
+# What the staff hear: never cart changes (they belong to the table) and never prices.
+STAFF_KINDS = frozenset({"order.created", "order.updated", "bill.opened", "bill.closed"})
+
+# Turns a stream entry into the (event, data) to send, or None to skip it.
+Selector = Callable[[dict[str, str]], tuple[str, dict[str, object]] | None]
 
 
 async def _latest_id(redis: Redis, stream: str) -> str:
@@ -36,16 +42,17 @@ def _message(event_id: str, kind: str, data: dict[str, object]) -> str:
     return f"id: {event_id}\nevent: {kind}\ndata: {json.dumps(data)}\n\n"
 
 
-async def table_events(
+async def _events(
     redis: Redis,
     tenant_id: uuid.UUID,
-    table_id: uuid.UUID,
     last_event_id: str | None,
+    select: Selector,
     *,
-    stop_on_close: bool,
+    who: str,
+    stop_on_close: bool = False,
 ) -> AsyncIterator[str]:
-    """Yields the SSE messages of one table from its tenant's stream, starting after `last_event_id`
-    (or from now), for STREAM_SECONDS; a comment every BLOCK_MS keeps proxies from closing an idle one."""
+    """Yields the selected SSE messages of the tenant's stream, starting after `last_event_id` (or from
+    now), for STREAM_SECONDS; a comment every BLOCK_MS keeps proxies from closing an idle one."""
     stream = table_events_stream(tenant_id)
     cursor = last_event_id
     block_ms = BLOCK_MS
@@ -61,7 +68,7 @@ async def table_events(
         except RedisError:
             # One warning per outage, not one every retry of every open stream.
             if not failing:
-                logger.warning("Could not read the events of table %s", table_id, exc_info=True)
+                logger.warning("Could not read the events of %s", who, exc_info=True)
             failing = True
             await asyncio.sleep(2)
             yield ": reconnecting\n\n"
@@ -73,12 +80,48 @@ async def table_events(
         for _stream, entries in batches:
             for event_id, fields in entries:
                 cursor = event_id
-                if fields.get("table_id") != str(table_id):
+                selected = select(fields)
+                if selected is None:
                     continue
-                kind = fields.get("kind", "changed")
-                data: dict[str, object] = {}
-                if "cart_version" in fields:
-                    data["cart_version"] = int(fields["cart_version"])
+                kind, data = selected
                 yield _message(event_id, kind, data)
                 if stop_on_close and kind in _CLOSING_KINDS:
                     return
+
+
+def table_events(
+    redis: Redis,
+    tenant_id: uuid.UUID,
+    table_id: uuid.UUID,
+    last_event_id: str | None,
+    *,
+    stop_on_close: bool,
+) -> AsyncIterator[str]:
+    """Every event of one table (cart, orders, bill), with the new cart version when there is one."""
+
+    def select(fields: dict[str, str]) -> tuple[str, dict[str, object]] | None:
+        if fields.get("table_id") != str(table_id):
+            return None
+        data: dict[str, object] = {}
+        if "cart_version" in fields:
+            data["cart_version"] = int(fields["cart_version"])
+        return fields.get("kind", "changed"), data
+
+    return _events(
+        redis, tenant_id, last_event_id, select, who=f"table {table_id}", stop_on_close=stop_on_close
+    )
+
+
+def staff_events(redis: Redis, tenant_id: uuid.UUID, last_event_id: str | None) -> AsyncIterator[str]:
+    """Order and bill events of every table of the tenant, with the table (and order) they concern."""
+
+    def select(fields: dict[str, str]) -> tuple[str, dict[str, object]] | None:
+        kind = fields.get("kind", "")
+        if kind not in STAFF_KINDS or "table_id" not in fields:
+            return None
+        data: dict[str, object] = {"table_id": fields["table_id"]}
+        if "order_id" in fields:
+            data["order_id"] = fields["order_id"]
+        return kind, data
+
+    return _events(redis, tenant_id, last_event_id, select, who=f"the staff of tenant {tenant_id}")

@@ -316,6 +316,7 @@ def test_a_table_gets_403_on_every_staff_endpoint(kitchen: Kitchen) -> None:
     assert mark(kitchen.tablet, order, order["items"], "ready").status_code == 403
     assert kitchen.tablet.get(SETTINGS_URL).status_code == 403
     assert kitchen.tablet.patch(SETTINGS_URL, json={"late_order_minutes": 5}).status_code == 403
+    assert kitchen.tablet.get("/api/v1/staff/events").status_code == 403
 
 
 def test_the_queues_are_for_their_own_roles(kitchen: Kitchen) -> None:

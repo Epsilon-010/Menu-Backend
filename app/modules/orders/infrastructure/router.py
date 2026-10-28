@@ -68,7 +68,7 @@ from app.modules.orders.domain.model import (
     PaymentMethod,
 )
 from app.modules.orders.infrastructure.adapters import CatalogMenu, RedisTableEvents, TablesModule
-from app.modules.orders.infrastructure.events import table_events
+from app.modules.orders.infrastructure.events import staff_events, table_events
 from app.modules.orders.infrastructure.guest_sessions import RevokedGuestAccess
 from app.modules.orders.infrastructure.repository import (
     PostgresTableLocks,
@@ -466,7 +466,8 @@ async def table_events_stream(
     request: Request,
     last_event_id: Annotated[str | None, Header()] = None,
 ) -> Response:
-    """SSE: `cart.updated` (with `cart_version`), `order.created`, `bill.opened` and `bill.closed` for this table.
+    """SSE: `cart.updated` (with `cart_version`), `order.created`, `order.updated`, `bill.opened` and
+    `bill.closed` for this table.
 
     The visit is checked once, in a short transaction, so an open stream never holds a database connection.
     """
@@ -565,3 +566,22 @@ async def change_dish_status(
     )
     return result if isinstance(result, JSONResponse) else _staff_order_out(result)
 
+
+@staff_router.get("/staff/events")
+async def staff_events_stream(
+    staff: AnyStaff,
+    request: Request,
+    last_event_id: Annotated[str | None, Header()] = None,
+) -> Response:
+    """SSE for the kitchen, waiters and admins: `order.created`, `order.updated`, `bill.opened` and
+    `bill.closed` of the tenant, with `{table_id, order_id?}`; never cart changes or prices."""
+    events = staff_events(
+        request.app.state.redis,
+        staff.tenant_id,
+        last_event_id if last_event_id and _STREAM_ID.fullmatch(last_event_id) else None,
+    )
+    return StreamingResponse(
+        events,
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
