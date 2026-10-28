@@ -1,10 +1,11 @@
+import re
 import uuid
 from collections.abc import Awaitable
 from datetime import datetime
 from typing import Annotated, TypeVar
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,6 +27,7 @@ from app.modules.orders.application.ordering import (
     RemoveCartLine,
     SubmitCart,
     UpdateCartLine,
+    authorize,
 )
 from app.modules.orders.domain.errors import (
     BillHasOrders,
@@ -50,6 +52,7 @@ from app.modules.orders.domain.model import (
     PaymentMethod,
 )
 from app.modules.orders.infrastructure.adapters import CatalogMenu, RedisTableEvents, TablesModule
+from app.modules.orders.infrastructure.events import table_events
 from app.modules.orders.infrastructure.guest_sessions import RevokedGuestAccess
 from app.modules.orders.infrastructure.repository import (
     PostgresTableLocks,
@@ -70,6 +73,8 @@ bills_router = APIRouter(prefix="/bills", tags=["bills"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 Staff = Annotated[Principal, Depends(require_role("admin", "waiter"))]
 T = TypeVar("T")
+# Redis stream ids ("<ms>-<seq>"): anything else in Last-Event-ID starts from now.
+_STREAM_ID = re.compile(r"\d{1,20}-\d{1,20}")
 
 
 def _diner(principal: Annotated[Principal, Depends(require_role("table", "guest"))]) -> Diner:
@@ -332,6 +337,36 @@ async def remove_cart_line(line_id: uuid.UUID, diner: DinerDep, ctx: OrderingDep
 async def submit_order(body: SubmitIn, diner: DinerDep, ctx: OrderingDep) -> OrderOut | JSONResponse:
     result = await _run(SubmitCart(ctx).execute(diner, body.cart_version, body.id))
     return result if isinstance(result, JSONResponse) else _order_out(result)
+
+
+@table_router.get("/events")
+async def table_events_stream(
+    diner: DinerDep,
+    request: Request,
+    last_event_id: Annotated[str | None, Header()] = None,
+) -> Response:
+    """SSE: `cart.updated` (with `cart_version`), `order.created`, `bill.opened` and `bill.closed` for this table.
+
+    The visit is checked once, in a short transaction, so an open stream never holds a database connection.
+    """
+    async with request.app.state.session_factory() as session:
+        try:
+            await authorize(get_ordering(request, session), diner, lock=False)
+        except DinerNotAllowed:
+            return problem(status.HTTP_401_UNAUTHORIZED, "Your visit at this table has ended")
+    events = table_events(
+        request.app.state.redis,
+        diner.tenant_id,
+        diner.table_id,
+        last_event_id if last_event_id and _STREAM_ID.fullmatch(last_event_id) else None,
+        stop_on_close=diner.guest_id is not None,
+    )
+    return StreamingResponse(
+        events,
+        media_type="text/event-stream",
+        # Proxies (nginx) must pass each event on at once instead of buffering the response.
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @table_router.get("/orders", response_model=list[OrderOut])
