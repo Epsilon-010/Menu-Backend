@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-from app.modules.orders.domain.model import Bill, Cart, CartLine, Guest, Order
+from app.modules.orders.domain.model import Bill, Cart, CartLine, Guest, Order, OrderItemStatus
 
 
 class TableLocks(Protocol):
@@ -63,6 +63,18 @@ class CartRepository(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class DishChange:
+    """Moves some dishes of one order to `target`, only from `sources`; who did it and when go to the history."""
+
+    item_ids: frozenset[uuid.UUID]
+    sources: frozenset[OrderItemStatus]
+    target: OrderItemStatus
+    changed_by: uuid.UUID
+    at: datetime
+    reason: str | None = None
+
+
 class OrderRepository(Protocol):
     async def add(self, order: Order) -> None: ...
 
@@ -77,6 +89,23 @@ class OrderRepository(Protocol):
     async def next_number(self, tenant_id: uuid.UUID) -> int:
         """The tenant's next display number, assigned atomically."""
         ...
+
+    async def list_with_dishes_in(self, tenant_id: uuid.UUID, statuses: frozenset[OrderItemStatus]) -> list[Order]:
+        """Orders with at least one dish in one of `statuses` (with all their dishes), by number."""
+        ...
+
+    async def change_dishes(self, tenant_id: uuid.UUID, order_id: uuid.UUID, change: DishChange) -> bool:
+        """Applies the change to every dish or to none: one conditional update on the expected states.
+        Returns False (changing nothing) when any dish is not in `change.sources`."""
+        ...
+
+
+class OrderSettingsRepository(Protocol):
+    async def late_order_minutes(self, tenant_id: uuid.UUID) -> int:
+        """The tenant's threshold, or the default when it never set one."""
+        ...
+
+    async def set_late_order_minutes(self, tenant_id: uuid.UUID, minutes: int) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -120,4 +149,11 @@ class TableEvents(Protocol):
     """Port: tells everyone at a table (and staff) that something changed. Call it after the commit;
     a lost event only delays the update until the next poll."""
 
-    async def publish(self, tenant_id: uuid.UUID, table_id: uuid.UUID, kind: str, cart_version: int | None = None) -> None: ...
+    async def publish(
+        self,
+        tenant_id: uuid.UUID,
+        table_id: uuid.UUID,
+        kind: str,
+        cart_version: int | None = None,
+        order_id: uuid.UUID | None = None,
+    ) -> None: ...

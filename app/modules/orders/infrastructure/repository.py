@@ -6,6 +6,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.orders.domain.model import (
+    DEFAULT_LATE_ORDER_MINUTES,
     Bill,
     Cart,
     CartLine,
@@ -15,16 +16,19 @@ from app.modules.orders.domain.model import (
     OrderItemStatus,
     PaymentMethod,
 )
+from app.modules.orders.domain.ports import DishChange
 from app.modules.orders.infrastructure.models import (
     BillModel,
     CartLineModel,
     CartModel,
     GuestModel,
     OrderCounterModel,
+    OrderItemChangeModel,
     OrderItemModel,
     OrderModel,
+    OrderSettingsModel,
 )
-from app.shared.infrastructure.database import advisory_xact_lock
+from app.shared.infrastructure.database import advisory_xact_lock, affected_rows
 
 
 class PostgresTableLocks:
@@ -275,6 +279,7 @@ class SqlAlchemyOrderRepository:
                 added_by=item.added_by,
                 status=item.status.value,
                 position=position,
+                updated_at=item.updated_at or order.created_at,
             )
             for position, item in enumerate(order.items)
         )
@@ -295,6 +300,8 @@ class SqlAlchemyOrderRepository:
             select(OrderItemModel)
             .where(OrderItemModel.tenant_id == tenant_id, OrderItemModel.order_id.in_([m.id for m in models]))
             .order_by(OrderItemModel.position)
+            # Status changes are bulk updates: never answer from stale objects of this session.
+            .execution_options(populate_existing=True)
         ):
             items.setdefault(item.order_id, []).append(
                 OrderItem(
@@ -306,6 +313,9 @@ class SqlAlchemyOrderRepository:
                     note=item.note,
                     added_by=item.added_by,
                     status=OrderItemStatus(item.status),
+                    ready_at=item.ready_at,
+                    updated_at=item.updated_at,
+                    cancel_reason=item.cancel_reason,
                 )
             )
         return [
@@ -342,3 +352,77 @@ class SqlAlchemyOrderRepository:
             .returning(OrderCounterModel.last_number)
         )
         return int(await self._session.scalar(statement) or 0)
+
+    async def list_with_dishes_in(self, tenant_id: uuid.UUID, statuses: frozenset[OrderItemStatus]) -> list[Order]:
+        with_dishes = select(OrderItemModel.order_id).where(
+            OrderItemModel.tenant_id == tenant_id, OrderItemModel.status.in_([status.value for status in statuses])
+        )
+        return await self._orders(tenant_id, OrderModel.id.in_(with_dishes))
+
+    async def change_dishes(self, tenant_id: uuid.UUID, order_id: uuid.UUID, change: DishChange) -> bool:
+        ids = list(change.item_ids)
+        # Locks the rows (the caller already holds the table lock) and reads where each dish comes from.
+        rows = await self._session.execute(
+            select(OrderItemModel.id, OrderItemModel.status)
+            .where(
+                OrderItemModel.tenant_id == tenant_id,
+                OrderItemModel.order_id == order_id,
+                OrderItemModel.id.in_(ids),
+            )
+            .with_for_update()
+        )
+        previous = {item_id: status for item_id, status in rows.tuples()}
+        values: dict[str, object] = {"status": change.target.value, "updated_at": change.at}
+        if change.target is OrderItemStatus.READY:
+            values["ready_at"] = change.at
+        if change.target is OrderItemStatus.CANCELLED:
+            values["cancel_reason"] = change.reason
+        # The guarantee: only dishes still in an expected state move. Fewer rows than asked means the
+        # caller fails and rolls back, so a batch is all or nothing.
+        result = await self._session.execute(
+            update(OrderItemModel)
+            .where(
+                OrderItemModel.tenant_id == tenant_id,
+                OrderItemModel.order_id == order_id,
+                OrderItemModel.id.in_(ids),
+                OrderItemModel.status.in_([status.value for status in change.sources]),
+            )
+            .values(**values)
+            .execution_options(synchronize_session=False)
+        )
+        if affected_rows(result) != len(ids):
+            return False
+        self._session.add_all(
+            OrderItemChangeModel(
+                tenant_id=tenant_id,
+                order_item_id=item_id,
+                from_status=previous[item_id],
+                to_status=change.target.value,
+                changed_by=change.changed_by,
+                changed_at=change.at,
+                reason=change.reason,
+            )
+            for item_id in ids
+        )
+        await self._session.flush()
+        return True
+
+
+class SqlAlchemyOrderSettingsRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def late_order_minutes(self, tenant_id: uuid.UUID) -> int:
+        minutes = await self._session.scalar(
+            select(OrderSettingsModel.late_order_minutes).where(OrderSettingsModel.tenant_id == tenant_id)
+        )
+        return DEFAULT_LATE_ORDER_MINUTES if minutes is None else int(minutes)
+
+    async def set_late_order_minutes(self, tenant_id: uuid.UUID, minutes: int) -> None:
+        await self._session.execute(
+            insert(OrderSettingsModel)
+            .values(tenant_id=tenant_id, late_order_minutes=minutes)
+            .on_conflict_do_update(
+                index_elements=[OrderSettingsModel.tenant_id], set_={"late_order_minutes": minutes}
+            )
+        )
