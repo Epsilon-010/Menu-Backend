@@ -125,6 +125,9 @@ class InMemoryTableRepository:
     async def get_by_code(self, code: str) -> Table | None:
         return next((table for table in self.tables.values() if table.code == code), None)
 
+    async def get_by_qr_token(self, qr_token: str) -> Table | None:
+        return next((table for table in self.tables.values() if table.qr_token == qr_token), None)
+
     async def get_by_name(self, tenant_id: uuid.UUID, name: str) -> Table | None:
         return next(
             (
@@ -150,6 +153,7 @@ class FakeTableCredentials:
         self.codes = list(codes or [])
         self.issued_codes = 0
         self.issued_pins = 0
+        self.issued_qr_tokens = 0
 
     def new_code(self) -> str:
         if self.codes:
@@ -160,6 +164,10 @@ class FakeTableCredentials:
     def new_pin(self) -> str:
         self.issued_pins += 1
         return f"{self.issued_pins:06d}"
+
+    def new_qr_token(self) -> str:
+        self.issued_qr_tokens += 1
+        return f"qr-token-{self.issued_qr_tokens}"
 
 
 def _by_position(entity: Category | Item) -> tuple[int, str]:
@@ -441,3 +449,27 @@ class FakeLoginAttemptLimiter:
 
     async def succeeded(self, account: str, client: str) -> None:
         self.succeeded_logins.append((account, client))
+
+class FakeTableGuests:
+    """Records which tables had their QR guests ended, and when their access was revoked."""
+
+    def __init__(self) -> None:
+        self.ended: list[tuple[uuid.UUID, uuid.UUID]] = []
+        self.access_ended = 0
+        self.locked: list[uuid.UUID] = []
+
+    async def lock(self, tenant_id: uuid.UUID, table_id: uuid.UUID) -> None:
+        self.locked.append(table_id)
+
+    async def end_all(self, tenant_id: uuid.UUID, table_id: uuid.UUID) -> None:
+        self.ended.append((tenant_id, table_id))
+
+    async def end_access(self) -> None:
+        self.access_ended += 1
+
+
+class NoActiveGuests:
+    """Stands in for GetActiveGuest where no QR guest takes part."""
+
+    async def execute(self, tenant_id: uuid.UUID, guest_id: uuid.UUID) -> None:
+        return None

@@ -26,6 +26,7 @@ class JoseAccessTokens:
         *,
         session_version: int,
         table_id: uuid.UUID | None = None,
+        bill_id: uuid.UUID | None = None,
     ) -> IssuedAccessToken:
         expires_at = now + ACCESS_TOKEN_TTL
         claims: dict[str, Any] = {
@@ -41,6 +42,8 @@ class JoseAccessTokens:
         }
         if table_id is not None:
             claims["table_id"] = str(table_id)
+        if bill_id is not None:
+            claims["bill_id"] = str(bill_id)
         return IssuedAccessToken(token=jwt.encode(claims, self._secret, algorithm=_ALGORITHM), expires_at=expires_at)
 
     def decode(self, token: str) -> Principal:
@@ -50,7 +53,12 @@ class JoseAccessTokens:
                 raise InvalidAccessToken()
             role = Role(claims["role"])
             table_id = claims.get("table_id")
-            if role is Role.TABLE and not table_id:
+            bill_id = claims.get("bill_id")
+            at_a_table = role in (Role.TABLE, Role.GUEST)
+            if at_a_table and not table_id:
+                raise InvalidAccessToken()
+            # A guest is always bound to the visit (bill) they joined.
+            if role is Role.GUEST and not bill_id:
                 raise InvalidAccessToken()
             session_version = claims["sv"]
             if type(session_version) is not int or session_version < 1:
@@ -59,7 +67,8 @@ class JoseAccessTokens:
                 subject_id=uuid.UUID(claims["sub"]),
                 tenant_id=uuid.UUID(claims["tenant_id"]),
                 role=role,
-                table_id=uuid.UUID(table_id) if role is Role.TABLE else None,
+                table_id=uuid.UUID(table_id) if at_a_table else None,
+                bill_id=uuid.UUID(bill_id) if role is Role.GUEST else None,
                 issued_at=datetime.fromtimestamp(float(claims["iat"]), UTC),
                 session_version=session_version,
             )

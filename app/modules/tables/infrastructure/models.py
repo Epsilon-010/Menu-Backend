@@ -22,4 +22,6 @@ class TableModel(UUIDPrimaryKey, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, server_default=true())
     # Goes up on every change that must sign the account out; see the entity.
     session_version: Mapped[int] = mapped_column(Integer, server_default=text("1"))
+    # Random part of the table's QR link, unique across tenants like the code; see the entity.
+    qr_token: Mapped[str | None] = mapped_column(String(64), unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

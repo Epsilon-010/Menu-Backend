@@ -10,6 +10,8 @@ class Role(StrEnum):
     WAITER = "waiter"
     KITCHEN = "kitchen"
     TABLE = "table"
+    # Someone who joined an open table by its QR; acts as the table only during that visit.
+    GUEST = "guest"
 
 
 STAFF_ROLES = frozenset({Role.ADMIN, Role.WAITER, Role.KITCHEN})
@@ -42,7 +44,8 @@ class AccessRevocations(Protocol):
 class Principal:
     """Authenticated caller, always taken from the access token (never from the body or URL).
 
-    `subject_id` is the user id for staff roles and the table id for the `table` role.
+    `subject_id` is the user id for staff roles, the table id for the `table` role and the guest id for
+    `guest`, whose `bill_id` is the visit they joined.
     """
 
     subject_id: uuid.UUID
@@ -51,3 +54,4 @@ class Principal:
     table_id: uuid.UUID | None = None
     issued_at: datetime | None = None
     session_version: int = 1
+    bill_id: uuid.UUID | None = None

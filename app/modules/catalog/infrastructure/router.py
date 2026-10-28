@@ -1,5 +1,5 @@
 import uuid
-from collections.abc import Awaitable
+from collections.abc import AsyncIterator, Awaitable
 from typing import Annotated, TypeVar
 
 from fastapi import APIRouter, Depends, Request, Response, status
@@ -33,6 +33,7 @@ from app.modules.catalog.domain.errors import (
     InvalidCatalogData,
     ItemNotFound,
 )
+from app.modules.catalog.infrastructure.menu_router import menu_cache
 from app.modules.catalog.infrastructure.repository import SqlAlchemyCategoryRepository, SqlAlchemyItemRepository
 from app.modules.media.infrastructure.jobs import image_cleanup_scheduler, image_registry
 from app.shared.domain.images import (
@@ -45,10 +46,17 @@ from app.shared.domain.images import (
 )
 from app.shared.domain.principal import Principal
 from app.shared.infrastructure.database import SqlAlchemyUnitOfWork, get_session
-from app.shared.infrastructure.http.auth import require_role
+from app.shared.infrastructure.http.auth import CurrentPrincipal, require_role
 from app.shared.infrastructure.http.problems import problem
 
-router = APIRouter(prefix="/catalog", tags=["catalog"])
+async def _invalidate_menu_after_writes(principal: CurrentPrincipal, request: Request) -> AsyncIterator[None]:
+    """Runs after every catalog route has committed: any write may change what tables see."""
+    yield
+    if request.method not in ("GET", "HEAD"):
+        await menu_cache(request).invalidate(principal.tenant_id)
+
+
+router = APIRouter(prefix="/catalog", tags=["catalog"], dependencies=[Depends(_invalidate_menu_after_writes)])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 Admin = Annotated[Principal, Depends(require_role("admin"))]

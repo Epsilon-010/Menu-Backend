@@ -23,6 +23,10 @@ class RandomTableCredentials:
     def new_pin(self) -> str:
         return "".join(secrets.choice("0123456789") for _ in range(PIN_LENGTH))
 
+    def new_qr_token(self) -> str:
+        # 192 random bits, URL-safe: it goes in the QR's link.
+        return secrets.token_urlsafe(24)
+
 
 def _to_entity(model: TableModel) -> Table:
     return Table(
@@ -33,6 +37,7 @@ def _to_entity(model: TableModel) -> Table:
         pin_hash=model.pin_hash,
         is_active=model.is_active,
         session_version=model.session_version,
+        qr_token=model.qr_token,
     )
 
 
@@ -55,6 +60,7 @@ class SqlAlchemyTableRepository:
             pin_hash=table.pin_hash,
             is_active=table.is_active,
             session_version=table.session_version,
+            qr_token=table.qr_token,
         )
         try:
             # A savepoint: when the random code collides, only this insert rolls back and the use
@@ -94,6 +100,11 @@ class SqlAlchemyTableRepository:
         model = await self._session.scalar(select(TableModel).where(TableModel.code == code))
         return _to_entity(model) if model is not None else None
 
+    async def get_by_qr_token(self, qr_token: str) -> Table | None:
+        # Without a tenant filter, like the code: the QR sign-in runs before any tenant is known.
+        model = await self._session.scalar(select(TableModel).where(TableModel.qr_token == qr_token))
+        return _to_entity(model) if model is not None else None
+
     async def get_by_name(self, tenant_id: uuid.UUID, name: str) -> Table | None:
         model = await self._session.scalar(
             select(TableModel).where(TableModel.tenant_id == tenant_id, func.lower(TableModel.name) == name.lower())
@@ -116,6 +127,7 @@ class SqlAlchemyTableRepository:
                     name=table.name,
                     pin_hash=table.pin_hash,
                     is_active=table.is_active,
+                    qr_token=table.qr_token,
                     # Never lowered, even by a stale copy: that would revive the sessions it ended.
                     session_version=func.greatest(TableModel.session_version, table.session_version),
                 )

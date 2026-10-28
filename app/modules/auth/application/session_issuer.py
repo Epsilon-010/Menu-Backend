@@ -9,6 +9,7 @@ from app.modules.auth.domain.refresh_token import (
     RefreshTokenRepository,
     refresh_token_ttl,
 )
+from app.modules.orders.domain.model import Guest
 from app.modules.staff.domain.user import User
 from app.modules.tables.domain.table import Table
 from app.shared.domain.ports import Clock
@@ -51,6 +52,21 @@ class SessionIssuer:
             table.id, table.tenant_id, Role.TABLE, family_id, table.session_version, table_id=table.id
         )
 
+    async def issue_for_guest(self, guest: Guest, family_id: uuid.UUID | None = None) -> AuthSession:
+        """The guest is the subject; the session acts as their table, only on the bill they joined, and
+        never outlives their visit limit however often it is refreshed."""
+        return await self._issue(
+            guest.id,
+            guest.tenant_id,
+            Role.GUEST,
+            family_id,
+            1,
+            guest_id=guest.id,
+            claim_table_id=guest.table_id,
+            bill_id=guest.bill_id,
+            expires_by=guest.ends_at,
+        )
+
     async def _issue(
         self,
         subject_id: uuid.UUID,
@@ -60,22 +76,34 @@ class SessionIssuer:
         session_version: int,
         user_id: uuid.UUID | None = None,
         table_id: uuid.UUID | None = None,
+        guest_id: uuid.UUID | None = None,
+        claim_table_id: uuid.UUID | None = None,
+        bill_id: uuid.UUID | None = None,
+        expires_by: datetime | None = None,
     ) -> AuthSession:
         now = self._clock.now()
         plain = self._codec.generate()
+        expires_at = now + refresh_token_ttl(role)
         refresh = RefreshToken(
             tenant_id=tenant_id,
             user_id=user_id,
             table_id=table_id,
+            guest_id=guest_id,
             family_id=family_id or uuid.uuid4(),
             token_hash=self._codec.hash(plain),
             created_at=now,
-            expires_at=now + refresh_token_ttl(role),
+            expires_at=min(expires_at, expires_by) if expires_by is not None else expires_at,
             session_version=session_version,
         )
         await self._refresh_tokens.add(refresh)
         access = self._access_tokens.issue(
-            subject_id, tenant_id, role, now, session_version=session_version, table_id=table_id
+            subject_id,
+            tenant_id,
+            role,
+            now,
+            session_version=session_version,
+            table_id=table_id or claim_table_id,
+            bill_id=bill_id,
         )
         return AuthSession(
             access_token=access.token,

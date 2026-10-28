@@ -5,12 +5,13 @@ from typing import Annotated
 
 from fastapi import APIRouter, Cookie, Depends, Request, Response, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.auth.application.get_current_account import GetCurrentAccount
 from app.modules.auth.application.login import Login
 from app.modules.auth.application.logout import Logout
+from app.modules.auth.application.qr_login import QrLogin
 from app.modules.auth.application.refresh_session import RefreshSession
 from app.modules.auth.application.session_issuer import AuthSession, SessionIssuer
 from app.modules.auth.application.table_login import TableLogin
@@ -18,9 +19,18 @@ from app.modules.auth.domain.errors import AccountNotFound, InvalidCredentials, 
 from app.modules.auth.domain.refresh_token import ACCESS_TOKEN_TTL
 from app.modules.auth.infrastructure.rate_limiter import RedisLoginAttemptLimiter
 from app.modules.auth.infrastructure.refresh_tokens import OpaqueRefreshTokenCodec, SqlAlchemyRefreshTokenRepository
+from app.modules.orders.application.guests import GetActiveGuest, JoinTable
+from app.modules.orders.domain.errors import InvalidOrderData, TableNotOpen
+from app.modules.orders.domain.model import MAX_GUEST_NAME_LENGTH
+from app.modules.orders.infrastructure.adapters import TablesModule
+from app.modules.orders.infrastructure.repository import (
+    PostgresTableLocks,
+    SqlAlchemyBillRepository,
+    SqlAlchemyGuestRepository,
+)
 from app.modules.staff.application.find_user import FindUserByLogin, GetUser
 from app.modules.staff.infrastructure.repository import SqlAlchemyUserRepository
-from app.modules.tables.application.find_table import FindTableByCode, GetTable
+from app.modules.tables.application.find_table import FindTableByCode, FindTableByQrToken, GetTable
 from app.modules.tables.infrastructure.repository import SqlAlchemyTableRepository
 from app.modules.tenants.application.get_tenant import GetTenant
 from app.modules.tenants.infrastructure.repository import SqlAlchemyTenantRepository
@@ -55,6 +65,15 @@ class TableLoginRequest(BaseModel):
     pin: str = Field(min_length=1, max_length=20)
 
 
+class QrLoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # The random part of the QR link (`/q/<token>`).
+    token: str = Field(min_length=1, max_length=64)
+    # Shown next to what the guest adds to the shared cart; "Guest N" when left out.
+    name: str | None = Field(default=None, max_length=MAX_GUEST_NAME_LENGTH)
+
+
 class SessionResponse(BaseModel):
     """Both tokens travel only in httpOnly cookies; the body tells the client who it is."""
 
@@ -75,16 +94,22 @@ class TableOut(BaseModel):
     name: str
 
 
+class GuestOut(BaseModel):
+    id: uuid.UUID
+    name: str
+
+
 class TenantOut(BaseModel):
     id: uuid.UUID
     name: str
 
 
 class MeResponse(BaseModel):
-    """Staff accounts get `user`; table devices get `table`. The other one is null."""
+    """Staff accounts get `user`; table devices get `table`; QR guests get `guest` and the `table` they joined."""
 
     user: UserOut | None
     table: TableOut | None
+    guest: GuestOut | None = None
     tenant: TenantOut
 
 
@@ -144,12 +169,33 @@ def get_table_login(request: Request, session: SessionDep) -> TableLogin:
     )
 
 
+def _get_active_guest(session: AsyncSession) -> GetActiveGuest:
+    return GetActiveGuest(SqlAlchemyBillRepository(session), SqlAlchemyGuestRepository(session), SystemClock())
+
+
+def get_qr_login(request: Request, session: SessionDep) -> QrLogin:
+    return QrLogin(
+        FindTableByQrToken(SqlAlchemyTableRepository(session)),
+        JoinTable(
+            PostgresTableLocks(session),
+            TablesModule(session),
+            SqlAlchemyBillRepository(session),
+            SqlAlchemyGuestRepository(session),
+            SystemClock(),
+        ),
+        _login_limiter(request),
+        _session_issuer(request, session),
+        SqlAlchemyUnitOfWork(session),
+    )
+
+
 def get_refresh_session(request: Request, session: SessionDep) -> RefreshSession:
     return RefreshSession(
         SqlAlchemyRefreshTokenRepository(session),
         OpaqueRefreshTokenCodec(),
         GetUser(SqlAlchemyUserRepository(session)),
         GetTable(SqlAlchemyTableRepository(session)),
+        _get_active_guest(session),
         _session_issuer(request, session),
         SystemClock(),
         SqlAlchemyUnitOfWork(session),
@@ -167,6 +213,7 @@ def get_current_account(session: SessionDep) -> GetCurrentAccount:
         GetUser(SqlAlchemyUserRepository(session)),
         GetTable(SqlAlchemyTableRepository(session)),
         GetTenant(SqlAlchemyTenantRepository(session)),
+        _get_active_guest(session),
     )
 
 
@@ -249,6 +296,27 @@ async def table_login(
     return _session_response(response, auth)
 
 
+@router.post("/qr", response_model=SessionResponse)
+async def qr_login(
+    body: QrLoginRequest,
+    request: Request,
+    response: Response,
+    use_case: Annotated[QrLogin, Depends(get_qr_login)],
+) -> SessionResponse | JSONResponse:
+    """A guest who scanned the table's QR joins its open visit (any number of guests per table)."""
+    try:
+        auth = await use_case.execute(body.token, body.name, _client_address(request))
+    except InvalidCredentials:
+        return problem(status.HTTP_401_UNAUTHORIZED, "This QR code is not valid")
+    except TableNotOpen:
+        return problem(status.HTTP_409_CONFLICT, "This table is not open yet; ask your waiter")
+    except InvalidOrderData as error:
+        return problem(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error))
+    except TooManyLoginAttempts as error:
+        return _too_many_attempts(error)
+    return _session_response(response, auth)
+
+
 @router.post("/refresh", response_model=SessionResponse)
 async def refresh(
     response: Response,
@@ -280,11 +348,12 @@ async def me(
         account = await use_case.execute(principal)
     except AccountNotFound:
         return problem(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
-    user, table, tenant = account.user, account.table, account.tenant
+    user, table, guest, tenant = account.user, account.table, account.guest, account.tenant
     return MeResponse(
         user=UserOut(id=user.id, email=user.email, username=user.username, full_name=user.full_name, role=user.role)
         if user is not None
         else None,
         table=TableOut(id=table.id, name=table.name) if table is not None else None,
+        guest=GuestOut(id=guest.id, name=guest.name) if guest is not None else None,
         tenant=TenantOut(id=tenant.id, name=tenant.name),
     )
