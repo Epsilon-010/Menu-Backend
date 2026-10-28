@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, String, Uuid, func, true
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String, Uuid, func, text, true
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.infrastructure.database import Base, UUIDPrimaryKey
@@ -24,4 +24,6 @@ class UserModel(UUIDPrimaryKey, Base):
     role: Mapped[str] = mapped_column(String(20))
     password_hash: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, server_default=true())
+    # Goes up on every change that must sign the account out; see the entity.
+    session_version: Mapped[int] = mapped_column(Integer, server_default=text("1"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

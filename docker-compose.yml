@@ -54,6 +54,9 @@ services:
       CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-menu}:${RABBITMQ_PASSWORD:-menu}@rabbitmq:5672//
       # Bind mounts from Windows/macOS hosts do not emit file events; poll for hot reload.
       WATCHFILES_FORCE_POLLING: "true"
+      # Only the frontend proxy may say who the client is (X-Forwarded-For): login limits count per device,
+      # and a request sent straight to the API port cannot pick its own address.
+      FORWARDED_ALLOW_IPS: ${FRONTEND_IP:-10.213.57.10}
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     ports:
       - "${BACKEND_HOST_PORT:-8020}:8000"
@@ -95,11 +98,22 @@ services:
       VITE_USE_POLLING: "true"
     ports:
       - "${FRONTEND_HOST_PORT:-5173}:5173"
+    networks:
+      default:
+        # Fixed so the backend can trust its X-Forwarded-For (FORWARDED_ALLOW_IPS).
+        ipv4_address: ${FRONTEND_IP:-10.213.57.10}
     volumes:
       - ../Menu-Frontend:/app
       - /app/node_modules
     depends_on:
       - backend
+
+networks:
+  default:
+    ipam:
+      config:
+        # Change COMPOSE_SUBNET and FRONTEND_IP together if this range clashes with another network.
+        - subnet: ${COMPOSE_SUBNET:-10.213.57.0/24}
 
 volumes:
   postgres_data:

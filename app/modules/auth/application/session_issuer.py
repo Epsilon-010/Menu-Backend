@@ -43,11 +43,13 @@ class SessionIssuer:
         self._clock = clock
 
     async def issue(self, user: User, family_id: uuid.UUID | None = None) -> AuthSession:
-        return await self._issue(user.id, user.tenant_id, user.role, family_id, user_id=user.id)
+        return await self._issue(user.id, user.tenant_id, user.role, family_id, user.session_version, user_id=user.id)
 
     async def issue_for_table(self, table: Table, family_id: uuid.UUID | None = None) -> AuthSession:
         """The table is both the token subject and its `table_id` claim."""
-        return await self._issue(table.id, table.tenant_id, Role.TABLE, family_id, table_id=table.id)
+        return await self._issue(
+            table.id, table.tenant_id, Role.TABLE, family_id, table.session_version, table_id=table.id
+        )
 
     async def _issue(
         self,
@@ -55,6 +57,7 @@ class SessionIssuer:
         tenant_id: uuid.UUID,
         role: Role,
         family_id: uuid.UUID | None,
+        session_version: int,
         user_id: uuid.UUID | None = None,
         table_id: uuid.UUID | None = None,
     ) -> AuthSession:
@@ -68,9 +71,12 @@ class SessionIssuer:
             token_hash=self._codec.hash(plain),
             created_at=now,
             expires_at=now + refresh_token_ttl(role),
+            session_version=session_version,
         )
         await self._refresh_tokens.add(refresh)
-        access = self._access_tokens.issue(subject_id, tenant_id, role, now, table_id=table_id)
+        access = self._access_tokens.issue(
+            subject_id, tenant_id, role, now, session_version=session_version, table_id=table_id
+        )
         return AuthSession(
             access_token=access.token,
             access_expires_at=access.expires_at,

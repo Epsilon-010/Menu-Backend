@@ -8,7 +8,7 @@ from app.modules.auth.domain.refresh_token import ACCESS_TOKEN_TTL, IssuedAccess
 from app.shared.domain.principal import InvalidAccessToken, Principal, Role
 
 _ALGORITHM = "HS256"
-_REQUIRED_CLAIMS = ("sub", "tenant_id", "role", "exp", "iat", "jti")
+_REQUIRED_CLAIMS = ("sub", "tenant_id", "role", "exp", "iat", "jti", "sv")
 
 
 class JoseAccessTokens:
@@ -18,7 +18,14 @@ class JoseAccessTokens:
         self._secret = secret
 
     def issue(
-        self, subject_id: uuid.UUID, tenant_id: uuid.UUID, role: Role, now: datetime, table_id: uuid.UUID | None = None
+        self,
+        subject_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        role: Role,
+        now: datetime,
+        *,
+        session_version: int,
+        table_id: uuid.UUID | None = None,
     ) -> IssuedAccessToken:
         expires_at = now + ACCESS_TOKEN_TTL
         claims: dict[str, Any] = {
@@ -29,6 +36,8 @@ class JoseAccessTokens:
             # NumericDate with sub-second precision, compared against session revocations.
             "iat": now.timestamp(),
             "exp": expires_at.timestamp(),
+            # The subject's session version: a credential change makes the token stale.
+            "sv": session_version,
         }
         if table_id is not None:
             claims["table_id"] = str(table_id)
@@ -43,12 +52,16 @@ class JoseAccessTokens:
             table_id = claims.get("table_id")
             if role is Role.TABLE and not table_id:
                 raise InvalidAccessToken()
+            session_version = claims["sv"]
+            if type(session_version) is not int or session_version < 1:
+                raise InvalidAccessToken()
             return Principal(
                 subject_id=uuid.UUID(claims["sub"]),
                 tenant_id=uuid.UUID(claims["tenant_id"]),
                 role=role,
                 table_id=uuid.UUID(table_id) if role is Role.TABLE else None,
                 issued_at=datetime.fromtimestamp(float(claims["iat"]), UTC),
+                session_version=session_version,
             )
         except (JWTError, ValueError, TypeError, OverflowError) as error:
             raise InvalidAccessToken() from error

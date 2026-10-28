@@ -1,5 +1,7 @@
 import asyncio
 import re
+import uuid
+from datetime import UTC, datetime, timedelta
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack
 
@@ -8,7 +10,16 @@ from fastapi.testclient import TestClient
 from httpx import Response
 
 from app.seed import SeedResult
-from tests.integration.modules.auth.test_auth_api import _seed, login, refresh_with, set_cookies
+from tests.integration.modules.auth.test_auth_api import (
+    _seed,
+    claims_for,
+    login,
+    me,
+    refresh_with,
+    set_cookies,
+    sign,
+    unrevoke_refresh_tokens,
+)
 from tests.integration.modules.staff.test_staff_api import STAFF_PASSWORD, STAFF_URL, create_member, member_id
 
 TABLES_URL = "/api/v1/tables"
@@ -233,6 +244,35 @@ def test_regenerating_the_pin_ends_the_device_session_and_only_the_new_pin_works
     if regenerated["pin"] != table["pin"]:
         assert table_login(new_client(), table["code"], table["pin"]).status_code == 401
     assert table_login(new_client(), table["code"], regenerated["pin"]).status_code == 200
+
+
+def test_a_refresh_token_that_escaped_the_pin_change_still_cannot_refresh(
+    new_client: ClientFactory, tenant_a: SeedResult
+) -> None:
+    admin = admin_of(new_client)
+    table = created(create_table(admin))
+    refresh_token = tablet_of(new_client, table).cookies.get("refresh_token")
+
+    assert admin.post(f"{TABLES_URL}/{table['id']}/pin").status_code == 200
+    unrevoke_refresh_tokens(table_id=uuid.UUID(table["id"]))
+
+    assert refresh_with(new_client(), refresh_token).status_code == 401
+
+
+def test_an_access_token_signed_after_the_pin_change_for_the_old_session_is_rejected(
+    new_client: ClientFactory, tenant_a: SeedResult
+) -> None:
+    # A login or refresh that read the table before the change committed can still sign a token after it.
+    admin = admin_of(new_client)
+    table = created(create_table(admin))
+    assert admin.post(f"{TABLES_URL}/{table['id']}/pin").status_code == 200
+
+    def token(session_version: int) -> str:
+        claims = claims_for(uuid.UUID(table["id"]), tenant_a.tenant_id, "table", table_id=table["id"])
+        return sign({**claims, "iat": datetime.now(UTC) + timedelta(seconds=2), "sv": session_version})
+
+    assert me(new_client(), token(1)).status_code == 401
+    assert me(new_client(), token(2)).status_code == 200
 
 
 # --- Tenant isolation --------------------------------------------------------------------------

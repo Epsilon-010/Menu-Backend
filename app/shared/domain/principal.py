@@ -28,12 +28,14 @@ class AccessTokenDecoder(Protocol):
 
 
 class AccessRevocations(Protocol):
-    """Port: access tokens are stateless, so ending a subject's sessions right away also records
-    when it happened; tokens issued at or before that moment are rejected until they expire."""
+    """Port: access tokens are stateless, so ending a subject's sessions right away also records the
+    session version a token needs; older tokens are rejected until they expire on their own."""
 
-    async def revoke(self, subject_id: uuid.UUID, at: datetime) -> None: ...
+    async def require_version(self, subject_id: uuid.UUID, session_version: int) -> None:
+        """Never lowers an already required version."""
+        ...
 
-    async def revoked_since(self, subject_id: uuid.UUID) -> datetime | None: ...
+    async def required_version(self, subject_id: uuid.UUID) -> int | None: ...
 
 
 @dataclass(frozen=True)
@@ -48,3 +50,4 @@ class Principal:
     role: Role
     table_id: uuid.UUID | None = None
     issued_at: datetime | None = None
+    session_version: int = 1

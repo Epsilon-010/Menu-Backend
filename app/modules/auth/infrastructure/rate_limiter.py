@@ -1,35 +1,73 @@
 from redis.asyncio import Redis
 
+# KEYS: client counter, account counter. ARGV: window, client limit, account limit.
+# Returns the seconds to wait when over a limit, else 0. The account counter only moves while the
+# client is within its own limit.
+_ACQUIRE = """
+local function count(key)
+  local value = redis.call('INCR', key)
+  if value == 1 then redis.call('EXPIRE', key, ARGV[1]) end
+  return value
+end
+local function wait(key)
+  local ttl = redis.call('TTL', key)
+  if ttl > 0 then return ttl end
+  return tonumber(ARGV[1])
+end
+if count(KEYS[1]) > tonumber(ARGV[2]) then return wait(KEYS[1]) end
+if count(KEYS[2]) > tonumber(ARGV[3]) then return wait(KEYS[2]) end
+return 0
+"""
+
+# KEYS: client counter, account counter. A successful attempt was counted on both (acquire let it
+# through), so it is taken back from the account; failures from other addresses still count.
+_SUCCEEDED = """
+redis.call('DEL', KEYS[1])
+if tonumber(redis.call('GET', KEYS[2]) or '0') > 0 then redis.call('DECR', KEYS[2]) end
+return 0
+"""
+
 
 class RedisLoginAttemptLimiter:
-    """Fixed-window counter of login attempts per account (user), whatever IP they come from.
+    """Fixed-window counters of login attempts per client (IP) + account, plus a per-account backstop.
 
-    Each attempt is counted *before* the password is checked, with an atomic INCR, so
-    concurrent requests cannot all slip through between a check and an increment. A successful
-    login clears the account's count. The window starts at the first attempt; once the counter
-    goes over the limit, logins for that account are refused until the key expires.
+    A device that keeps failing locks only itself out of that account (`max_per_client`), so nobody
+    can lock a colleague or a tablet out from another device. The higher `max_per_account` caps the
+    guesses from all addresses together, so rotating or spoofing the address never means unlimited
+    attempts. Attempts a client makes while it is already blocked never reach the account counter,
+    so one device retrying in a loop cannot exhaust the backstop for everyone else. Each attempt is
+    counted *before* the password is checked, in one atomic script, so concurrent requests cannot
+    slip through between a check and an increment. A successful login clears that client's count and
+    takes its own attempt back from the account, so signing in often never reaches the backstop;
+    failures from other addresses still count towards it. Each window starts at its first attempt;
+    over a limit, logins are refused until the key expires.
     """
 
-    def __init__(self, redis: Redis, window_seconds: int, max_per_account: int) -> None:
+    def __init__(self, redis: Redis, window_seconds: int, max_per_client: int, max_per_account: int) -> None:
         self._redis = redis
         self._window_seconds = window_seconds
+        self._max_per_client = max_per_client
         self._max_per_account = max_per_account
 
     @staticmethod
-    def _key(account: str) -> str:
+    def _client_key(account: str, client: str) -> str:
+        return f"login:attempts:client:{client}:{account}"
+
+    @staticmethod
+    def _account_key(account: str) -> str:
         return f"login:attempts:account:{account}"
 
-    async def acquire(self, account: str) -> int | None:
-        key = self._key(account)
-        async with self._redis.pipeline(transaction=True) as pipe:
-            pipe.incr(key)
-            pipe.expire(key, self._window_seconds, nx=True)
-            pipe.ttl(key)
-            count, _, ttl = await pipe.execute()
+    async def acquire(self, account: str, client: str) -> int | None:
+        wait = await self._redis.eval(
+            _ACQUIRE,
+            2,
+            self._client_key(account, client),
+            self._account_key(account),
+            self._window_seconds,
+            self._max_per_client,
+            self._max_per_account,
+        )
+        return int(wait) if int(wait) > 0 else None
 
-        if int(count) <= self._max_per_account:
-            return None
-        return ttl if ttl > 0 else self._window_seconds
-
-    async def succeeded(self, account: str) -> None:
-        await self._redis.delete(self._key(account))
+    async def succeeded(self, account: str, client: str) -> None:
+        await self._redis.eval(_SUCCEEDED, 2, self._client_key(account, client), self._account_key(account))

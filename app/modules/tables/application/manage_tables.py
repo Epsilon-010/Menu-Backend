@@ -118,10 +118,15 @@ class UpdateTable:
         if updated.name != table.name:
             await _ensure_name_available(self._tables, tenant_id, updated.name, table_id)
 
+        deactivated = table.is_active and not updated.is_active
+        if deactivated:
+            updated = updated.with_sessions_ended()
         await self._tables.update(updated)
-        if table.is_active and not updated.is_active:
+        if deactivated:
             await self._sessions.revoke_all(tenant_id, table_id)
         await self._uow.commit()
+        if deactivated:
+            await self._sessions.end_access(table_id, updated.session_version)
         return updated
 
 
@@ -145,9 +150,10 @@ class RegenerateTablePin:
     async def execute(self, tenant_id: uuid.UUID, table_id: uuid.UUID) -> TableWithPin:
         table = await _get_table(self._tables, tenant_id, table_id)
         pin = self._credentials.new_pin()
-        updated = replace(table, pin_hash=await self._hasher.hash(pin))
+        updated = replace(table, pin_hash=await self._hasher.hash(pin)).with_sessions_ended()
 
         await self._tables.update(updated)
         await self._sessions.revoke_all(tenant_id, table_id)
         await self._uow.commit()
+        await self._sessions.end_access(table_id, updated.session_version)
         return TableWithPin(table=updated, pin=pin)

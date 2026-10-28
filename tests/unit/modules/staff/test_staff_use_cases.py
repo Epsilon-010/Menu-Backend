@@ -114,9 +114,13 @@ async def test_get_user_is_scoped_to_the_tenant(users: InMemoryUserRepository, u
 class FakeSessionRevoker:
     def __init__(self) -> None:
         self.revoked: list[tuple[uuid.UUID, uuid.UUID]] = []
+        self.access_ended: list[tuple[uuid.UUID, int]] = []
 
     async def revoke_all(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> None:
         self.revoked.append((tenant_id, user_id))
+
+    async def end_access(self, user_id: uuid.UUID, session_version: int) -> None:
+        self.access_ended.append((user_id, session_version))
 
 
 @pytest.fixture
@@ -356,3 +360,43 @@ async def test_staff_creates_of_a_tenant_are_serialized(users: InMemoryUserRepos
 
     # Taken before the replay check, so a concurrent replay waits and then finds the first one.
     assert users.create_locks == [TENANT_A]
+
+
+# --- Session versions --------------------------------------------------------------------------
+
+
+class FailingUnitOfWork(FakeUnitOfWork):
+    async def commit(self) -> None:
+        raise RuntimeError("commit failed")
+
+
+async def test_password_reset_role_change_and_deactivation_bump_the_session_version_and_end_access(
+    users: InMemoryUserRepository, uow: FakeUnitOfWork, sessions: FakeSessionRevoker
+) -> None:
+    member = await add_waiter(users, uow)
+    update = UpdateStaffMember(users, sessions, uow)
+
+    await ResetStaffPassword(users, FakePasswordHasher(), sessions, uow).execute(TENANT_A, member.id, "new-pass-123")
+    await update.execute(TENANT_A, member.id, full_name="Juan P.")
+    await update.execute(TENANT_A, member.id, role=Role.KITCHEN)
+    await update.execute(TENANT_A, member.id, is_active=False)
+    await update.execute(TENANT_A, member.id, is_active=True)
+
+    assert users.users[member.id].session_version == 4
+    assert sessions.access_ended == [(member.id, 2), (member.id, 3), (member.id, 4)]
+
+
+async def test_staff_access_is_only_ended_once_the_new_session_version_is_committed(
+    users: InMemoryUserRepository, uow: FakeUnitOfWork, sessions: FakeSessionRevoker
+) -> None:
+    member = await add_waiter(users, uow)
+    failing = FailingUnitOfWork()
+
+    with pytest.raises(RuntimeError):
+        await ResetStaffPassword(users, FakePasswordHasher(), sessions, failing).execute(
+            TENANT_A, member.id, "new-pass-123"
+        )
+    with pytest.raises(RuntimeError):
+        await UpdateStaffMember(users, sessions, failing).execute(TENANT_A, member.id, is_active=False)
+
+    assert sessions.access_ended == []

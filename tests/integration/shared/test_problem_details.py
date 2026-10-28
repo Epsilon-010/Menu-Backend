@@ -168,7 +168,7 @@ def test_a_backslash_followed_by_u0000_is_ordinary_text(admin: TestClient) -> No
 def test_rate_limited_login_is_a_429_problem_with_retry_after(client: TestClient, tenant_a: SeedResult) -> None:
     from app.shared.infrastructure.config import get_settings
 
-    for _ in range(get_settings().login_max_failures_per_account):
+    for _ in range(get_settings().login_max_failures_per_client):
         login(client, password="wrong-pass")
 
     response = login(client, password="wrong-pass")

@@ -1,5 +1,6 @@
 import asyncio
 import uuid
+from datetime import UTC, datetime, timedelta
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack
 from typing import Any
@@ -9,7 +10,16 @@ from fastapi.testclient import TestClient
 from httpx import Response
 
 from app.seed import SeedResult
-from tests.integration.modules.auth.test_auth_api import PASSWORD, _seed, claims_for, login, sign
+from tests.integration.modules.auth.test_auth_api import (
+    PASSWORD,
+    _seed,
+    claims_for,
+    login,
+    me,
+    refresh_with,
+    sign,
+    unrevoke_refresh_tokens,
+)
 
 STAFF_URL = "/api/v1/staff"
 STAFF_PASSWORD = "shift-pass-123"
@@ -194,6 +204,22 @@ def test_resetting_a_password_ends_the_sessions_and_only_the_new_one_works(
     assert waiter.get("/api/v1/auth/me").status_code == 401
     assert login(new_client(), username="juan.taco", password=STAFF_PASSWORD).status_code == 401
     assert login(new_client(), username="juan.taco", password="new-shift-456").status_code == 200
+
+
+def test_a_staff_session_that_escaped_the_password_reset_is_rejected(
+    new_client: ClientFactory, tenant_a: SeedResult
+) -> None:
+    admin = signed_in(new_client, "owner@example.com")
+    target = member_id(create_member(admin, "juan.taco"))
+    refresh_token = signed_in(new_client, "juan.taco", STAFF_PASSWORD).cookies.get("refresh_token")
+
+    assert admin.put(f"{STAFF_URL}/{target}/password", json={"password": "new-shift-456"}).status_code == 204
+    unrevoke_refresh_tokens(user_id=uuid.UUID(target))
+    signed_later = {"iat": datetime.now(UTC) + timedelta(seconds=2), "sv": 1}
+    stale = sign({**claims_for(uuid.UUID(target), tenant_a.tenant_id, "waiter"), **signed_later})
+
+    assert me(new_client(), stale).status_code == 401
+    assert refresh_with(new_client(), refresh_token).status_code == 401
 
 
 # --- Validation ------------------------------------------------------------------------------

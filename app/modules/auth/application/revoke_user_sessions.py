@@ -8,9 +8,10 @@ from app.shared.domain.principal import AccessRevocations
 class RevokeUserSessions:
     """Ends every session of a user right away: all refresh families and the live access tokens.
 
-    It does not commit: the calling use case (deactivating a user, resetting a password...) owns
-    the transaction. The access marker is written before that commit; if the commit then fails,
-    the user only has to sign in again.
+    `execute` revokes the refresh tokens inside the calling use case's transaction (deactivating a
+    user, resetting a password...), which commits. `end_access` runs after that commit with the new
+    session version, so access tokens of an older version are rejected; if it fails (Redis down),
+    they still expire within one access-token lifetime.
     """
 
     def __init__(
@@ -21,9 +22,10 @@ class RevokeUserSessions:
         self._clock = clock
 
     async def execute(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> None:
-        now = self._clock.now()
-        await self._refresh_tokens.revoke_all_for_user(tenant_id, user_id, now)
-        await self._access_revocations.revoke(user_id, now)
+        await self._refresh_tokens.revoke_all_for_user(tenant_id, user_id, self._clock.now())
+
+    async def end_access(self, user_id: uuid.UUID, session_version: int) -> None:
+        await self._access_revocations.require_version(user_id, session_version)
 
 
 class RevokeTableSessions:
@@ -40,6 +42,7 @@ class RevokeTableSessions:
         self._clock = clock
 
     async def execute(self, tenant_id: uuid.UUID, table_id: uuid.UUID) -> None:
-        now = self._clock.now()
-        await self._refresh_tokens.revoke_all_for_table(tenant_id, table_id, now)
-        await self._access_revocations.revoke(table_id, now)
+        await self._refresh_tokens.revoke_all_for_table(tenant_id, table_id, self._clock.now())
+
+    async def end_access(self, table_id: uuid.UUID, session_version: int) -> None:
+        await self._access_revocations.require_version(table_id, session_version)

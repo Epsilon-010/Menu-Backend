@@ -95,6 +95,9 @@ class AuthSessionRevoker:
     async def revoke_all(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> None:
         await self._revoke.execute(tenant_id, user_id)
 
+    async def end_access(self, user_id: uuid.UUID, session_version: int) -> None:
+        await self._revoke.end_access(user_id, session_version)
+
 
 def _session_revoker(request: Request, session: AsyncSession) -> AuthSessionRevoker:
     return AuthSessionRevoker(revoke_user_sessions(request, session))

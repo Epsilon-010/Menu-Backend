@@ -1,3 +1,4 @@
+import ipaddress
 import uuid
 from datetime import datetime
 from typing import Annotated
@@ -104,8 +105,23 @@ def _login_limiter(request: Request) -> RedisLoginAttemptLimiter:
     return RedisLoginAttemptLimiter(
         request.app.state.redis,
         window_seconds=settings.login_failure_window_seconds,
-        max_per_account=settings.login_max_failures_per_account,
+        max_per_client=settings.login_max_failures_per_client,
+        max_per_account=settings.login_max_failures_backstop,
     )
+
+
+def _client_address(request: Request) -> str:
+    """The caller's IP. Behind the frontend proxy, uvicorn takes it from X-Forwarded-For only when the
+    request comes from an address in FORWARDED_ALLOW_IPS, so a direct caller cannot choose it."""
+    if request.client is None:
+        return "unknown"
+    try:
+        address = ipaddress.ip_address(request.client.host)
+    except ValueError:
+        return request.client.host
+    # The same device can arrive as IPv4 or IPv4-mapped IPv6 (::ffff:a.b.c.d): count it once.
+    mapped = address.ipv4_mapped if isinstance(address, ipaddress.IPv6Address) else None
+    return str(mapped or address)
 
 
 def get_login(request: Request, session: SessionDep) -> Login:
@@ -206,10 +222,10 @@ def _too_many_attempts(error: TooManyLoginAttempts) -> JSONResponse:
 
 @router.post("/login", response_model=SessionResponse)
 async def login(
-    body: LoginRequest, response: Response, use_case: Annotated[Login, Depends(get_login)]
+    body: LoginRequest, request: Request, response: Response, use_case: Annotated[Login, Depends(get_login)]
 ) -> SessionResponse | JSONResponse:
     try:
-        auth = await use_case.execute(body.username, body.password)
+        auth = await use_case.execute(body.username, body.password, _client_address(request))
     except InvalidCredentials:
         return problem(status.HTTP_401_UNAUTHORIZED, "Invalid username or password")
     except TooManyLoginAttempts as error:
@@ -219,10 +235,13 @@ async def login(
 
 @router.post("/table-login", response_model=SessionResponse)
 async def table_login(
-    body: TableLoginRequest, response: Response, use_case: Annotated[TableLogin, Depends(get_table_login)]
+    body: TableLoginRequest,
+    request: Request,
+    response: Response,
+    use_case: Annotated[TableLogin, Depends(get_table_login)],
 ) -> SessionResponse | JSONResponse:
     try:
-        auth = await use_case.execute(body.code, body.pin)
+        auth = await use_case.execute(body.code, body.pin, _client_address(request))
     except InvalidCredentials:
         return problem(status.HTTP_401_UNAUTHORIZED, "Invalid table code or PIN")
     except TooManyLoginAttempts as error:

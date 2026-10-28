@@ -9,7 +9,11 @@ from app.shared.domain.ports import Clock, UnitOfWork
 
 
 class RefreshSession:
-    """Rotates a refresh token. Presenting an already rotated token revokes its whole family."""
+    """Rotates a refresh token. Presenting an already rotated token revokes its whole family.
+
+    A token issued for an older session version (the PIN or password changed since, even while this
+    token was being stored) also revokes its family: credential changes always win the race.
+    """
 
     def __init__(
         self,
@@ -44,13 +48,13 @@ class RefreshSession:
 
         if token.table_id is not None:
             table = await self._get_table.execute(token.tenant_id, token.table_id)
-            if table is None or not table.is_active:
+            if table is None or not table.is_active or table.session_version != token.session_version:
                 await self._revoke_family_and_reject(token)
             await self._rotate(token)
             session = await self._sessions.issue_for_table(table, family_id=token.family_id)
         elif token.user_id is not None:
             user = await self._get_user.execute(token.tenant_id, token.user_id)
-            if user is None or not user.is_active:
+            if user is None or not user.is_active or user.session_version != token.session_version:
                 await self._revoke_family_and_reject(token)
             await self._rotate(token)
             session = await self._sessions.issue(user, family_id=token.family_id)

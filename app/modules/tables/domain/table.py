@@ -28,6 +28,8 @@ class Table:
     """A table of a tenant; its tablet signs in with the table code and a PIN.
 
     The code is generated once and never changes; the PIN is only stored as a hash.
+    `session_version` goes up whenever the device must be signed out (new PIN, deactivation): every
+    session token carries the version it was issued for, so an older one is rejected.
     """
 
     tenant_id: uuid.UUID
@@ -35,6 +37,7 @@ class Table:
     code: str
     pin_hash: str
     is_active: bool = True
+    session_version: int = 1
     id: uuid.UUID = field(default_factory=uuid.uuid4)
 
     @classmethod
@@ -56,6 +59,9 @@ class Table:
             name=self.name if name is None else validate_table_name(name),
             is_active=self.is_active if is_active is None else is_active,
         )
+
+    def with_sessions_ended(self) -> "Table":
+        return replace(self, session_version=self.session_version + 1)
 
 
 class TableRepository(Protocol):
@@ -106,3 +112,8 @@ class SessionRevoker(Protocol):
     """
 
     async def revoke_all(self, tenant_id: uuid.UUID, table_id: uuid.UUID) -> None: ...
+
+    async def end_access(self, table_id: uuid.UUID, session_version: int) -> None:
+        """Rejects live access tokens older than `session_version`. Call it after the commit that
+        stored that version: before it, a failed commit would leave new logins rejected."""
+        ...
