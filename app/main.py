@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, FastAPI
 from app.modules.auth.infrastructure import router as auth_router
 from app.modules.auth.infrastructure.access_revocations import RedisAccessRevocations
 from app.modules.auth.infrastructure.access_tokens import JoseAccessTokens
+from app.modules.catalog.infrastructure import menu_router
 from app.modules.catalog.infrastructure import router as catalog_router
 from app.modules.media.infrastructure.jobs import CeleryImageCleanupScheduler
 from app.modules.staff.infrastructure import router as staff_router
@@ -50,6 +51,7 @@ def create_app() -> FastAPI:
     api.include_router(staff_router.router)
     api.include_router(tables_router.router)
     api.include_router(catalog_router.router)
+    api.include_router(menu_router.router)
     app.include_router(api)
     return app
 
