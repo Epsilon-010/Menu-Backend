@@ -2,24 +2,25 @@ import uuid
 
 import pytest
 
-from app.modules.staff.application.create_user import CreateUser
+from app.modules.staff.application.create_user import CreateUser, LockEmail
 from app.modules.staff.application.find_user import FindUserByLogin, GetUser
 from app.modules.staff.application.manage_staff import (
     CreateStaffMember,
     ListStaff,
-    ResetStaffPassword,
+    RegenerateStaffPin,
+    StaffMemberWithPin,
     UpdateStaffMember,
 )
 from app.modules.staff.domain.errors import (
-    StaffIdTaken,
     EmailAlreadyInUse,
     InvalidUserData,
+    StaffAlreadyCreated,
+    StaffIdTaken,
     StaffMemberNotFound,
-    UsernameNotAvailable,
 )
-from app.modules.staff.domain.user import User
+from app.modules.staff.domain.user import STAFF_CODE_ALPHABET, STAFF_CODE_LENGTH, STAFF_PIN_LENGTH, User
 from app.shared.domain.principal import Role
-from tests.unit.fakes import FakePasswordHasher, FakeUnitOfWork, InMemoryUserRepository
+from tests.unit.fakes import FakePasswordHasher, FakeStaffCredentials, FakeUnitOfWork, InMemoryUserRepository
 
 pytestmark = pytest.mark.anyio
 
@@ -35,6 +36,11 @@ def users() -> InMemoryUserRepository:
 @pytest.fixture
 def uow() -> FakeUnitOfWork:
     return FakeUnitOfWork()
+
+
+@pytest.fixture
+def credentials() -> FakeStaffCredentials:
+    return FakeStaffCredentials()
 
 
 def create_user(users: InMemoryUserRepository, uow: FakeUnitOfWork) -> CreateUser:
@@ -108,6 +114,12 @@ async def test_get_user_is_scoped_to_the_tenant(users: InMemoryUserRepository, u
     assert await GetUser(users).execute(TENANT_B, created.id) is None
 
 
+async def test_lock_email_locks_the_normalized_email(users: InMemoryUserRepository) -> None:
+    await LockEmail(users).execute("  Owner@Example.COM ")
+
+    assert users.email_locks == ["owner@example.com"]
+
+
 # --- Staff management (admin) ------------------------------------------------------------------
 
 
@@ -128,80 +140,144 @@ def sessions() -> FakeSessionRevoker:
     return FakeSessionRevoker()
 
 
+def create_member(
+    users: InMemoryUserRepository, uow: FakeUnitOfWork, credentials: FakeStaffCredentials | None = None
+) -> CreateStaffMember:
+    return CreateStaffMember(users, credentials or FakeStaffCredentials(), FakePasswordHasher(), uow)
+
+
+def regenerate_pin(
+    users: InMemoryUserRepository,
+    sessions: FakeSessionRevoker,
+    uow: FakeUnitOfWork,
+    credentials: FakeStaffCredentials | None = None,
+) -> RegenerateStaffPin:
+    return RegenerateStaffPin(users, credentials or FakeStaffCredentials(), FakePasswordHasher(), sessions, uow)
+
+
 async def add_waiter(users: InMemoryUserRepository, uow: FakeUnitOfWork, tenant_id: uuid.UUID = TENANT_A) -> User:
-    return await CreateStaffMember(users, FakePasswordHasher(), uow).execute(
-        tenant_id, "juan.burger", "Juan Pérez", Role.WAITER, "s3cret-pass"
+    result = await CreateStaffMember(users, FakeStaffCredentials(), FakePasswordHasher(), uow).execute(
+        tenant_id, "Juan Pérez", Role.WAITER
     )
+    return result.member
 
 
-async def test_creates_a_staff_member_with_a_normalized_username(
-    users: InMemoryUserRepository, uow: FakeUnitOfWork
+async def test_creates_a_staff_member_with_only_a_name_and_returns_a_generated_code_and_pin(
+    users: InMemoryUserRepository, uow: FakeUnitOfWork, credentials: FakeStaffCredentials
 ) -> None:
-    member = await CreateStaffMember(users, FakePasswordHasher(), uow).execute(
-        TENANT_A, "  Juan.Burger ", " Juan Pérez ", Role.KITCHEN, "s3cret-pass"
-    )
+    result = await create_member(users, uow, credentials).execute(TENANT_A, " Juan Pérez ", Role.KITCHEN)
 
-    assert member.username == "juan.burger"
+    assert isinstance(result, StaffMemberWithPin)
+    member = result.member
+    assert result.pin == "000001"
+    # Stored lowercase in the username column (login lowercases it); shown uppercase.
+    assert member.username == "staffb"
+    assert member.code == "STAFFB"
     assert member.email is None
     assert member.full_name == "Juan Pérez"
     assert member.role is Role.KITCHEN
     assert member.tenant_id == TENANT_A
     assert member.is_active is True
-    assert member.password_hash == "hashed:s3cret-pass"
+    # The PIN is only stored as a hash.
+    assert member.password_hash == "hashed:000001"
     assert users.users[member.id] == member
     assert uow.commits == 1
 
 
-async def test_a_username_is_unique_across_tenants(users: InMemoryUserRepository, uow: FakeUnitOfWork) -> None:
-    await add_waiter(users, uow, TENANT_A)
+async def test_a_member_signs_in_with_the_code_in_any_case(
+    users: InMemoryUserRepository, uow: FakeUnitOfWork
+) -> None:
+    member = await add_waiter(users, uow)
 
-    with pytest.raises(UsernameNotAvailable):
-        await CreateStaffMember(users, FakePasswordHasher(), uow).execute(
-            TENANT_B, "JUAN.burger", "Other Juan", Role.WAITER, "s3cret-pass"
-        )
+    assert await FindUserByLogin(users).execute(member.code) == member
+    assert await FindUserByLogin(users).execute(f" {member.code.lower()} ") == member
+    assert await FindUserByLogin(users).execute("nobody") is None
 
-    assert len(users.users) == 1
-    assert uow.commits == 1
+
+async def test_names_may_repeat_in_a_tenant_and_across_tenants_and_each_gets_its_own_code(
+    users: InMemoryUserRepository, uow: FakeUnitOfWork, credentials: FakeStaffCredentials
+) -> None:
+    create = create_member(users, uow, credentials)
+
+    first = await create.execute(TENANT_A, "Juan Pérez", Role.WAITER)
+    same_tenant = await create.execute(TENANT_A, "Juan Pérez", Role.WAITER)
+    other_tenant = await create.execute(TENANT_B, "Juan Pérez", Role.KITCHEN)
+
+    codes = {first.member.code, same_tenant.member.code, other_tenant.member.code}
+    assert len(codes) == 3
+    assert len(users.users) == 3
+
+
+async def test_an_existing_code_is_never_handed_out_again(
+    users: InMemoryUserRepository, uow: FakeUnitOfWork
+) -> None:
+    first = await add_waiter(users, uow)
+    # The generator first repeats the taken code: the use case draws another one.
+    credentials = FakeStaffCredentials(codes=[first.code])
+
+    second = await create_member(users, uow, credentials).execute(TENANT_B, "Juan Pérez", Role.WAITER)
+
+    assert second.member.code != first.code
+    assert credentials.codes == []
+
+
+async def test_a_code_taken_by_a_concurrent_create_is_retried_with_a_new_one(
+    users: InMemoryUserRepository, uow: FakeUnitOfWork
+) -> None:
+    other = await add_waiter(users, uow, TENANT_B)
+    # The lookup misses the code (taken after the check), the insert collides, the retry gets a new one.
+    users.hidden_usernames.add(other.username or "")
+    credentials = FakeStaffCredentials(codes=[other.code])
+
+    result = await create_member(users, uow, credentials).execute(TENANT_A, "Juan Pérez", Role.WAITER)
+
+    assert result.member.code != other.code
+    assert len(users.users) == 2
 
 
 @pytest.mark.parametrize(
-    ("username", "full_name", "role", "password"),
+    ("full_name", "role"),
     [
-        ("ju", "Juan", Role.WAITER, "s3cret-pass"),
-        ("j" * 41, "Juan", Role.WAITER, "s3cret-pass"),
-        ("juan@burger", "Juan", Role.WAITER, "s3cret-pass"),
-        ("juan perez", "Juan", Role.WAITER, "s3cret-pass"),
-        ("juan", "  ", Role.WAITER, "s3cret-pass"),
-        ("juan", "Juan", Role.WAITER, "short"),
-        ("juan", "Juan", Role.ADMIN, "s3cret-pass"),
-        ("juan", "Juan", Role.TABLE, "s3cret-pass"),
+        ("  ", Role.WAITER),
+        ("j" * 121, Role.WAITER),
+        ("Juan", Role.ADMIN),
+        ("Juan", Role.TABLE),
     ],
 )
 async def test_rejects_invalid_staff_member_data(
-    users: InMemoryUserRepository, uow: FakeUnitOfWork, username: str, full_name: str, role: Role, password: str
+    users: InMemoryUserRepository, uow: FakeUnitOfWork, full_name: str, role: Role
 ) -> None:
     with pytest.raises(InvalidUserData):
-        await CreateStaffMember(users, FakePasswordHasher(), uow).execute(TENANT_A, username, full_name, role, password)
+        await create_member(users, uow).execute(TENANT_A, full_name, role)
 
     assert users.users == {}
     assert uow.commits == 0
 
 
-async def test_finds_a_staff_member_by_username_for_login(users: InMemoryUserRepository, uow: FakeUnitOfWork) -> None:
-    member = await add_waiter(users, uow)
+@pytest.mark.parametrize("code", ["ABCDE", "ABCDEFG", "ABCDE0", "ABCDE1", "ABCDEO", "ABC.DE"])
+def test_a_staff_code_outside_the_alphabet_is_refused(code: str) -> None:
+    with pytest.raises(InvalidUserData):
+        User.create_staff(TENANT_A, code, "Juan", Role.WAITER, "hash")
 
-    assert await FindUserByLogin(users).execute(" Juan.Burger") == member
-    assert await FindUserByLogin(users).execute("nobody") is None
+
+def test_codes_and_pins_have_the_documented_shape(credentials: FakeStaffCredentials) -> None:
+    from app.modules.staff.infrastructure.repository import RandomStaffCredentials
+
+    random = RandomStaffCredentials()
+    for _ in range(50):
+        code, pin = random.new_code(), random.new_pin()
+        assert len(code) == STAFF_CODE_LENGTH and set(code) <= set(STAFF_CODE_ALPHABET)
+        assert len(pin) == STAFF_PIN_LENGTH and pin.isdigit()
 
 
 async def test_lists_only_the_waiters_and_cooks_of_the_tenant_by_name(
     users: InMemoryUserRepository, uow: FakeUnitOfWork
 ) -> None:
     await create_user(users, uow).execute(TENANT_A, "owner@example.com", "Test Owner", Role.ADMIN, "s3cret-pass")
-    create = CreateStaffMember(users, FakePasswordHasher(), uow)
-    zoe = await create.execute(TENANT_A, "zoe", "Zoe", Role.KITCHEN, "s3cret-pass")
-    bob = await create.execute(TENANT_A, "bob", "bob", Role.WAITER, "s3cret-pass")
-    await create.execute(TENANT_B, "carl", "Carl", Role.WAITER, "s3cret-pass")
+    create = create_member(users, uow)
+    zoe = (await create.execute(TENANT_A, "Zoe", Role.KITCHEN)).member
+    bob = (await create.execute(TENANT_A, "bob", Role.WAITER)).member
+    await create.execute(TENANT_B, "Carl", Role.WAITER)
 
     assert await ListStaff(users).execute(TENANT_A) == [bob, zoe]
 
@@ -217,6 +293,7 @@ async def test_updates_name_and_role_and_revokes_sessions_on_role_change(
 
     assert updated.full_name == "Juan P."
     assert updated.role is Role.KITCHEN
+    assert updated.code == member.code
     assert users.users[member.id] == updated
     assert sessions.revoked == [(TENANT_A, member.id)]
     assert uow.commits == 2
@@ -259,28 +336,37 @@ async def test_rejects_an_invalid_update_without_saving(
     assert uow.commits == 1
 
 
-async def test_resets_the_password_and_revokes_every_session(
+async def test_regenerating_the_pin_keeps_the_code_and_revokes_every_session(
     users: InMemoryUserRepository, uow: FakeUnitOfWork, sessions: FakeSessionRevoker
 ) -> None:
     member = await add_waiter(users, uow)
+    credentials = FakeStaffCredentials(pins=["731905"])
 
-    await ResetStaffPassword(users, FakePasswordHasher(), sessions, uow).execute(TENANT_A, member.id, "new-pass-123")
+    result = await regenerate_pin(users, sessions, uow, credentials).execute(TENANT_A, member.id)
 
-    assert users.users[member.id].password_hash == "hashed:new-pass-123"
+    assert result.pin == "731905"
+    assert result.member.code == member.code
+    assert result.member.session_version == member.session_version + 1
+    assert users.users[member.id].password_hash == "hashed:731905"
     assert sessions.revoked == [(TENANT_A, member.id)]
+    assert sessions.access_ended == [(member.id, member.session_version + 1)]
     assert uow.commits == 2
 
 
-async def test_rejects_a_short_new_password(
+async def test_a_legacy_member_keeps_their_login_as_code_until_a_new_pin(
     users: InMemoryUserRepository, uow: FakeUnitOfWork, sessions: FakeSessionRevoker
 ) -> None:
-    member = await add_waiter(users, uow)
+    # Accounts created before codes existed: a chosen username and password (S8).
+    legacy = User(tenant_id=TENANT_A, username="demo.mesero", full_name="Demo", role=Role.WAITER, password_hash="hashed:old")
+    await users.add(legacy)
 
-    with pytest.raises(InvalidUserData):
-        await ResetStaffPassword(users, FakePasswordHasher(), sessions, uow).execute(TENANT_A, member.id, "short")
+    assert legacy.code == "DEMO.MESERO"
+    assert await FindUserByLogin(users).execute("demo.mesero") == legacy
 
-    assert users.users[member.id] == member
-    assert sessions.revoked == []
+    result = await regenerate_pin(users, sessions, uow).execute(TENANT_A, legacy.id)
+
+    assert result.member.username == "demo.mesero"
+    assert users.users[legacy.id].password_hash == f"hashed:{result.pin}"
 
 
 async def test_staff_management_never_reaches_another_tenant_nor_an_admin(
@@ -293,7 +379,7 @@ async def test_staff_management_never_reaches_another_tenant_nor_an_admin(
         with pytest.raises(StaffMemberNotFound):
             await UpdateStaffMember(users, sessions, uow).execute(TENANT_A, target, is_active=False)
         with pytest.raises(StaffMemberNotFound):
-            await ResetStaffPassword(users, FakePasswordHasher(), sessions, uow).execute(TENANT_A, target, "new-pass-123")
+            await regenerate_pin(users, sessions, uow).execute(TENANT_A, target)
 
     assert users.users[member.id] == member
     assert users.users[admin.id] == admin
@@ -306,57 +392,45 @@ async def test_every_write_locks_the_member_it_rewrites(
     member = await add_waiter(users, uow)
 
     await UpdateStaffMember(users, sessions, uow).execute(TENANT_A, member.id, full_name="Juan P.")
-    await ResetStaffPassword(users, FakePasswordHasher(), sessions, uow).execute(TENANT_A, member.id, "n3w-secret-pass")
+    await regenerate_pin(users, sessions, uow).execute(TENANT_A, member.id)
 
     assert users.locked == [member.id, member.id]
 
 
-async def test_repeating_a_staff_create_with_its_id_returns_the_same_member(
+async def test_repeating_a_staff_create_with_its_id_never_makes_a_second_member(
     users: InMemoryUserRepository, uow: FakeUnitOfWork
 ) -> None:
     member_id = uuid.uuid4()
-    create = CreateStaffMember(users, FakePasswordHasher(), uow)
+    create = create_member(users, uow)
 
-    first = await create.execute(TENANT_A, "juan.burger", "Juan Pérez", Role.WAITER, "s3cret-pass", member_id)
-    replay = await create.execute(TENANT_A, " Juan.Burger ", "Juan Pérez", Role.WAITER, "s3cret-pass", member_id)
+    first = await create.execute(TENANT_A, "Juan Pérez", Role.WAITER, member_id)
+    # The PIN only exists as a hash: a replay cannot show it again.
+    with pytest.raises(StaffAlreadyCreated):
+        await create.execute(TENANT_A, "Juan Pérez", Role.WAITER, member_id)
 
-    assert replay == first
-    assert first.id == member_id
+    assert first.member.id == member_id
     assert list(users.users) == [member_id]
     assert uow.commits == 1
 
 
-async def test_a_staff_id_reused_for_another_member_or_tenant_is_refused(
+async def test_a_staff_id_used_by_an_admin_or_another_tenant_is_refused(
     users: InMemoryUserRepository, uow: FakeUnitOfWork
 ) -> None:
     member_id = uuid.uuid4()
-    create = CreateStaffMember(users, FakePasswordHasher(), uow)
-    await create.execute(TENANT_A, "juan.burger", "Juan Pérez", Role.WAITER, "s3cret-pass", member_id)
+    create = create_member(users, uow)
+    await create.execute(TENANT_A, "Juan Pérez", Role.WAITER, member_id)
+    admin = await create_user(users, uow).execute(TENANT_A, "owner@example.com", "Owner", Role.ADMIN, "s3cret-pass")
 
     with pytest.raises(StaffIdTaken):
-        await create.execute(TENANT_A, "test.cocina", "Owner", Role.KITCHEN, "s3cret-pass", member_id)
+        await create.execute(TENANT_B, "Juan Pérez", Role.WAITER, member_id)
     with pytest.raises(StaffIdTaken):
-        await create.execute(TENANT_B, "juan.burger", "Juan Pérez", Role.WAITER, "s3cret-pass", member_id)
+        await create.execute(TENANT_A, "Juan Pérez", Role.WAITER, admin.id)
 
-    assert [u.username for u in users.users.values()] == ["juan.burger"]
-
-
-async def test_a_staff_replay_with_another_password_is_refused(users: InMemoryUserRepository, uow: FakeUnitOfWork) -> None:
-    member_id = uuid.uuid4()
-    create = CreateStaffMember(users, FakePasswordHasher(), uow)
-    await create.execute(TENANT_A, "juan.burger", "Juan Pérez", Role.WAITER, "first-pass-123", member_id)
-
-    # Same id, same names, other password: not the same request, so it must not succeed silently.
-    with pytest.raises(StaffIdTaken):
-        await create.execute(TENANT_A, "juan.burger", "Juan Pérez", Role.WAITER, "second-pass-456", member_id)
-
-    assert users.users[member_id].password_hash == "hashed:first-pass-123"
+    assert len(users.users) == 2
 
 
 async def test_staff_creates_of_a_tenant_are_serialized(users: InMemoryUserRepository, uow: FakeUnitOfWork) -> None:
-    await CreateStaffMember(users, FakePasswordHasher(), uow).execute(
-        TENANT_A, "juan.burger", "Juan Pérez", Role.WAITER, "s3cret-pass", uuid.uuid4()
-    )
+    await create_member(users, uow).execute(TENANT_A, "Juan Pérez", Role.WAITER, uuid.uuid4())
 
     # Taken before the replay check, so a concurrent replay waits and then finds the first one.
     assert users.create_locks == [TENANT_A]
@@ -370,13 +444,13 @@ class FailingUnitOfWork(FakeUnitOfWork):
         raise RuntimeError("commit failed")
 
 
-async def test_password_reset_role_change_and_deactivation_bump_the_session_version_and_end_access(
+async def test_new_pin_role_change_and_deactivation_bump_the_session_version_and_end_access(
     users: InMemoryUserRepository, uow: FakeUnitOfWork, sessions: FakeSessionRevoker
 ) -> None:
     member = await add_waiter(users, uow)
     update = UpdateStaffMember(users, sessions, uow)
 
-    await ResetStaffPassword(users, FakePasswordHasher(), sessions, uow).execute(TENANT_A, member.id, "new-pass-123")
+    await regenerate_pin(users, sessions, uow).execute(TENANT_A, member.id)
     await update.execute(TENANT_A, member.id, full_name="Juan P.")
     await update.execute(TENANT_A, member.id, role=Role.KITCHEN)
     await update.execute(TENANT_A, member.id, is_active=False)
@@ -393,9 +467,7 @@ async def test_staff_access_is_only_ended_once_the_new_session_version_is_commit
     failing = FailingUnitOfWork()
 
     with pytest.raises(RuntimeError):
-        await ResetStaffPassword(users, FakePasswordHasher(), sessions, failing).execute(
-            TENANT_A, member.id, "new-pass-123"
-        )
+        await regenerate_pin(users, sessions, failing).execute(TENANT_A, member.id)
     with pytest.raises(RuntimeError):
         await UpdateStaffMember(users, sessions, failing).execute(TENANT_A, member.id, is_active=False)
 

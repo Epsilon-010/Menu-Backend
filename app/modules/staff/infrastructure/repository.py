@@ -1,14 +1,31 @@
+import secrets
 import uuid
 
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.staff.domain.errors import EmailAlreadyInUse, StaffIdTaken, StaffMemberNotFound, UsernameNotAvailable
-from app.modules.staff.domain.user import STAFF_MEMBER_ROLES, User
+from app.modules.staff.domain.errors import EmailAlreadyInUse, StaffCodeTaken, StaffIdTaken, StaffMemberNotFound
+from app.modules.staff.domain.user import (
+    STAFF_CODE_ALPHABET,
+    STAFF_CODE_LENGTH,
+    STAFF_MEMBER_ROLES,
+    STAFF_PIN_LENGTH,
+    User,
+)
 from app.modules.staff.infrastructure.models import UserModel
 from app.shared.domain.principal import Role
 from app.shared.infrastructure.database import affected_rows, advisory_xact_lock, violated_unique_constraint
+
+
+class RandomStaffCredentials:
+    """Staff codes and PINs from the OS CSPRNG."""
+
+    def new_code(self) -> str:
+        return "".join(secrets.choice(STAFF_CODE_ALPHABET) for _ in range(STAFF_CODE_LENGTH))
+
+    def new_pin(self) -> str:
+        return "".join(secrets.choice("0123456789") for _ in range(STAFF_PIN_LENGTH))
 
 
 def _to_entity(model: UserModel) -> User:
@@ -30,21 +47,22 @@ class SqlAlchemyUserRepository:
         self._session = session
 
     async def add(self, user: User) -> None:
-        self._session.add(
-            UserModel(
-                id=user.id,
-                tenant_id=user.tenant_id,
-                email=user.email,
-                username=user.username,
-                full_name=user.full_name,
-                role=user.role.value,
-                password_hash=user.password_hash,
-                is_active=user.is_active,
-                session_version=user.session_version,
-            )
+        model = UserModel(
+            id=user.id,
+            tenant_id=user.tenant_id,
+            email=user.email,
+            username=user.username,
+            full_name=user.full_name,
+            role=user.role.value,
+            password_hash=user.password_hash,
+            is_active=user.is_active,
+            session_version=user.session_version,
         )
         try:
-            await self._session.flush()
+            # A savepoint: when the random staff code collides, only this insert rolls back and the use
+            # case can retry with a new code in the same transaction.
+            async with self._session.begin_nested():
+                self._session.add(model)
         except IntegrityError as error:
             # Another request took the login after the use case checked it.
             constraint = violated_unique_constraint(error)
@@ -52,7 +70,7 @@ class SqlAlchemyUserRepository:
                 # A concurrent replay of the same create, or a clash with another tenant's id.
                 raise StaffIdTaken(user.id) from error
             if constraint == "uq_users_username":
-                raise UsernameNotAvailable(user.username) from error
+                raise StaffCodeTaken(user.username) from error
             if constraint == "uq_users_email":
                 raise EmailAlreadyInUse(user.email) from error
             raise
@@ -74,6 +92,9 @@ class SqlAlchemyUserRepository:
 
     async def lock_creates(self, tenant_id: uuid.UUID) -> None:
         await advisory_xact_lock(self._session, f"staff-create:{tenant_id}")
+
+    async def lock_email(self, email: str) -> None:
+        await advisory_xact_lock(self._session, f"signup-email:{email}")
 
     async def get_by_email(self, email: str) -> User | None:
         model = await self._session.scalar(select(UserModel).where(UserModel.email == email))
