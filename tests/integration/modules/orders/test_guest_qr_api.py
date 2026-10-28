@@ -397,3 +397,23 @@ def test_an_order_id_from_a_previous_visit_is_never_returned_to_the_next_people(
 
     assert (replayed.status_code, replayed.json()["detail"]) == (409, "That id is already used by something else")
     assert ok(next_guest.get(ORDERS_URL)) == []
+
+
+def test_a_cart_line_id_from_a_previous_visit_is_a_clash_not_a_replay(
+    new_client: ClientFactory, tenant_a: SeedResult
+) -> None:
+    admin = admin_of(new_client)
+    items = menu_items(admin)
+    table = created(create_table(admin))
+    line_id = str(uuid.uuid4())
+    first_visit = open_table(admin, table)
+    ana = guest_of(new_client, table["qr_token"])
+    ok(add(ana, items["pastor"], id=line_id))
+    ok(submit(ana, cart(ana)["version"]), 201)
+    pay(admin, first_visit)
+
+    open_table(admin, table)
+    next_guest = guest_of(new_client, table["qr_token"])
+    repeated = add(next_guest, items["pastor"], id=line_id)
+
+    assert (repeated.status_code, repeated.json()["detail"]) == (409, "That id is already used by something else")

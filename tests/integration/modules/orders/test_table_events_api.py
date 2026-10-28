@@ -1,12 +1,18 @@
+import asyncio
 import json
 import threading
 import time
+import uuid
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from redis.asyncio import Redis
 
 from app.modules.orders.infrastructure import events
+from app.modules.orders.infrastructure.adapters import RedisTableEvents
 from app.seed import SeedResult
+from app.shared.infrastructure.config import get_settings
 from tests.integration.modules.catalog.test_catalog_api import ok
 from tests.integration.modules.orders.test_guest_qr_api import guest_of, open_table, pay
 from tests.integration.modules.orders.test_ordering_api import add, cart, menu_items, staff_of, submit
@@ -119,3 +125,32 @@ def test_only_the_table_and_its_guests_open_the_stream(new_client: ClientFactory
     assert admin.get(EVENTS_URL).status_code == 403
     assert waiter.get(EVENTS_URL).status_code == 403
     assert new_client().get(EVENTS_URL).status_code == 401
+
+
+def test_an_event_published_right_after_the_stream_opens_is_not_lost() -> None:
+    async def scenario() -> list[str]:
+        redis = Redis.from_url(get_settings().redis_url, decode_responses=True)
+        tenant_id, table_id = uuid.uuid4(), uuid.uuid4()
+        publisher = RedisTableEvents(redis)
+        await publisher.publish(tenant_id, table_id, "cart.updated", cart_version=1)  # before: never replayed
+        real_xread = redis.xread
+        calls = 0
+
+        async def xread_after_a_publish(*args: Any, **kwargs: Any) -> Any:
+            nonlocal calls
+            calls += 1
+            if calls == 1:  # someone adds a line between opening the stream and its first read
+                await publisher.publish(tenant_id, table_id, "cart.updated", cart_version=2)
+            return await real_xread(*args, **kwargs)
+
+        redis.xread = xread_after_a_publish  # type: ignore[method-assign]
+        try:
+            stream = events.table_events(redis, tenant_id, table_id, None, stop_on_close=False)
+            return [message async for message in stream if message.startswith("id:")]
+        finally:
+            await redis.aclose()
+
+    messages = asyncio.run(scenario())
+
+    assert len(messages) == 1
+    assert '"cart_version": 2' in messages[0]

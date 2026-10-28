@@ -188,14 +188,14 @@ class SqlAlchemyCartRepository:
         )
         return bool(found)
 
-    async def line_sent_by_table(self, tenant_id: uuid.UUID, table_id: uuid.UUID, line_id: uuid.UUID) -> bool:
+    async def line_sent_on_bill(self, tenant_id: uuid.UUID, bill_id: uuid.UUID, line_id: uuid.UUID) -> bool:
         found = await self._session.scalar(
             select(
                 exists().where(
                     OrderItemModel.id == line_id,
                     OrderItemModel.tenant_id == tenant_id,
                     OrderItemModel.order_id == OrderModel.id,
-                    OrderModel.table_id == table_id,
+                    OrderModel.bill_id == bill_id,
                 )
             )
         )

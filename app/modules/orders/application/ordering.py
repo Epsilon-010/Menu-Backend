@@ -164,8 +164,13 @@ class AddCartLine:
                 item_id, quantity, note
             ):
                 return await _cart_view(ctx, diner)
-            if existing is None and await ctx.carts.line_sent_by_table(diner.tenant_id, diner.table_id, line_id):
-                # Someone sent the cart before this repeat arrived: the line is in that order, never added twice.
+            if (
+                existing is None
+                and visit.bill is not None
+                and await ctx.carts.line_sent_on_bill(diner.tenant_id, visit.bill.id, line_id)
+            ):
+                # Someone sent the cart before this repeat arrived: the line is in that order of this same
+                # visit, never added twice. From another visit it is a clash like any other.
                 return await _cart_view(ctx, diner)
             if existing is not None or await ctx.carts.line_exists_anywhere(line_id):
                 raise OrderIdTaken(line_id)
