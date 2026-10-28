@@ -134,28 +134,28 @@ def test_any_number_of_phones_join_and_build_one_order_with_the_tablet(
     waiter = staff_of(new_client, admin, "mesero", "waiter")
     open_table(waiter, table)
 
-    ana = guest_of(new_client, table["qr_token"], "Ana")
+    guest_one = guest_of(new_client, table["qr_token"], "Guest 1")
     phones = [guest_of(new_client, table["qr_token"]) for _ in range(5)]
 
-    assert ok(me(ana))["guest"]["name"] == "Ana"
-    assert ok(me(ana))["table"] == {"id": table["id"], "name": "Mesa 5"}
+    assert ok(me(guest_one))["guest"]["name"] == "Guest 1"
+    assert ok(me(guest_one))["table"] == {"id": table["id"], "name": "Mesa 5"}
     assert [ok(me(phone))["guest"]["name"] for phone in phones] == [f"Guest {n}" for n in range(2, 7)]
 
-    ok(add(ana, items["pastor"], 2))
+    ok(add(guest_one, items["pastor"], 2))
     ok(add(phones[0], items["suadero"]))
     ok(add(tablet, items["pastor"]))
     shared = cart(phones[4])
     assert [(line["name"], line["added_by"]) for line in shared["lines"]] == [
-        ("Pastor", "Ana"),
+        ("Pastor", "Guest 1"),
         ("Suadero", "Guest 2"),
         ("Pastor", "Tablet"),
     ]
-    assert cart(ana) == cart(tablet) == shared
+    assert cart(guest_one) == cart(tablet) == shared
 
     order = ok(submit(phones[2], shared["version"]), 201)
 
     assert (order["sent_by"], order["total_cents"]) == ("Guest 4", 10200)
-    for everyone in (ana, *phones, tablet):
+    for everyone in (guest_one, *phones, tablet):
         assert ok(everyone.get(ORDERS_URL)) == [order]
         assert cart(everyone)["lines"] == []
 
@@ -385,9 +385,9 @@ def test_an_order_id_from_a_previous_visit_is_never_returned_to_the_next_people(
     table = created(create_table(admin))
     order_id = str(uuid.uuid4())
     first_visit = open_table(admin, table)
-    ana = guest_of(new_client, table["qr_token"], "Ana")
-    ok(add(ana, items["pastor"], note="sin cebolla"))
-    ok(submit(ana, cart(ana)["version"], id=order_id), 201)
+    guest_one = guest_of(new_client, table["qr_token"], "Guest 1")
+    ok(add(guest_one, items["pastor"], note="sin cebolla"))
+    ok(submit(guest_one, cart(guest_one)["version"], id=order_id), 201)
     pay(admin, first_visit)
 
     open_table(admin, table)
@@ -407,9 +407,9 @@ def test_a_cart_line_id_from_a_previous_visit_is_a_clash_not_a_replay(
     table = created(create_table(admin))
     line_id = str(uuid.uuid4())
     first_visit = open_table(admin, table)
-    ana = guest_of(new_client, table["qr_token"])
-    ok(add(ana, items["pastor"], id=line_id))
-    ok(submit(ana, cart(ana)["version"]), 201)
+    guest_one = guest_of(new_client, table["qr_token"])
+    ok(add(guest_one, items["pastor"], id=line_id))
+    ok(submit(guest_one, cart(guest_one)["version"]), 201)
     pay(admin, first_visit)
 
     open_table(admin, table)

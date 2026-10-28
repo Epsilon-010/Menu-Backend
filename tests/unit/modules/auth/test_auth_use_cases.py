@@ -91,7 +91,7 @@ class World:
         user = User(
             tenant_id=tenant.id,
             email=email,
-            full_name="Ana Owner",
+            full_name="Test Owner",
             role=role,
             password_hash=await self.hasher.hash(PASSWORD),
             is_active=active,

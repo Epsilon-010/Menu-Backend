@@ -75,7 +75,7 @@ def test_renaming_onto_a_name_taken_meanwhile_is_reported_as_not_available(tenan
     ("make_user", "error"),
     [
         (lambda tenant_id: User.create_staff(tenant_id, "juan.taco", "Juan", Role.WAITER, "hash"), UsernameNotAvailable),
-        (lambda tenant_id: User.create(tenant_id, "owner@example.com", "Ana", Role.ADMIN, "hash"), EmailAlreadyInUse),
+        (lambda tenant_id: User.create(tenant_id, "owner@example.com", "Owner", Role.ADMIN, "hash"), EmailAlreadyInUse),
     ],
 )
 def test_a_login_taken_meanwhile_is_reported_as_not_available(

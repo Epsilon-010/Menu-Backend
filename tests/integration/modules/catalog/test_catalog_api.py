@@ -349,7 +349,7 @@ def test_tables_waiters_and_cooks_get_403_and_anonymous_401(new_client: ClientFa
     item = ok(create_item(admin, category["id"]), 201)
     tablet = tablet_of(new_client, created(create_table(admin)))
     staff = []
-    for username, role in (("juan.mesero", "waiter"), ("ana.cocina", "kitchen")):
+    for username, role in (("juan.mesero", "waiter"), ("test.cocina", "kitchen")):
         member_id(create_member(admin, username, role))
         client = new_client()
         assert login(client, username=username, password=STAFF_PASSWORD).status_code == 200
