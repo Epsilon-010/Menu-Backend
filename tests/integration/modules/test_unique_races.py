@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.staff.domain.errors import EmailAlreadyInUse, UsernameNotAvailable
+from app.modules.staff.domain.errors import EmailAlreadyInUse, StaffCodeTaken
 from app.modules.staff.domain.user import User
 from app.modules.staff.infrastructure.repository import SqlAlchemyUserRepository
 from app.modules.tables.domain.errors import TableNameNotAvailable
@@ -74,7 +74,7 @@ def test_renaming_onto_a_name_taken_meanwhile_is_reported_as_not_available(tenan
 @pytest.mark.parametrize(
     ("make_user", "error"),
     [
-        (lambda tenant_id: User.create_staff(tenant_id, "juan.taco", "Juan", Role.WAITER, "hash"), UsernameNotAvailable),
+        (lambda tenant_id: User.create_staff(tenant_id, "K7M2QX", "Waiter 1", Role.WAITER, "hash"), StaffCodeTaken),
         (lambda tenant_id: User.create(tenant_id, "owner@example.com", "Owner", Role.ADMIN, "hash"), EmailAlreadyInUse),
     ],
 )
@@ -82,7 +82,7 @@ def test_a_login_taken_meanwhile_is_reported_as_not_available(
     tenant: SeedResult, make_user: Callable[..., User], error: type[Exception]
 ) -> None:
     async def first(session: AsyncSession) -> None:
-        if error is UsernameNotAvailable:
+        if error is StaffCodeTaken:
             await SqlAlchemyUserRepository(session).add(make_user(tenant.tenant_id))
 
     async def second(session: AsyncSession) -> None:

@@ -184,7 +184,7 @@ def test_a_table_token_gets_403_on_every_admin_endpoint(new_client: ClientFactor
         tablet.get(STAFF_URL),
         create_member(tablet, "intruder"),
         tablet.patch(f"{STAFF_URL}/{waiter}", json={"is_active": False}),
-        tablet.put(f"{STAFF_URL}/{waiter}/password", json={"password": "hijacked-123"}),
+        tablet.post(f"{STAFF_URL}/{waiter}/pin"),
     ]
 
     assert [response.status_code for response in responses] == [403] * 8
