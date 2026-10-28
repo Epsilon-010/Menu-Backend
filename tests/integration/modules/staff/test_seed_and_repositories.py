@@ -96,3 +96,83 @@ async def _check_argon2() -> tuple[bool, bool, bool]:
 
 def test_argon2_hasher_verifies_only_the_right_password() -> None:
     assert asyncio.run(_check_argon2()) == (True, False, False)
+
+
+async def _code_taken_meanwhile(tenant_id: uuid.UUID) -> tuple[bool, bool]:
+    """A concurrent create stored the code first: the insert reports StaffCodeTaken and, thanks to its
+    savepoint, the same transaction can still insert the member with another code."""
+    from app.modules.staff.domain.errors import StaffCodeTaken
+    from app.shared.domain.principal import Role
+
+    engine = create_engine(get_settings().database_url)
+    factory = create_session_factory(engine)
+    try:
+        async with factory() as session:
+            await SqlAlchemyUserRepository(session).add(User.create_staff(tenant_id, "K7M2QX", "Juan", Role.WAITER, "h"))
+            await session.commit()
+        async with factory() as session:
+            users = SqlAlchemyUserRepository(session)
+            retry = User.create_staff(tenant_id, "k7m2qx", "Juan", Role.WAITER, "h")
+            try:
+                await users.add(retry)
+                collided = False
+            except StaffCodeTaken:
+                collided = True
+            await users.add(User.create_staff(tenant_id, "P4R5ST", "Juan", Role.WAITER, "h", retry.id))
+            await session.commit()
+            return collided, await users.get_by_username("p4r5st") is not None
+    finally:
+        await engine.dispose()
+
+
+def test_a_staff_code_taken_meanwhile_is_reported_and_the_transaction_goes_on() -> None:
+    tenant = asyncio.run(_seed("La Taquería", "owner@example.com"))
+
+    assert asyncio.run(_code_taken_meanwhile(tenant.tenant_id)) == (True, True)
+
+
+def test_concurrent_staff_replays_create_one_member_and_say_so() -> None:
+    """Replaces the old "all get the same member": the PIN is shown once, so the replays learn the
+    member exists (StaffAlreadyCreated), never "id used by something else"."""
+    from typing import Any
+
+    from app.modules.staff.application.manage_staff import CreateStaffMember
+    from app.modules.staff.domain.errors import StaffAlreadyCreated
+    from app.modules.staff.infrastructure.repository import RandomStaffCredentials
+    from app.shared.domain.principal import Role
+    from app.shared.infrastructure.database import SqlAlchemyUnitOfWork
+    from tests.unit.fakes import FakePasswordHasher
+
+    class SlowUsers(SqlAlchemyUserRepository):
+        async def get(self, *args: Any) -> Any:
+            found = await super().get(*args)
+            await asyncio.sleep(0.15)
+            return found
+
+    tenant = asyncio.run(_seed("La Taquería", "owner@example.com"))
+    member_id = uuid.uuid4()
+
+    async def work() -> tuple[list[Any], int]:
+        engine = create_engine(get_settings().database_url)
+        try:
+            factory = create_session_factory(engine)
+
+            async def create() -> uuid.UUID:
+                async with factory() as session:
+                    use_case = CreateStaffMember(
+                        SlowUsers(session), RandomStaffCredentials(), FakePasswordHasher(), SqlAlchemyUnitOfWork(session)
+                    )
+                    return (await use_case.execute(tenant.tenant_id, "Juan Pérez", Role.WAITER, member_id)).member.id
+
+            results = list(await asyncio.gather(*(create() for _ in range(3)), return_exceptions=True))
+            async with factory() as session:
+                count = len(await SqlAlchemyUserRepository(session).list_staff(tenant.tenant_id))
+            return results, count
+        finally:
+            await engine.dispose()
+
+    results, count = asyncio.run(work())
+
+    assert results.count(member_id) == 1
+    assert sorted(type(r).__name__ for r in results if r != member_id) == [StaffAlreadyCreated.__name__] * 2
+    assert count == 1
