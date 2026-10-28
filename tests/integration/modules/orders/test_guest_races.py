@@ -19,7 +19,7 @@ from app.shared.infrastructure.config import get_settings
 from app.shared.infrastructure.database import create_engine
 from tests.integration.modules.catalog.test_catalog_api import ok
 from tests.integration.modules.orders.test_guest_qr_api import guest_of, open_table, scan
-from tests.integration.modules.orders.test_ordering_api import CART_URL, add, menu_items
+from tests.integration.modules.orders.test_ordering_api import BILLS_URL, CART_URL, add, cart, menu_items, submit
 from tests.integration.modules.tables.test_tables_api import (  # noqa: F401  (fixtures)
     TABLES_URL,
     ClientFactory,
@@ -104,3 +104,41 @@ def test_changing_a_table_while_a_guest_adds_never_deadlocks(
     assert results[0].status_code == 200, results[0].text
     assert guest.get(CART_URL).status_code == 401
     assert ok(changed)["id"] == table["id"]
+
+
+def test_two_payments_of_one_bill_at_once_record_only_the_first(
+    new_client: ClientFactory, tenant_a: SeedResult
+) -> None:
+    admin = admin_of(new_client)
+    items = menu_items(admin)
+    table = created(create_table(admin))
+    bill_id = open_table(admin, table)
+    guest = guest_of(new_client, table["qr_token"])
+    ok(add(guest, items["pastor"]))
+    ok(submit(guest, cart(guest)["version"]), 201)
+    waiters = [admin_of(new_client) for _ in range(2)]
+
+    async def both_pay_while_the_table_is_busy() -> list[Response]:
+        # Both requests read the open bill, then wait for the table lock held here.
+        engine = create_engine(get_settings().database_url)
+        async with engine.connect() as conn:
+            key = f"table-visit:{tenant_a.tenant_id}:{table['id']}"
+            await conn.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(key, 0))))
+            started = [
+                in_background(lambda waiter=waiter, method=method: waiter.post(
+                    f"{BILLS_URL}/{bill_id}/payment", json={"method": method}
+                ))
+                for waiter, method in zip(waiters, ("cash", "card"), strict=True)
+            ]
+            await asyncio.sleep(0.6)
+            await conn.commit()
+        await engine.dispose()
+        for thread, _ in started:
+            thread.join()
+        return [results[0] for _, results in started]
+
+    responses = asyncio.run(both_pay_while_the_table_is_busy())
+
+    assert sorted(response.status_code for response in responses) == [200, 404]
+    winner = next(response for response in responses if response.status_code == 200).json()
+    assert ok(admin.get(f"{BILLS_URL}/{bill_id}"))["payment_method"] == winner["payment_method"]
