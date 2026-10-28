@@ -261,13 +261,15 @@ def history(kitchen: Kitchen) -> list[tuple[str, str, str, str | None]]:
     async def read() -> list[tuple[str, str, str, str | None]]:
         engine = create_engine(get_settings().database_url)
         async with engine.connect() as conn:
-            rows = await conn.execute(
-                text(
-                    "SELECT c.from_status, c.to_status, u.username, c.reason, c.changed_at "
-                    "FROM order_item_changes c JOIN users u ON u.id = c.changed_by "
-                    "WHERE c.tenant_id = u.tenant_id ORDER BY c.changed_at, c.id"
+            rows = (
+                await conn.execute(
+                    text(
+                        "SELECT c.from_status, c.to_status, u.username, c.reason, c.changed_at "
+                        "FROM order_item_changes c JOIN users u ON u.id = c.changed_by "
+                        "WHERE c.tenant_id = u.tenant_id ORDER BY c.changed_at, c.id"
+                    )
                 )
-            )
+            ).all()
             result = [(row[0], row[1], row[2], row[3]) for row in rows]
             assert all(row[4] is not None for row in rows)
         await engine.dispose()
