@@ -98,3 +98,17 @@ def test_successful_logins_never_count_towards_the_account_backstop() -> None:
     results = asyncio.run(_run(steps, max_per_account=50))
 
     assert results == [None] * 60
+
+
+def test_successful_logins_never_take_back_failures_from_other_devices() -> None:
+    # Each round: three failures from a new device run concurrently with the owner's attempt, then it signs in.
+    steps: list[Step] = []
+    for device in range(16):
+        steps += _attempts(3, client=f"10.0.2.{device}") + _attempts(1) + [("succeed", "owner@example.com", "10.0.0.1")]
+    # 48 failures so far: of the next four concurrent attempts (the owner's included) only 2 fit under the backstop.
+    steps += _attempts(3, client="10.0.3.1") + _attempts(1)
+
+    results = asyncio.run(_run(steps, max_per_account=50))
+
+    assert results[:64] == [None] * 64
+    assert results[64:].count(None) == 2
