@@ -49,7 +49,7 @@ in Backend and Menu-Frontend (stacked on `feat/slice-7-kitchen`). Delivery: ask-
 |----|-------|-------|--------|--------|
 | T1 | S1, S4-S9 backend | delegated (writer reason: parallel units, backend + frontend, disjoint repos) | done (L6) | d545148, 25a9842, adf863c, 5e519cf, L6 fix |
 | T2 | S2, S3, S4, S6, S7 frontend | delegated (same parallel launch) | done (RED/GREEN: register.test.ts, staff/api.test.ts) | Menu-Frontend f12d46f, 387f5ca |
-| T3 | all | inline: docs (CLAUDE.md, ROADMAP.md), e2e check, risk/verify | pending | |
+| T3 | all | inline: docs (CLAUDE.md, ROADMAP.md), e2e check, risk/verify | done (L7) | c6757ca, Menu-Frontend ce2fe59 |
 
 ## Log
 
@@ -95,3 +95,10 @@ in Backend and Menu-Frontend (stacked on `feat/slice-7-kitchen`). Delivery: ask-
   draft key includes the business name, so a corrected name is a new sign-up. Advisories kept: every sign-up attempt
   counts toward the per-IP limit (5 per 15 min; Docker Desktop shares one IP in dev), 429 text says "login attempts",
   sign-up reveals whether an email is registered (by spec), StaffPanel replay 409 reloads the whole list.
+- **L7** (2026-10-28, parent) Native review: Menu-Frontend `review-8fdf49dd9aab6e56` (base 56b61f0, risk + reliability)
+  approved and acknowledged; Backend `review-c4bec167e5a1bee6` (base 6afcab2, risk + resilience + reliability) approved
+  and acknowledged; advisories: sign-up retries consume the per-IP limit, register_business.py:90-96 warning. E2E over
+  the dev proxy (:5173): sign-up 201 -> /auth/me admin of the new tenant; three "Agustin Quevedo" members got distinct
+  codes and each signed in only with its own PIN; code A + PIN B 401; New PIN kept the code, ended the old session and
+  the old PIN; waiter 403 on /staff; legacy `demo.mesero` still signs in. Headless Chrome rendered /register (step 1)
+  and /login (Admin, Staff, Table tabs). CLAUDE.md and ROADMAP.md updated. Next: Slice 8 "Pedir la cuenta".
