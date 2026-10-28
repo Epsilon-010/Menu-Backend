@@ -112,3 +112,34 @@ def test_a_tenant_with_tracked_images_cannot_be_deleted_silently(tenant: SeedRes
     # Its images must go through the cleanup first; dropping the records would orphan them for good.
     with pytest.raises(IntegrityError):
         asyncio.run(_with_factory(work))
+
+
+def test_a_storage_outage_stops_the_run_after_one_failed_batch(tenant: SeedResult, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Circuit breaker: when a whole batch fails, the run stops instead of hammering a storage that is down."""
+    from app import worker
+    from tests.unit.fakes import FakeImageStorage
+
+    monkeypatch.setattr(worker, "BATCH_SIZE", 2)
+    storage = FakeImageStorage()
+    storage.fail_deletes = True
+    attempts: list[str] = []
+    real_delete = storage.delete
+
+    async def counting_delete(public_id: str) -> None:
+        attempts.append(public_id)
+        await real_delete(public_id)
+
+    storage.delete = counting_delete  # type: ignore[method-assign]
+    ids = [f"tenants/{tenant.tenant_id}/items/outage{index}" for index in range(5)]
+
+    async def register_discarded(factory: async_sessionmaker) -> None:  # type: ignore[type-arg]
+        await _register(factory, tenant, *ids)
+        async with factory() as session:
+            for public_id in ids:
+                await SqlAlchemyImageUploads(session).discard(tenant.tenant_id, public_id)
+            await session.commit()
+
+    asyncio.run(_with_factory(register_discarded))
+
+    assert asyncio.run(worker.clean_up_images_now(storage)) == 0
+    assert len(attempts) == 2

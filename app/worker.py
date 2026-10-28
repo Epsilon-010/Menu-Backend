@@ -50,7 +50,11 @@ async def clean_up_images_now(storage: ImageStorage | None = None) -> int:
                     batch_size=BATCH_SIZE,
                 ).execute()
             deleted += result.deleted
-            # Failed images are postponed, so a full batch with failures still means more may be due.
+            # Circuit breaker: a batch where nothing could be deleted means the storage is down; stop
+            # instead of hammering it (failed images are already postponed and the next run retries).
+            if result.failed and not result.deleted:
+                break
+            # Failed images are postponed, so a full batch with some failures still means more may be due.
             if result.deleted + result.failed < BATCH_SIZE:
                 break
     finally:
