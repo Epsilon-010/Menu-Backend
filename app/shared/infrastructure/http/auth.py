@@ -32,10 +32,10 @@ async def get_principal(
     except InvalidAccessToken as error:
         raise _unauthorized() from error
 
-    # Deactivating an account (or resetting its password) ends its sessions right away.
+    # Deactivating an account (or changing its PIN, password or role) ends its sessions right away.
     revocations: AccessRevocations = request.app.state.access_revocations
-    revoked_at = await revocations.revoked_since(principal.subject_id)
-    if revoked_at is not None and (principal.issued_at is None or principal.issued_at <= revoked_at):
+    required = await revocations.required_version(principal.subject_id)
+    if required is not None and principal.session_version < required:
         raise _unauthorized()
     return principal
 

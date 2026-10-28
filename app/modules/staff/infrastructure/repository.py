@@ -21,6 +21,7 @@ def _to_entity(model: UserModel) -> User:
         role=Role(model.role),
         password_hash=model.password_hash,
         is_active=model.is_active,
+        session_version=model.session_version,
     )
 
 
@@ -39,6 +40,7 @@ class SqlAlchemyUserRepository:
                 role=user.role.value,
                 password_hash=user.password_hash,
                 is_active=user.is_active,
+                session_version=user.session_version,
             )
         )
         try:
@@ -99,6 +101,7 @@ class SqlAlchemyUserRepository:
                 role=user.role.value,
                 password_hash=user.password_hash,
                 is_active=user.is_active,
+                session_version=user.session_version,
             )
         )
         if not affected_rows(result):

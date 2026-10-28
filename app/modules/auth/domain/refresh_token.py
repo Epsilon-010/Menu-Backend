@@ -38,6 +38,8 @@ class RefreshToken:
     rotated_at: datetime | None = None
     revoked_at: datetime | None = None
     table_id: uuid.UUID | None = None
+    # The owner's session version when it was issued; a credential change makes it stale.
+    session_version: int = 1
     id: uuid.UUID = field(default_factory=uuid.uuid4)
 
     def __post_init__(self) -> None:
@@ -88,20 +90,28 @@ class AccessTokenIssuer(Protocol):
     """Port: signs short-lived access tokens."""
 
     def issue(
-        self, subject_id: uuid.UUID, tenant_id: uuid.UUID, role: Role, now: datetime, table_id: uuid.UUID | None = None
+        self,
+        subject_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        role: Role,
+        now: datetime,
+        *,
+        session_version: int,
+        table_id: uuid.UUID | None = None,
     ) -> IssuedAccessToken: ...
 
 
 class LoginAttemptLimiter(Protocol):
-    """Port: limits login attempts per account (user) to block brute force from any number of IPs."""
+    """Port: limits login attempts per client (IP) and account, so a device that keeps failing only
+    locks itself out; a higher per-account backstop still caps guessing from many addresses."""
 
-    async def acquire(self, account: str) -> int | None:
+    async def acquire(self, account: str, client: str) -> int | None:
         """Atomically counts this attempt before the password is checked.
 
-        Returns the seconds until a new attempt is allowed when over the limit, else None.
+        Returns the seconds until a new attempt is allowed when over a limit, else None.
         """
         ...
 
-    async def succeeded(self, account: str) -> None:
-        """Clears the account's count after a successful login."""
+    async def succeeded(self, account: str, client: str) -> None:
+        """Clears this client's count for the account after a successful login."""
         ...

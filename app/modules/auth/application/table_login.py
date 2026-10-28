@@ -23,11 +23,12 @@ class TableLogin:
         self._sessions = sessions
         self._uow = uow
 
-    async def execute(self, code: str, pin: str) -> AuthSession:
+    async def execute(self, code: str, pin: str, client: str) -> AuthSession:
+        """`client` is the caller's IP: failures only lock that device out of the table."""
         code = normalize_table_code(code)
         # Staff logins count under "staff:<login>", so no typed login ever shares this table's counter.
         account = f"table:{code}"
-        retry_after = await self._limiter.acquire(account)
+        retry_after = await self._limiter.acquire(account, client)
         if retry_after is not None:
             raise TooManyLoginAttempts(retry_after)
 
@@ -37,7 +38,7 @@ class TableLogin:
         if table is None or not await self._hasher.verify(table.pin_hash, pin) or not table.is_active:
             raise InvalidCredentials()
 
-        await self._limiter.succeeded(account)
+        await self._limiter.succeeded(account, client)
         session = await self._sessions.issue_for_table(table)
         await self._uow.commit()
         return session

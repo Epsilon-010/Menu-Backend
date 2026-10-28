@@ -24,9 +24,13 @@ TENANT_B = uuid.uuid4()
 class FakeSessionRevoker:
     def __init__(self) -> None:
         self.revoked: list[tuple[uuid.UUID, uuid.UUID]] = []
+        self.access_ended: list[tuple[uuid.UUID, int]] = []
 
     async def revoke_all(self, tenant_id: uuid.UUID, table_id: uuid.UUID) -> None:
         self.revoked.append((tenant_id, table_id))
+
+    async def end_access(self, table_id: uuid.UUID, session_version: int) -> None:
+        self.access_ended.append((table_id, session_version))
 
 
 class World:
@@ -245,3 +249,36 @@ async def test_table_creates_of_a_tenant_are_serialized(world: World) -> None:
     await world.create().execute(TENANT_A, "Mesa 4", uuid.uuid4())
 
     assert world.tables.create_locks == [TENANT_A]
+
+
+# --- Session versions --------------------------------------------------------------------------
+
+
+class FailingUnitOfWork(FakeUnitOfWork):
+    async def commit(self) -> None:
+        raise RuntimeError("commit failed")
+
+
+async def test_regenerating_the_pin_or_deactivating_bumps_the_session_version_and_ends_access(world: World) -> None:
+    table = await world.add()
+
+    await world.regenerate().execute(TENANT_A, table.id)
+    await world.update().execute(TENANT_A, table.id, name="Terraza 1")
+    await world.update().execute(TENANT_A, table.id, is_active=False)
+    await world.update().execute(TENANT_A, table.id, is_active=True)
+
+    assert world.tables.tables[table.id].session_version == 3
+    assert world.sessions.access_ended == [(table.id, 2), (table.id, 3)]
+
+
+async def test_access_is_only_ended_once_the_new_session_version_is_committed(world: World) -> None:
+    table = await world.add()
+    world.uow = FailingUnitOfWork()
+
+    with pytest.raises(RuntimeError):
+        await world.regenerate().execute(TENANT_A, table.id)
+    with pytest.raises(RuntimeError):
+        await world.update().execute(TENANT_A, table.id, is_active=False)
+
+    # Ending access before the commit would reject every new login until the floor expires.
+    assert world.sessions.access_ended == []

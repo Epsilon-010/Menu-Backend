@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Uuid, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Uuid, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.infrastructure.database import Base, UUIDPrimaryKey
@@ -25,3 +25,5 @@ class RefreshTokenModel(UUIDPrimaryKey, Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The owner's session version when issued; older than the owner's current one means rejected.
+    session_version: Mapped[int] = mapped_column(Integer, server_default=text("1"))

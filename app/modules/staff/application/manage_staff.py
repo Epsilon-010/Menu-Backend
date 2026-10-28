@@ -102,12 +102,17 @@ class UpdateStaffMember:
     ) -> User:
         member = await _get_staff_member(self._users, tenant_id, user_id)
         updated = member.with_changes(full_name=full_name, role=role, is_active=is_active)
+        deactivated = member.is_active and not updated.is_active
+        ends_sessions = deactivated or updated.role != member.role
+        if ends_sessions:
+            updated = updated.with_sessions_ended()
 
         await self._users.update(updated)
-        deactivated = member.is_active and not updated.is_active
-        if deactivated or updated.role != member.role:
+        if ends_sessions:
             await self._sessions.revoke_all(tenant_id, user_id)
         await self._uow.commit()
+        if ends_sessions:
+            await self._sessions.end_access(user_id, updated.session_version)
         return updated
 
 
@@ -126,6 +131,8 @@ class ResetStaffPassword:
         validate_password(password)
         member = await _get_staff_member(self._users, tenant_id, user_id)
 
-        await self._users.update(replace(member, password_hash=await self._hasher.hash(password)))
+        updated = replace(member, password_hash=await self._hasher.hash(password)).with_sessions_ended()
+        await self._users.update(updated)
         await self._sessions.revoke_all(tenant_id, user_id)
         await self._uow.commit()
+        await self._sessions.end_access(user_id, updated.session_version)

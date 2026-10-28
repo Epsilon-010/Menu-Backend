@@ -8,7 +8,9 @@ from fastapi import Depends
 from fastapi.testclient import TestClient
 from httpx import Response
 from jose import jwt
+from sqlalchemy import update
 
+from app.modules.auth.infrastructure.models import RefreshTokenModel
 from app.seed import SeedResult, seed_tenant
 from app.shared.domain.principal import Principal, Role
 from app.shared.infrastructure.config import get_settings
@@ -62,6 +64,23 @@ def me(client: TestClient, access_token: str | None = None) -> Response:
     return client.get("/api/v1/auth/me", headers={"Cookie": f"access_token={access_token}"})
 
 
+def unrevoke_refresh_tokens(**owner: uuid.UUID) -> None:
+    """Simulates a refresh in flight during a credential change: the token it stored escaped the revocation."""
+
+    async def run() -> None:
+        engine = create_engine(get_settings().database_url)
+        try:
+            async with create_session_factory(engine)() as session:
+                await session.execute(
+                    update(RefreshTokenModel).filter_by(**owner).values(revoked_at=None, rotated_at=None)
+                )
+                await session.commit()
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
 def set_cookies(response: Response) -> dict[str, str]:
     return {header.split("=", 1)[0]: header for header in response.headers.get_list("set-cookie")}
 
@@ -80,6 +99,7 @@ def claims_for(user_id: uuid.UUID, tenant_id: uuid.UUID, role: str = "admin", **
         "jti": str(uuid.uuid4()),
         "iat": now,
         "exp": now + timedelta(minutes=15),
+        "sv": 1,
         **extra,
     }
 
@@ -123,8 +143,8 @@ def test_wrong_password_and_unknown_email_get_the_same_generic_error(client: Tes
     assert "set-cookie" not in wrong_password.headers
 
 
-def test_too_many_failures_for_an_account_block_it_temporarily(client: TestClient, tenant_a: SeedResult) -> None:
-    for _ in range(get_settings().login_max_failures_per_account):
+def test_too_many_failures_from_one_device_block_it_temporarily(client: TestClient, tenant_a: SeedResult) -> None:
+    for _ in range(get_settings().login_max_failures_per_client):
         assert login(client, password="wrong-pass").status_code == 401
 
     blocked = login(client)
@@ -139,20 +159,35 @@ def test_too_many_failures_for_an_account_block_it_temporarily(client: TestClien
     assert 0 < int(blocked.headers["retry-after"]) <= get_settings().login_failure_window_seconds
 
 
+def test_failures_from_one_device_never_lock_the_account_on_another_device(tenant_a: SeedResult) -> None:
+    from app.main import create_app
+
+    # One app per client: each TestClient runs its own event loop, and an app's pools belong to one loop.
+    with (
+        TestClient(create_app(), base_url="https://testserver", client=("198.51.100.1", 50000)) as attacker,
+        TestClient(create_app(), base_url="https://testserver", client=("198.51.100.2", 50000)) as owner,
+    ):
+        for _ in range(get_settings().login_max_failures_per_client):
+            assert login(attacker, password="wrong-pass").status_code == 401
+
+        assert login(attacker).status_code == 429
+        assert login(owner).status_code == 200
+
+
 def test_failures_on_other_accounts_never_block_this_user(client: TestClient, tenant_a: SeedResult) -> None:
-    # The limit is per user only: one client failing on many accounts does not lock out the rest.
+    # One client failing on many accounts does not lock out the rest.
     for attempt in range(30):
         assert login(client, username=f"guess-{attempt}@example.com").status_code == 401
 
     assert login(client).status_code == 200
 
 
-def test_a_successful_login_clears_the_account_failures(client: TestClient, tenant_a: SeedResult) -> None:
-    for _ in range(get_settings().login_max_failures_per_account - 1):
+def test_a_successful_login_clears_the_device_failures(client: TestClient, tenant_a: SeedResult) -> None:
+    for _ in range(get_settings().login_max_failures_per_client - 1):
         login(client, password="wrong-pass")
     assert login(client).status_code == 200
 
-    for _ in range(get_settings().login_max_failures_per_account - 1):
+    for _ in range(get_settings().login_max_failures_per_client - 1):
         assert login(client, password="wrong-pass").status_code == 401
     assert login(client).status_code == 200
 

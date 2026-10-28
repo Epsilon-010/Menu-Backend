@@ -36,11 +36,11 @@ class GetCurrentAccount:
                 if principal.table_id is not None
                 else None
             )
-            if table is None or not table.is_active:
+            if table is None or not table.is_active or table.session_version != principal.session_version:
                 raise AccountNotFound()
             return Account(tenant=tenant, table=table)
 
         user = await self._get_user.execute(principal.tenant_id, principal.subject_id)
-        if user is None or not user.is_active:
+        if user is None or not user.is_active or user.session_version != principal.session_version:
             raise AccountNotFound()
         return Account(tenant=tenant, user=user)

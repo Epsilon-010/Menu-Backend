@@ -5,50 +5,77 @@ from redis.asyncio import Redis
 from app.modules.auth.infrastructure.rate_limiter import RedisLoginAttemptLimiter
 from app.shared.infrastructure.config import get_settings
 
+Step = tuple[str, str, str]  # ("acquire" | "succeed", account, client)
 
-async def _run(steps: list[tuple[str, str]], max_per_account: int = 5) -> list[int | None]:
-    """Runs ("acquire" | "succeed", account) steps; acquires in a row run concurrently."""
+
+async def _run(steps: list[Step], max_per_client: int = 5, max_per_account: int = 50) -> list[int | None]:
+    """Runs the steps; acquires in a row run concurrently."""
     redis = Redis.from_url(get_settings().redis_url, decode_responses=True)
     try:
-        limiter = RedisLoginAttemptLimiter(redis, window_seconds=900, max_per_account=max_per_account)
+        limiter = RedisLoginAttemptLimiter(
+            redis, window_seconds=900, max_per_client=max_per_client, max_per_account=max_per_account
+        )
         results: list[int | None] = []
-        batch: list[str] = []
+        batch: list[tuple[str, str]] = []
 
         async def flush() -> None:
-            results.extend(await asyncio.gather(*(limiter.acquire(account) for account in batch)))
+            results.extend(await asyncio.gather(*(limiter.acquire(account, client) for account, client in batch)))
             batch.clear()
 
-        for action, account in steps:
+        for action, account, client in steps:
             if action == "acquire":
-                batch.append(account)
+                batch.append((account, client))
             else:
                 await flush()
-                await limiter.succeeded(account)
+                await limiter.succeeded(account, client)
         await flush()
         return results
     finally:
         await redis.aclose()
 
 
-def test_parallel_attempts_on_one_account_never_exceed_its_limit() -> None:
-    # However many clients (IPs) attack the same user, only 5 attempts get through.
-    results = asyncio.run(_run([("acquire", "owner@example.com")] * 30))
+def _attempts(count: int, account: str = "owner@example.com", client: str = "10.0.0.1") -> list[Step]:
+    return [("acquire", account, client)] * count
+
+
+def test_parallel_attempts_from_one_device_never_exceed_its_limit() -> None:
+    results = asyncio.run(_run(_attempts(30)))
 
     assert results.count(None) == 5
     assert all(0 < wait <= 900 for wait in results if wait is not None)
 
 
-def test_each_account_has_its_own_budget() -> None:
-    results = asyncio.run(_run([("acquire", "a@example.com")] * 6 + [("acquire", "b@example.com")] * 5))
+def test_each_device_has_its_own_budget_on_the_same_account() -> None:
+    results = asyncio.run(_run(_attempts(6) + _attempts(5, client="10.0.0.2")))
 
     assert results[:6].count(None) == 5
     assert results[6:] == [None] * 5
 
 
-def test_a_successful_login_clears_the_account_count() -> None:
-    steps = [("acquire", "owner@example.com")] * 4 + [("succeed", "owner@example.com")]
-    results = asyncio.run(_run(steps + [("acquire", "owner@example.com")] * 6))
+def test_each_account_has_its_own_budget_on_the_same_device() -> None:
+    results = asyncio.run(_run(_attempts(6, "a@example.com") + _attempts(5, "b@example.com")))
 
-    assert results[:4] == [None] * 4
-    assert results[4:9] == [None] * 5
-    assert results[9] is not None
+    assert results[:6].count(None) == 5
+    assert results[6:] == [None] * 5
+
+
+def test_the_account_backstop_holds_however_many_devices_try() -> None:
+    # A rotating or spoofed address gets a fresh device budget each time, never more than the account allows.
+    steps = [step for client in range(25) for step in _attempts(3, client=f"10.0.1.{client}")]
+
+    results = asyncio.run(_run(steps, max_per_account=50))
+
+    assert results.count(None) == 50
+    assert all(0 < wait <= 900 for wait in results if wait is not None)
+
+
+def test_a_successful_login_clears_only_that_device_count() -> None:
+    steps = _attempts(4) + _attempts(3, client="10.0.0.2") + [("succeed", "owner@example.com", "10.0.0.1")]
+
+    results = asyncio.run(_run(steps + _attempts(6) + _attempts(3, client="10.0.0.2"), max_per_account=100))
+
+    assert results[:7] == [None] * 7
+    # The last two batches run concurrently: count what gets through per device.
+    assert results[7:13].count(None) == 5
+    # The other device keeps its 3 failures: only 2 more get through.
+    assert results[13:].count(None) == 2

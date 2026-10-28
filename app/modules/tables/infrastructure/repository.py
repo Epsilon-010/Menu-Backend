@@ -32,6 +32,7 @@ def _to_entity(model: TableModel) -> Table:
         code=model.code,
         pin_hash=model.pin_hash,
         is_active=model.is_active,
+        session_version=model.session_version,
     )
 
 
@@ -53,6 +54,7 @@ class SqlAlchemyTableRepository:
             code=table.code,
             pin_hash=table.pin_hash,
             is_active=table.is_active,
+            session_version=table.session_version,
         )
         try:
             # A savepoint: when the random code collides, only this insert rolls back and the use
@@ -110,7 +112,12 @@ class SqlAlchemyTableRepository:
             result = await self._session.execute(
                 update(TableModel)
                 .where(TableModel.tenant_id == table.tenant_id, TableModel.id == table.id)
-                .values(name=table.name, pin_hash=table.pin_hash, is_active=table.is_active)
+                .values(
+                    name=table.name,
+                    pin_hash=table.pin_hash,
+                    is_active=table.is_active,
+                    session_version=table.session_version,
+                )
             )
         except IntegrityError as error:
             _raise_name_taken(error, table)

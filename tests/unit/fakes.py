@@ -420,24 +420,24 @@ class InMemoryRefreshTokenRepository:
 
 class FakeAccessRevocations:
     def __init__(self) -> None:
-        self.revoked: dict[uuid.UUID, datetime] = {}
+        self.required: dict[uuid.UUID, int] = {}
 
-    async def revoke(self, subject_id: uuid.UUID, at: datetime) -> None:
-        self.revoked[subject_id] = at
+    async def require_version(self, subject_id: uuid.UUID, session_version: int) -> None:
+        self.required[subject_id] = max(session_version, self.required.get(subject_id, 0))
 
-    async def revoked_since(self, subject_id: uuid.UUID) -> datetime | None:
-        return self.revoked.get(subject_id)
+    async def required_version(self, subject_id: uuid.UUID) -> int | None:
+        return self.required.get(subject_id)
 
 
 class FakeLoginAttemptLimiter:
     def __init__(self, blocked_for: int | None = None) -> None:
         self.blocked_for = blocked_for
-        self.acquired: list[str] = []
-        self.succeeded_logins: list[str] = []
+        self.acquired: list[tuple[str, str]] = []
+        self.succeeded_logins: list[tuple[str, str]] = []
 
-    async def acquire(self, account: str) -> int | None:
-        self.acquired.append(account)
+    async def acquire(self, account: str, client: str) -> int | None:
+        self.acquired.append((account, client))
         return self.blocked_for
 
-    async def succeeded(self, account: str) -> None:
-        self.succeeded_logins.append(account)
+    async def succeeded(self, account: str, client: str) -> None:
+        self.succeeded_logins.append((account, client))

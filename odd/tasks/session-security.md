@@ -1,0 +1,42 @@
+# Session security (H13)
+Objective: close H13 — sessions surviving a credential change, and third-party account lockout.
+Branch: `fix/session-security` (Backend) + `fix/forward-client-ip` (Menu-Frontend). Delivery: single PR per repo.
+Test runner: `uv run pytest` (Backend), `npm test` (Menu-Frontend).
+
+## Specs
+- S1. "si alguien cambia de codigo para las mesas que expiren las sesiones de esa mesa": regenerating a table's
+  PIN (the code never changes) or deactivating it ends every session of that table, including a refresh that was
+  in flight at the same moment. Same rule for staff: password reset, role change and deactivation (the same race,
+  agreed as H13 point 1).
+  - Mechanism: `session_version` on tables and users, bumped on each of those changes; refresh tokens and access
+    tokens carry the version they were issued for and are rejected once it is stale (refresh: compared with the
+    row; access: compared with a Redis floor written after the commit, fail-open as before).
+- S2. "en la 2 que sea por ip y cuenta": login attempts are limited per client IP + account
+  (`LOGIN_MAX_FAILURES_PER_CLIENT`, default 5), so failures from one device no longer lock the account for others.
+  A higher per-account backstop (`LOGIN_MAX_FAILURES_PER_ACCOUNT`, default 50) keeps a spoofed or rotating IP from
+  turning it into unlimited guessing (proposed as option (b), accepted: "si hazlo").
+  - The client IP is only taken from `X-Forwarded-For` when the request comes from the frontend proxy
+    (uvicorn `FORWARDED_ALLOW_IPS`); a direct request to the API port cannot choose its IP.
+
+## Tasks
+- [x] T1 (S1) inline — session versions: migration `75e13c35bff4`, entities, tokens, refresh check, access floor, use
+  cases. RED: escaped refresh token and post-change access token both answered 200; GREEN: 401.
+- [x] T2 (S2) inline — per-client limiter, client IP, proxy trust (compose fixed frontend IP + Vite `xfwd`), docs.
+  RED: per-device tests failed on the old per-account limiter; GREEN.
+- [ ] T3 independent verifier (risk items 1, 2, 4), then commit and push.
+
+## Log
+- L1 (2026-10-27): "en la 1 si si alguien cambia de codigo para las mesas que expiren las sesiones de esa mesa en la 2
+  que sea por ip y cuenta pero el progrma sera interno asi que no veo que mas ips lo ataquen por lo que pues si hazlo"
+- L2: Row locks in the refresh were rejected (refresh locks the token then would lock the table; the PIN change locks
+  the table then the tokens: deadlock). Versions close the race without locks.
+- L3: Proxy trust: uvicorn's own ProxyHeadersMiddleware (`FORWARDED_ALLOW_IPS`) instead of app code. Compose pins the
+  frontend to `10.213.57.10` in `10.213.57.0/24`; the first pick (172.30.57.0/24) overlapped another local project's
+  network (`dbinspector_default` 172.30.0.0/16), and Docker hands out 172.17-31/192.168 automatically.
+- L4: Success clears only that device's counter, not the account backstop, so a real login does not refill an attacker's
+  budget. Access floor is a Redis max (Lua) written after the commit: before it, a failed commit would reject new logins.
+- L5: Evidence: `uv run pytest` 303 passed; Menu-Frontend typecheck, lint, 57 tests, build OK. E2E on the dev stack
+  (scratch script, not committed) 8/8: host blocked after 5 through Vite while another container still gets 401 on the
+  same account; spoofed X-Forwarded-For straight to :8020 ignored (6th is 429); PIN change makes the tablet /me and its
+  refresh 401. Once, before a test fix, a full `uv run pytest` hung >600 s with no DB connections; the rerun and every
+  later run finished in ~60 s. Not reproduced.

@@ -20,7 +20,9 @@ class Settings(BaseSettings):
 
     # Login attempts allowed per account (user) inside the window before a temporary block.
     login_failure_window_seconds: int = Field(default=900, gt=0)
-    login_max_failures_per_account: int = Field(default=5, gt=0)
+    # Per client IP + account; the per-account backstop caps all addresses together.
+    login_max_failures_per_client: int = Field(default=5, gt=0)
+    login_max_failures_per_account: int = Field(default=50, gt=0)
 
     # Image storage. Without all three the API still runs, but image uploads answer 503.
     cloudinary_cloud_name: str | None = None

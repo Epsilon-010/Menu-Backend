@@ -33,6 +33,7 @@ def _to_entity(model: RefreshTokenModel) -> RefreshToken:
         expires_at=model.expires_at,
         rotated_at=model.rotated_at,
         revoked_at=model.revoked_at,
+        session_version=model.session_version,
     )
 
 
@@ -51,6 +52,7 @@ class SqlAlchemyRefreshTokenRepository:
                 token_hash=token.token_hash,
                 created_at=token.created_at,
                 expires_at=token.expires_at,
+                session_version=token.session_version,
             )
         )
         await self._session.flush()

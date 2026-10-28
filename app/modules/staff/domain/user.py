@@ -63,6 +63,9 @@ class User:
     email: str | None = None
     username: str | None = None
     is_active: bool = True
+    # Goes up whenever the member must be signed out (new password, role change, deactivation): every
+    # session token carries the version it was issued for, so an older one is rejected.
+    session_version: int = 1
     id: uuid.UUID = field(default_factory=uuid.uuid4)
 
     @classmethod
@@ -115,6 +118,9 @@ class User:
             is_active=self.is_active if is_active is None else is_active,
         )
 
+    def with_sessions_ended(self) -> "User":
+        return replace(self, session_version=self.session_version + 1)
+
 
 class UserRepository(Protocol):
     async def add(self, user: User) -> None: ...
@@ -152,3 +158,8 @@ class SessionRevoker(Protocol):
     """
 
     async def revoke_all(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> None: ...
+
+    async def end_access(self, user_id: uuid.UUID, session_version: int) -> None:
+        """Rejects live access tokens older than `session_version`. Call it after the commit that
+        stored that version: before it, a failed commit would leave new logins rejected."""
+        ...
