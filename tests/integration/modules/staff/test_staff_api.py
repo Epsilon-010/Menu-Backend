@@ -71,7 +71,7 @@ def test_admin_creates_a_waiter_and_a_cook_and_each_signs_in_with_their_role(
     admin = signed_in(new_client, "owner@example.com")
 
     waiter = create_member(admin, " Juan.Taco ", "waiter")
-    cook = create_member(admin, "maria.taco", "kitchen", full_name="María López")
+    cook = create_member(admin, "pedro.taco", "kitchen", full_name="Pedro López")
 
     assert waiter.status_code == 201
     assert waiter.json() == {
@@ -84,9 +84,9 @@ def test_admin_creates_a_waiter_and_a_cook_and_each_signs_in_with_their_role(
     assert cook.json()["role"] == "kitchen"
     listed = admin.get(STAFF_URL)
     assert listed.status_code == 200
-    assert [member["username"] for member in listed.json()] == ["juan.taco", "maria.taco"]
+    assert [member["username"] for member in listed.json()] == ["juan.taco", "pedro.taco"]
 
-    for username, role in (("juan.taco", "waiter"), ("maria.taco", "kitchen")):
+    for username, role in (("juan.taco", "waiter"), ("pedro.taco", "kitchen")):
         client = new_client()
         session = login(client, username=username, password=STAFF_PASSWORD)
         assert session.status_code == 200

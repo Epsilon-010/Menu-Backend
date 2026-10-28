@@ -291,7 +291,7 @@ class SubmitCart:
         await ctx.carts.clear(diner.tenant_id, diner.table_id)
         version = await ctx.carts.bump_version(diner.tenant_id, diner.table_id)
         await ctx.uow.commit()
-        await ctx.events.publish(diner.tenant_id, diner.table_id, "order.created")
+        await ctx.events.publish(diner.tenant_id, diner.table_id, "order.created", order_id=order.id)
         await ctx.events.publish(diner.tenant_id, diner.table_id, "cart.updated", cart_version=version)
         return order
 

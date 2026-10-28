@@ -55,6 +55,7 @@ def create_app() -> FastAPI:
     api.include_router(menu_router.router)
     api.include_router(orders_router.table_router)
     api.include_router(orders_router.bills_router)
+    api.include_router(orders_router.staff_router)
     app.include_router(api)
     return app
 

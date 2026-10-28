@@ -45,7 +45,7 @@ async def test_creates_an_admin_with_a_hashed_password_and_normalized_email(
     users: InMemoryUserRepository, uow: FakeUnitOfWork
 ) -> None:
     user = await create_user(users, uow).execute(
-        tenant_id=TENANT_A, email="  Owner@Example.COM ", full_name="Ana Owner", role=Role.ADMIN, password="s3cret-pass"
+        tenant_id=TENANT_A, email="  Owner@Example.COM ", full_name="Test Owner", role=Role.ADMIN, password="s3cret-pass"
     )
 
     assert user.email == "owner@example.com"
@@ -62,7 +62,7 @@ async def test_rejects_an_email_already_in_use_even_in_another_tenant(
     users: InMemoryUserRepository, uow: FakeUnitOfWork
 ) -> None:
     use_case = create_user(users, uow)
-    await use_case.execute(TENANT_A, "owner@example.com", "Ana", Role.ADMIN, "s3cret-pass")
+    await use_case.execute(TENANT_A, "owner@example.com", "Owner", Role.ADMIN, "s3cret-pass")
 
     with pytest.raises(EmailAlreadyInUse):
         await use_case.execute(TENANT_B, "OWNER@example.com", "Other", Role.ADMIN, "s3cret-pass")
@@ -74,9 +74,9 @@ async def test_rejects_an_email_already_in_use_even_in_another_tenant(
 @pytest.mark.parametrize(
     ("email", "full_name", "password"),
     [
-        ("not-an-email", "Ana", "s3cret-pass"),
+        ("not-an-email", "Owner", "s3cret-pass"),
         ("owner@example.com", "   ", "s3cret-pass"),
-        ("owner@example.com", "Ana", "short"),
+        ("owner@example.com", "Owner", "short"),
     ],
 )
 async def test_rejects_invalid_user_data(
@@ -95,14 +95,14 @@ async def test_rejects_the_table_role_for_staff_accounts(users: InMemoryUserRepo
 
 
 async def test_finds_a_user_by_email_case_insensitively(users: InMemoryUserRepository, uow: FakeUnitOfWork) -> None:
-    created = await create_user(users, uow).execute(TENANT_A, "owner@example.com", "Ana", Role.ADMIN, "s3cret-pass")
+    created = await create_user(users, uow).execute(TENANT_A, "owner@example.com", "Owner", Role.ADMIN, "s3cret-pass")
 
     assert await FindUserByLogin(users).execute(" OWNER@example.com") == created
     assert await FindUserByLogin(users).execute("nobody@example.com") is None
 
 
 async def test_get_user_is_scoped_to_the_tenant(users: InMemoryUserRepository, uow: FakeUnitOfWork) -> None:
-    created = await create_user(users, uow).execute(TENANT_A, "owner@example.com", "Ana", Role.ADMIN, "s3cret-pass")
+    created = await create_user(users, uow).execute(TENANT_A, "owner@example.com", "Owner", Role.ADMIN, "s3cret-pass")
 
     assert await GetUser(users).execute(TENANT_A, created.id) == created
     assert await GetUser(users).execute(TENANT_B, created.id) is None
@@ -197,7 +197,7 @@ async def test_finds_a_staff_member_by_username_for_login(users: InMemoryUserRep
 async def test_lists_only_the_waiters_and_cooks_of_the_tenant_by_name(
     users: InMemoryUserRepository, uow: FakeUnitOfWork
 ) -> None:
-    await create_user(users, uow).execute(TENANT_A, "owner@example.com", "Ana Owner", Role.ADMIN, "s3cret-pass")
+    await create_user(users, uow).execute(TENANT_A, "owner@example.com", "Test Owner", Role.ADMIN, "s3cret-pass")
     create = CreateStaffMember(users, FakePasswordHasher(), uow)
     zoe = await create.execute(TENANT_A, "zoe", "Zoe", Role.KITCHEN, "s3cret-pass")
     bob = await create.execute(TENANT_A, "bob", "bob", Role.WAITER, "s3cret-pass")
@@ -287,7 +287,7 @@ async def test_staff_management_never_reaches_another_tenant_nor_an_admin(
     users: InMemoryUserRepository, uow: FakeUnitOfWork, sessions: FakeSessionRevoker
 ) -> None:
     member = await add_waiter(users, uow, TENANT_B)
-    admin = await create_user(users, uow).execute(TENANT_A, "owner@example.com", "Ana", Role.ADMIN, "s3cret-pass")
+    admin = await create_user(users, uow).execute(TENANT_A, "owner@example.com", "Owner", Role.ADMIN, "s3cret-pass")
 
     for target in (member.id, admin.id, uuid.uuid4()):
         with pytest.raises(StaffMemberNotFound):
@@ -334,7 +334,7 @@ async def test_a_staff_id_reused_for_another_member_or_tenant_is_refused(
     await create.execute(TENANT_A, "juan.burger", "Juan Pérez", Role.WAITER, "s3cret-pass", member_id)
 
     with pytest.raises(StaffIdTaken):
-        await create.execute(TENANT_A, "ana.cocina", "Ana", Role.KITCHEN, "s3cret-pass", member_id)
+        await create.execute(TENANT_A, "test.cocina", "Owner", Role.KITCHEN, "s3cret-pass", member_id)
     with pytest.raises(StaffIdTaken):
         await create.execute(TENANT_B, "juan.burger", "Juan Pérez", Role.WAITER, "s3cret-pass", member_id)
 

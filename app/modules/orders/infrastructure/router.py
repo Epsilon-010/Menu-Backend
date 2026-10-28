@@ -2,11 +2,11 @@ import re
 import uuid
 from collections.abc import Awaitable
 from datetime import datetime
-from typing import Annotated, TypeVar
+from typing import Annotated, Literal, TypeVar
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.orders.application.bills import (
@@ -17,6 +17,17 @@ from app.modules.orders.application.bills import (
     OpenTable,
     PayBill,
     TableOverview,
+)
+from app.modules.orders.application.kitchen import (
+    AddDishToOrder,
+    ChangeDishStatus,
+    GetOrderSettings,
+    Kitchen,
+    ListDeliveries,
+    ListKitchenOrders,
+    StaffMember,
+    StaffOrder,
+    UpdateOrderSettings,
 )
 from app.modules.orders.application.ordering import (
     AddCartLine,
@@ -30,6 +41,7 @@ from app.modules.orders.application.ordering import (
     authorize,
 )
 from app.modules.orders.domain.errors import (
+    BillClosed,
     BillHasOrders,
     BillNotFound,
     CartChanged,
@@ -37,14 +49,20 @@ from app.modules.orders.domain.errors import (
     CartFull,
     CartLineNotFound,
     DinerNotAllowed,
+    DishesChanged,
+    DishesNotInOrder,
     InvalidOrderData,
     ItemsUnavailable,
     OrderIdTaken,
+    OrderNotFound,
     TableNotFound,
+    TransitionNotAllowed,
 )
 from app.modules.orders.domain.model import (
+    MAX_LATE_ORDER_MINUTES,
     MAX_NOTE_LENGTH,
     MAX_QUANTITY,
+    MAX_REASON_LENGTH,
     Diner,
     Order,
     OrderItemStatus,
@@ -52,7 +70,7 @@ from app.modules.orders.domain.model import (
     PaymentMethod,
 )
 from app.modules.orders.infrastructure.adapters import CatalogMenu, RedisTableEvents, TablesModule
-from app.modules.orders.infrastructure.events import table_events
+from app.modules.orders.infrastructure.events import staff_events, table_events
 from app.modules.orders.infrastructure.guest_sessions import RevokedGuestAccess
 from app.modules.orders.infrastructure.repository import (
     PostgresTableLocks,
@@ -60,6 +78,7 @@ from app.modules.orders.infrastructure.repository import (
     SqlAlchemyCartRepository,
     SqlAlchemyGuestRepository,
     SqlAlchemyOrderRepository,
+    SqlAlchemyOrderSettingsRepository,
 )
 from app.shared.domain.principal import Principal, Role
 from app.shared.infrastructure.database import SqlAlchemyUnitOfWork, get_session
@@ -69,9 +88,14 @@ from app.shared.infrastructure.security import SystemClock
 
 table_router = APIRouter(prefix="/table", tags=["table"])
 bills_router = APIRouter(prefix="/bills", tags=["bills"])
+# The kitchen and delivery queues, dish status changes and the order settings.
+staff_router = APIRouter(tags=["kitchen"])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 Staff = Annotated[Principal, Depends(require_role("admin", "waiter"))]
+AnyStaff = Annotated[Principal, Depends(require_role("admin", "waiter", "kitchen"))]
+KitchenStaff = Annotated[Principal, Depends(require_role("admin", "kitchen"))]
+Admin = Annotated[Principal, Depends(require_role("admin"))]
 T = TypeVar("T")
 # Redis stream ids ("<ms>-<seq>"): anything else in Last-Event-ID starts from now.
 _STREAM_ID = re.compile(r"\d{1,20}-\d{1,20}")
@@ -111,6 +135,23 @@ def get_ordering(request: Request, session: SessionDep) -> Ordering:
 
 
 OrderingDep = Annotated[Ordering, Depends(get_ordering)]
+
+
+def get_kitchen(request: Request, session: SessionDep) -> Kitchen:
+    return Kitchen(
+        locks=PostgresTableLocks(session),
+        bills=SqlAlchemyBillRepository(session),
+        orders=SqlAlchemyOrderRepository(session),
+        menu=CatalogMenu(session),
+        settings=SqlAlchemyOrderSettingsRepository(session),
+        tables=TablesModule(session),
+        events=RedisTableEvents(request.app.state.redis),
+        clock=SystemClock(),
+        uow=SqlAlchemyUnitOfWork(session),
+    )
+
+
+KitchenDep = Annotated[Kitchen, Depends(get_kitchen)]
 
 
 # --- Schemas -----------------------------------------------------------------------------------
@@ -173,6 +214,7 @@ class OrderItemOut(BaseModel):
     note: str
     added_by: str
     status: OrderItemStatus
+    cancel_reason: str | None
     unit_price_cents: int
     subtotal_cents: int
 
@@ -185,6 +227,61 @@ class OrderOut(BaseModel):
     created_at: datetime
     items: list[OrderItemOut]
     total_cents: int
+
+
+class DishStatusIn(_In):
+    item_ids: list[uuid.UUID] = Field(min_length=1, max_length=50)
+    status: Literal["preparing", "ready", "delivered", "cancelled"]
+    # Required to cancel, refused for anything else (checked by the use case).
+    reason: str | None = Field(default=None, min_length=1, max_length=MAX_REASON_LENGTH)
+
+    @field_validator("item_ids")
+    @classmethod
+    def _unique(cls, item_ids: list[uuid.UUID]) -> list[uuid.UUID]:
+        if len(set(item_ids)) != len(item_ids):
+            raise ValueError("Each dish can appear only once")
+        return item_ids
+
+
+class OrderDishIn(_In):
+    # Optional client-chosen id: repeating the add never adds the dish twice.
+    id: uuid.UUID | None = None
+    item_id: uuid.UUID
+    quantity: int = Field(default=1, strict=True, ge=1, le=MAX_QUANTITY)
+    note: str = Field(default="", max_length=MAX_NOTE_LENGTH)
+
+
+class OrderSettingsIn(_In):
+    late_order_minutes: int = Field(strict=True, ge=1, le=MAX_LATE_ORDER_MINUTES)
+
+
+class OrderSettingsOut(BaseModel):
+    late_order_minutes: int
+
+
+class StaffOrderItemOut(BaseModel):
+    """A dish as the staff queues show it: never with prices."""
+
+    id: uuid.UUID
+    name: str
+    quantity: int
+    note: str
+    added_by: str
+    status: OrderItemStatus
+    cancel_reason: str | None
+    ready_at: datetime | None
+    updated_at: datetime
+
+
+class StaffOrderOut(BaseModel):
+    id: uuid.UUID
+    number: int
+    table_id: uuid.UUID
+    table_name: str
+    sent_by: str
+    created_at: datetime
+    status: OrderStatus
+    items: list[StaffOrderItemOut]
 
 
 class BillOut(BaseModel):
@@ -241,12 +338,40 @@ def _order_out(order: Order) -> OrderOut:
                 note=item.note,
                 added_by=item.added_by,
                 status=item.status,
+                cancel_reason=item.cancel_reason,
                 unit_price_cents=item.unit_price_cents,
                 subtotal_cents=item.subtotal_cents,
             )
             for item in order.items
         ],
         total_cents=order.total_cents,
+    )
+
+
+def _staff_order_out(view: StaffOrder) -> StaffOrderOut:
+    order = view.order
+    return StaffOrderOut(
+        id=order.id,
+        number=order.number,
+        table_id=order.table_id,
+        table_name=view.table_name,
+        sent_by=order.sent_by,
+        created_at=order.created_at,
+        status=order.status,
+        items=[
+            StaffOrderItemOut(
+                id=item.id,
+                name=item.name,
+                quantity=item.quantity,
+                note=item.note,
+                added_by=item.added_by,
+                status=item.status,
+                cancel_reason=item.cancel_reason,
+                ready_at=item.ready_at,
+                updated_at=item.updated_at or order.created_at,
+            )
+            for item in order.items
+        ],
     )
 
 
@@ -302,6 +427,16 @@ async def _run(call: Awaitable[T]) -> T | JSONResponse:
         return problem(status.HTTP_404_NOT_FOUND, "Table not found")
     except BillNotFound:
         return problem(status.HTTP_404_NOT_FOUND, "Bill not found")
+    except OrderNotFound:
+        return problem(status.HTTP_404_NOT_FOUND, "Order not found")
+    except DishesNotInOrder:
+        return problem(status.HTTP_422_UNPROCESSABLE_CONTENT, "All dishes must belong to this order")
+    except TransitionNotAllowed as error:
+        return problem(status.HTTP_403_FORBIDDEN, f"Your role cannot mark dishes as {error.args[0]}")
+    except DishesChanged:
+        return problem(status.HTTP_409_CONFLICT, "Some dishes already changed; reload the order")
+    except BillClosed:
+        return problem(status.HTTP_409_CONFLICT, "This bill is already paid; its dishes can no longer change")
 
 
 # --- Table routes: the tablet and the guests of its open visit ---------------------------------
@@ -345,7 +480,8 @@ async def table_events_stream(
     request: Request,
     last_event_id: Annotated[str | None, Header()] = None,
 ) -> Response:
-    """SSE: `cart.updated` (with `cart_version`), `order.created`, `bill.opened` and `bill.closed` for this table.
+    """SSE: `cart.updated` (with `cart_version`), `order.created`, `order.updated`, `bill.opened` and
+    `bill.closed` for this table.
 
     The visit is checked once, in a short transaction, so an open stream never holds a database connection.
     """
@@ -405,3 +541,76 @@ async def pay_bill(bill_id: uuid.UUID, body: PaymentIn, staff: Staff, ctx: Order
 async def close_table(bill_id: uuid.UUID, staff: Staff, ctx: OrderingDep) -> Response:
     result = await _run(CloseTable(ctx).execute(staff.tenant_id, bill_id))
     return result if isinstance(result, JSONResponse) else Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --- Staff routes: the kitchen and delivery queues, dish status changes, order settings -----------
+
+
+@staff_router.get("/kitchen/orders", response_model=list[StaffOrderOut])
+async def kitchen_orders(staff: KitchenStaff, ctx: KitchenDep) -> list[StaffOrderOut]:
+    return [_staff_order_out(view) for view in await ListKitchenOrders(ctx).execute(staff.tenant_id)]
+
+
+@staff_router.get("/deliveries", response_model=list[StaffOrderOut])
+async def deliveries(staff: Staff, ctx: KitchenDep) -> list[StaffOrderOut]:
+    return [_staff_order_out(view) for view in await ListDeliveries(ctx).execute(staff.tenant_id)]
+
+
+@staff_router.get("/orders/settings", response_model=OrderSettingsOut)
+async def read_order_settings(staff: AnyStaff, ctx: KitchenDep) -> OrderSettingsOut:
+    return OrderSettingsOut(late_order_minutes=await GetOrderSettings(ctx).execute(staff.tenant_id))
+
+
+@staff_router.patch("/orders/settings", response_model=OrderSettingsOut)
+async def update_order_settings(
+    body: OrderSettingsIn, admin: Admin, ctx: KitchenDep
+) -> OrderSettingsOut | JSONResponse:
+    result = await _run(UpdateOrderSettings(ctx).execute(admin.tenant_id, body.late_order_minutes))
+    return result if isinstance(result, JSONResponse) else OrderSettingsOut(late_order_minutes=result)
+
+
+@staff_router.post("/orders/{order_id}/items/status", response_model=StaffOrderOut)
+async def change_dish_status(
+    order_id: uuid.UUID, body: DishStatusIn, staff: AnyStaff, ctx: KitchenDep
+) -> StaffOrderOut | JSONResponse:
+    """Moves dishes of one order to a status, all or nothing (see the permission matrix per role)."""
+    member = StaffMember(tenant_id=staff.tenant_id, user_id=staff.subject_id, role=staff.role)
+    result = await _run(
+        ChangeDishStatus(ctx).execute(member, order_id, body.item_ids, OrderItemStatus(body.status), body.reason)
+    )
+    return result if isinstance(result, JSONResponse) else _staff_order_out(result)
+
+
+@staff_router.post("/orders/{order_id}/items", response_model=OrderOut, status_code=status.HTTP_201_CREATED)
+async def add_order_dish(
+    order_id: uuid.UUID, body: OrderDishIn, staff: Staff, ctx: KitchenDep, response: Response
+) -> OrderOut | JSONResponse:
+    """Adds a dish to an order of an open bill (a staff correction); 200 when it repeats an add already made."""
+    result = await _run(
+        AddDishToOrder(ctx).execute(staff.tenant_id, order_id, body.item_id, body.quantity, body.note, body.id)
+    )
+    if isinstance(result, JSONResponse):
+        return result
+    if not result.created:
+        response.status_code = status.HTTP_200_OK
+    return _order_out(result.order)
+
+
+@staff_router.get("/staff/events")
+async def staff_events_stream(
+    staff: AnyStaff,
+    request: Request,
+    last_event_id: Annotated[str | None, Header()] = None,
+) -> Response:
+    """SSE for the kitchen, waiters and admins: `order.created`, `order.updated`, `bill.opened` and
+    `bill.closed` of the tenant, with `{table_id, order_id?}`; never cart changes or prices."""
+    events = staff_events(
+        request.app.state.redis,
+        staff.tenant_id,
+        last_event_id if last_event_id and _STREAM_ID.fullmatch(last_event_id) else None,
+    )
+    return StreamingResponse(
+        events,
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

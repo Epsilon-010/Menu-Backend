@@ -48,3 +48,23 @@ class BillHasOrders(Exception):
 
 class OrderIdTaken(Exception):
     """A client-chosen id already belongs to another order, cart line or tenant."""
+
+
+class OrderNotFound(Exception):
+    """No order with that id in the caller's tenant."""
+
+
+class DishesNotInOrder(Exception):
+    """A status change named dishes that are not part of the order."""
+
+
+class TransitionNotAllowed(Exception):
+    """The caller's role cannot move dishes to this status (args[0] is the target status)."""
+
+
+class DishesChanged(Exception):
+    """Some dishes are no longer in a state the change can start from: nothing was changed."""
+
+
+class BillClosed(Exception):
+    """The order's bill was already paid (or closed): its dishes are frozen."""

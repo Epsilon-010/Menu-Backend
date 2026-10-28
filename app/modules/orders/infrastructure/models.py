@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Uuid, text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.infrastructure.database import Base, UUIDPrimaryKey
@@ -71,6 +71,13 @@ class OrderModel(UUIDPrimaryKey, Base):
 
 class OrderItemModel(UUIDPrimaryKey, Base):
     __tablename__ = "order_items"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'preparing', 'ready', 'delivered', 'cancelled')", name="status"
+        ),
+        # The kitchen and delivery queues look dishes up by status.
+        Index("ix_order_items_tenant_id_status", "tenant_id", "status"),
+    )
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
     order_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("orders.id", ondelete="CASCADE"), index=True)
@@ -82,6 +89,36 @@ class OrderItemModel(UUIDPrimaryKey, Base):
     added_by: Mapped[str] = mapped_column(String(30))
     status: Mapped[str] = mapped_column(String(12))
     position: Mapped[int] = mapped_column(Integer)
+    ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    cancel_reason: Mapped[str | None] = mapped_column(String(200))
+
+
+class OrderItemChangeModel(UUIDPrimaryKey, Base):
+    """Who moved a dish from one status to another, and when."""
+
+    __tablename__ = "order_item_changes"
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    order_item_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("order_items.id", ondelete="CASCADE"), index=True
+    )
+    from_status: Mapped[str] = mapped_column(String(12))
+    to_status: Mapped[str] = mapped_column(String(12))
+    # The staff member's user id; no foreign key, so the history outlives a removed account.
+    changed_by: Mapped[uuid.UUID] = mapped_column(Uuid)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    reason: Mapped[str | None] = mapped_column(String(200))
+
+
+class OrderSettingsModel(Base):
+    __tablename__ = "order_settings"
+    __table_args__ = (CheckConstraint("late_order_minutes BETWEEN 1 AND 240", name="late_order_minutes"),)
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("tenants.id", ondelete="CASCADE"), primary_key=True
+    )
+    late_order_minutes: Mapped[int] = mapped_column(Integer, server_default=text("15"))
 
 
 class OrderCounterModel(Base):

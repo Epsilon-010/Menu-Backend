@@ -9,12 +9,19 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
 
-from app.modules.orders.domain.errors import InvalidOrderData
+from app.modules.orders.domain.errors import InvalidOrderData, TransitionNotAllowed
+from app.shared.domain.principal import Role
 
 MAX_QUANTITY = 50
 MAX_NOTE_LENGTH = 200
 MAX_CART_LINES = 100
 MAX_GUEST_NAME_LENGTH = 30
+MAX_REASON_LENGTH = 200
+# Who a dish added by the staff to a sent order shows as added by.
+STAFF_NAME = "Staff"
+# Orders waiting longer than this are highlighted; each tenant may change it.
+DEFAULT_LATE_ORDER_MINUTES = 15
+MAX_LATE_ORDER_MINUTES = 240
 # However long the table stays open, a guest's visit (and every session from it) ends after this.
 GUEST_VISIT_LIMIT = timedelta(hours=12)
 
@@ -157,6 +164,54 @@ class OrderStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+# Target status -> (the statuses a dish may move from, the roles that may move it there).
+_TRANSITIONS: dict[OrderItemStatus, tuple[frozenset[OrderItemStatus], frozenset[Role]]] = {
+    OrderItemStatus.PREPARING: (frozenset({OrderItemStatus.QUEUED}), frozenset({Role.ADMIN, Role.KITCHEN})),
+    # A drink needs no preparation: it may go straight from queued to ready.
+    OrderItemStatus.READY: (
+        frozenset({OrderItemStatus.QUEUED, OrderItemStatus.PREPARING}),
+        frozenset({Role.ADMIN, Role.KITCHEN}),
+    ),
+    OrderItemStatus.DELIVERED: (frozenset({OrderItemStatus.READY}), frozenset({Role.ADMIN, Role.WAITER})),
+    # Only a dish nobody started can be cancelled (rejected by the kitchen), always with a reason.
+    OrderItemStatus.CANCELLED: (
+        frozenset({OrderItemStatus.QUEUED}),
+        frozenset({Role.ADMIN, Role.WAITER, Role.KITCHEN}),
+    ),
+}
+
+
+def can_transition(source: OrderItemStatus, target: OrderItemStatus) -> bool:
+    return target in _TRANSITIONS and source in _TRANSITIONS[target][0]
+
+
+def sources_for(target: OrderItemStatus, role: Role) -> frozenset[OrderItemStatus]:
+    """The statuses `role` may move dishes from to reach `target`; raises TransitionNotAllowed otherwise."""
+    if target not in _TRANSITIONS or role not in _TRANSITIONS[target][1]:
+        raise TransitionNotAllowed(target)
+    return _TRANSITIONS[target][0]
+
+
+def validate_change_reason(target: OrderItemStatus, reason: str | None) -> str | None:
+    """Cancelling needs a reason (the table and the waiters see it); no other change takes one."""
+    reason = (reason or "").strip()
+    if target is not OrderItemStatus.CANCELLED:
+        if reason:
+            raise InvalidOrderData("Only cancelled dishes take a reason")
+        return None
+    if not reason:
+        raise InvalidOrderData("A reason is required to cancel dishes")
+    if len(reason) > MAX_REASON_LENGTH:
+        raise InvalidOrderData(f"The reason must have at most {MAX_REASON_LENGTH} characters")
+    return reason
+
+
+def validate_late_order_minutes(minutes: int) -> int:
+    if not 1 <= minutes <= MAX_LATE_ORDER_MINUTES:
+        raise InvalidOrderData(f"The late order threshold must be between 1 and {MAX_LATE_ORDER_MINUTES} minutes")
+    return minutes
+
+
 @dataclass(frozen=True)
 class OrderItem:
     item_id: uuid.UUID
@@ -166,6 +221,10 @@ class OrderItem:
     note: str
     added_by: str
     status: OrderItemStatus = OrderItemStatus.QUEUED
+    # When it last became ready, when it last changed (None until stored) and why it was cancelled.
+    ready_at: datetime | None = None
+    updated_at: datetime | None = None
+    cancel_reason: str | None = None
     id: uuid.UUID = field(default_factory=uuid.uuid4)
 
     @property
