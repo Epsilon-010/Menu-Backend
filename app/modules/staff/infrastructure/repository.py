@@ -101,7 +101,8 @@ class SqlAlchemyUserRepository:
                 role=user.role.value,
                 password_hash=user.password_hash,
                 is_active=user.is_active,
-                session_version=user.session_version,
+                # Never lowered, even by a stale copy: that would revive the sessions it ended.
+                session_version=func.greatest(UserModel.session_version, user.session_version),
             )
         )
         if not affected_rows(result):

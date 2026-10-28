@@ -23,7 +23,8 @@ Test runner: `uv run pytest` (Backend), `npm test` (Menu-Frontend).
   cases. RED: escaped refresh token and post-change access token both answered 200; GREEN: 401.
 - [x] T2 (S2) inline — per-client limiter, client IP, proxy trust (compose fixed frontend IP + Vite `xfwd`), docs.
   RED: per-device tests failed on the old per-account limiter; GREEN.
-- [ ] T3 independent verifier (risk items 1, 2, 4), then commit and push.
+- [x] T3 independent verifier (risk items 1, 2, 4): S1 PASS, S2 blocker B1 fixed (`cfda726`), recheck PASS.
+- [x] T4 native review (risk, resilience, reliability) approved and acknowledged; advisories fixed in the next commit.
 
 ## Log
 - L1 (2026-10-27): "en la 1 si si alguien cambia de codigo para las mesas que expiren las sesiones de esa mesa en la 2
@@ -51,3 +52,8 @@ Test runner: `uv run pytest` (Backend), `npm test` (Menu-Frontend).
   published port reaches the containers from the Docker gateway (10.213.57.1), so LAN tablets in dev share one device
   counter; a Linux Docker host keeps the real client IP. Accepted advisories: the backstop also counts successful
   logins; fail-open access floor if Redis is down; production nginx not exercised. `uv run pytest` 305 passed.
+- L7: Native review approved (lineage review-69f90032906d2f20), 3 informational findings: a stale write could lower
+  session_version (now `GREATEST` in both repositories, test `test_a_stale_write_never_lowers_a_session_version`); the `sv`
+  validation had no test (now 6 cases in `test_me_rejects_invalid_access_tokens`); deploy cutover (tokens without `sv` get
+  one 401 and the frontend refreshes: accepted). Frontend review approved; its finding (lost `changeOrigin`) fixed in
+  `ce4c1c2`. `uv run pytest` 312 passed.

@@ -258,6 +258,12 @@ def test_a_token_from_one_tenant_cannot_reach_another_tenants_data(
         "wrong-secret",
         "missing-tenant",
         "unknown-role",
+        "missing-session-version",
+        "boolean-session-version",
+        "zero-session-version",
+        "negative-session-version",
+        "text-session-version",
+        "fractional-session-version",
     ],
 )
 def test_me_rejects_invalid_access_tokens(client: TestClient, tenant_a: SeedResult, token: str) -> None:
@@ -268,6 +274,12 @@ def test_me_rejects_invalid_access_tokens(client: TestClient, tenant_a: SeedResu
         "wrong-secret": sign(base, secret="another-secret-that-is-at-least-32-characters"),
         "missing-tenant": sign({k: v for k, v in base.items() if k != "tenant_id"}),
         "unknown-role": sign({**base, "role": "superuser"}),
+        "missing-session-version": sign({k: v for k, v in base.items() if k != "sv"}),
+        "boolean-session-version": sign({**base, "sv": True}),
+        "zero-session-version": sign({**base, "sv": 0}),
+        "negative-session-version": sign({**base, "sv": -1}),
+        "text-session-version": sign({**base, "sv": "1"}),
+        "fractional-session-version": sign({**base, "sv": 1.5}),
     }
 
     response = me(client, tokens[token])

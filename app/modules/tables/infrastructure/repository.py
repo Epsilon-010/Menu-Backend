@@ -116,7 +116,8 @@ class SqlAlchemyTableRepository:
                     name=table.name,
                     pin_hash=table.pin_hash,
                     is_active=table.is_active,
-                    session_version=table.session_version,
+                    # Never lowered, even by a stale copy: that would revive the sessions it ended.
+                    session_version=func.greatest(TableModel.session_version, table.session_version),
                 )
             )
         except IntegrityError as error:
