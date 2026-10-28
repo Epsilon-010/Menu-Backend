@@ -103,7 +103,7 @@ def test_validation_detail_names_every_invalid_field_once(admin: TestClient) -> 
     [
         ("/api/v1/catalog/categories", {"name": "Ta\u0000cos"}),
         ("/api/v1/tables", {"name": "Mesa\u00004"}),
-        ("/api/v1/staff", {"username": "juan", "full_name": "Ju\u0000an", "role": "waiter", "password": "s3cret-pass"}),
+        ("/api/v1/staff", {"full_name": "Ju\u0000an", "role": "waiter"}),
     ],
 )
 def test_nul_characters_are_a_422_problem_in_every_module(admin: TestClient, path: str, body: dict[str, str]) -> None:

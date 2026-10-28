@@ -1,7 +1,7 @@
 import uuid
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,12 +11,13 @@ from app.modules.auth.infrastructure.session_revocation import revoke_user_sessi
 from app.modules.staff.application.manage_staff import (
     CreateStaffMember,
     ListStaff,
-    ResetStaffPassword,
+    RegenerateStaffPin,
+    StaffMemberWithPin,
     UpdateStaffMember,
 )
-from app.modules.staff.domain.errors import InvalidUserData, StaffIdTaken, StaffMemberNotFound, UsernameNotAvailable
+from app.modules.staff.domain.errors import InvalidUserData, StaffAlreadyCreated, StaffIdTaken, StaffMemberNotFound
 from app.modules.staff.domain.user import User
-from app.modules.staff.infrastructure.repository import SqlAlchemyUserRepository
+from app.modules.staff.infrastructure.repository import RandomStaffCredentials, SqlAlchemyUserRepository
 from app.shared.domain.principal import Principal, Role
 from app.shared.infrastructure.database import SqlAlchemyUnitOfWork, get_session
 from app.shared.infrastructure.http.auth import require_role
@@ -39,12 +40,11 @@ class _In(BaseModel):
 
 
 class StaffMemberIn(_In):
-    # Optional client-chosen id: repeating the create returns the same member.
+    # Optional client-chosen id: repeating the create never makes a second member.
     id: uuid.UUID | None = None
-    username: str = Field(max_length=100)
+    # Only a name: the code and the PIN are generated.
     full_name: str = Field(max_length=200)
     role: StaffRole
-    password: str = Field(max_length=200)
 
 
 class StaffMemberUpdate(_In):
@@ -53,26 +53,32 @@ class StaffMemberUpdate(_In):
     is_active: bool | None = None
 
 
-class PasswordReset(_In):
-    password: str = Field(max_length=200)
-
-
 class StaffMemberOut(BaseModel):
     id: uuid.UUID
-    username: str | None
+    # The login of the member (with the PIN), unique across the platform; typed in any case.
+    code: str
     full_name: str
     role: Role
     is_active: bool
 
 
+class StaffMemberWithPinOut(StaffMemberOut):
+    # Shown only in this response: the backend keeps just its hash.
+    pin: str
+
+
 def _out(member: User) -> StaffMemberOut:
     return StaffMemberOut(
         id=member.id,
-        username=member.username,
+        code=member.code,
         full_name=member.full_name,
         role=member.role,
         is_active=member.is_active,
     )
+
+
+def _with_pin(result: StaffMemberWithPin) -> StaffMemberWithPinOut:
+    return StaffMemberWithPinOut(**_out(result.member).model_dump(), pin=result.pin)
 
 
 def _invalid(error: InvalidUserData) -> JSONResponse:
@@ -104,7 +110,9 @@ def _session_revoker(request: Request, session: AsyncSession) -> AuthSessionRevo
 
 
 def get_create_staff_member(session: SessionDep) -> CreateStaffMember:
-    return CreateStaffMember(SqlAlchemyUserRepository(session), Argon2PasswordHasher(), SqlAlchemyUnitOfWork(session))
+    return CreateStaffMember(
+        SqlAlchemyUserRepository(session), RandomStaffCredentials(), Argon2PasswordHasher(), SqlAlchemyUnitOfWork(session)
+    )
 
 
 def get_list_staff(session: SessionDep) -> ListStaff:
@@ -117,9 +125,10 @@ def get_update_staff_member(request: Request, session: SessionDep) -> UpdateStaf
     )
 
 
-def get_reset_staff_password(request: Request, session: SessionDep) -> ResetStaffPassword:
-    return ResetStaffPassword(
+def get_regenerate_staff_pin(request: Request, session: SessionDep) -> RegenerateStaffPin:
+    return RegenerateStaffPin(
         SqlAlchemyUserRepository(session),
+        RandomStaffCredentials(),
         Argon2PasswordHasher(),
         _session_revoker(request, session),
         SqlAlchemyUnitOfWork(session),
@@ -134,21 +143,22 @@ async def list_staff(admin: Admin, use_case: Annotated[ListStaff, Depends(get_li
     return [_out(member) for member in await use_case.execute(admin.tenant_id)]
 
 
-@router.post("", response_model=StaffMemberOut, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=StaffMemberWithPinOut, status_code=status.HTTP_201_CREATED)
 async def create_staff_member(
     body: StaffMemberIn, admin: Admin, use_case: Annotated[CreateStaffMember, Depends(get_create_staff_member)]
-) -> StaffMemberOut | JSONResponse:
+) -> StaffMemberWithPinOut | JSONResponse:
     try:
-        member = await use_case.execute(
-            admin.tenant_id, body.username, body.full_name, Role(body.role), body.password, body.id
-        )
+        result = await use_case.execute(admin.tenant_id, body.full_name, Role(body.role), body.id)
     except InvalidUserData as error:
         return _invalid(error)
-    except UsernameNotAvailable:
-        return problem(status.HTTP_409_CONFLICT, "Username not available")
+    except StaffAlreadyCreated:
+        return problem(
+            status.HTTP_409_CONFLICT,
+            "This staff member was already created; generate a new PIN to see the credentials",
+        )
     except StaffIdTaken:
         return problem(status.HTTP_409_CONFLICT, "That id is already used by something else")
-    return _out(member)
+    return _with_pin(result)
 
 
 @router.patch("/{user_id}", response_model=StaffMemberOut)
@@ -173,17 +183,13 @@ async def update_staff_member(
     return _out(member)
 
 
-@router.put("/{user_id}/password", status_code=status.HTTP_204_NO_CONTENT)
-async def reset_staff_password(
-    user_id: uuid.UUID,
-    body: PasswordReset,
-    admin: Admin,
-    use_case: Annotated[ResetStaffPassword, Depends(get_reset_staff_password)],
-) -> Response:
+@router.post("/{user_id}/pin", response_model=StaffMemberWithPinOut)
+async def regenerate_staff_pin(
+    user_id: uuid.UUID, admin: Admin, use_case: Annotated[RegenerateStaffPin, Depends(get_regenerate_staff_pin)]
+) -> StaffMemberWithPinOut | JSONResponse:
+    """New PIN (the code stays); every session of the member ends."""
     try:
-        await use_case.execute(admin.tenant_id, user_id, body.password)
-    except InvalidUserData as error:
-        return _invalid(error)
+        result = await use_case.execute(admin.tenant_id, user_id)
     except StaffMemberNotFound:
         return _not_found()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return _with_pin(result)

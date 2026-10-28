@@ -8,8 +8,10 @@ from app.modules.auth.domain.refresh_token import RefreshToken
 from app.modules.catalog.domain.catalog import Category, Item
 from app.modules.catalog.domain.errors import CategoryNotEmpty
 from app.modules.media.domain.uploads import DueImage
-from app.modules.staff.domain.user import STAFF_MEMBER_ROLES, User
+from app.modules.staff.domain.errors import EmailAlreadyInUse, StaffCodeTaken
+from app.modules.staff.domain.user import STAFF_CODE_ALPHABET, STAFF_MEMBER_ROLES, User
 from app.modules.tables.domain.table import Table
+from app.modules.tenants.domain.errors import TenantIdTaken
 from app.modules.tenants.domain.tenant import Tenant
 from app.shared.domain.images import ImageStorageUnavailable, ImageVariant, StoredImage, UploadSignature
 
@@ -55,6 +57,9 @@ class InMemoryTenantRepository:
         self.tenants: dict[uuid.UUID, Tenant] = {}
 
     async def add(self, tenant: Tenant) -> None:
+        # Like the primary key: a second tenant never takes an id in use.
+        if tenant.id in self.tenants and self.tenants[tenant.id] != tenant:
+            raise TenantIdTaken(tenant.id)
         self.tenants[tenant.id] = tenant
 
     async def get(self, tenant_id: uuid.UUID) -> Tenant | None:
@@ -67,8 +72,17 @@ class InMemoryUserRepository:
         # Ids read with get_for_update: proves a write use case locked its row.
         self.locked: list[uuid.UUID] = []
         self.create_locks: list[uuid.UUID] = []
+        self.email_locks: list[str] = []
+        # Usernames get_by_username misses: simulates a concurrent create that took a code after the check.
+        self.hidden_usernames: set[str] = set()
 
     async def add(self, user: User) -> None:
+        # Like the unique indexes: the login columns never repeat across the platform.
+        others = [other for other in self.users.values() if other.id != user.id]
+        if user.username is not None and any(other.username == user.username for other in others):
+            raise StaffCodeTaken(user.username)
+        if user.email is not None and any(other.email == user.email for other in others):
+            raise EmailAlreadyInUse(user.email)
         self.users[user.id] = user
 
     async def get(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> User | None:
@@ -89,7 +103,12 @@ class InMemoryUserRepository:
         return next((user for user in self.users.values() if user.email == email), None)
 
     async def get_by_username(self, username: str) -> User | None:
+        if username in self.hidden_usernames:
+            return None
         return next((user for user in self.users.values() if user.username == username), None)
+
+    async def lock_email(self, email: str) -> None:
+        self.email_locks.append(email)
 
     async def list_staff(self, tenant_id: uuid.UUID) -> list[User]:
         staff = [user for user in self.users.values() if user.tenant_id == tenant_id and user.role in STAFF_MEMBER_ROLES]
@@ -168,6 +187,28 @@ class FakeTableCredentials:
     def new_qr_token(self) -> str:
         self.issued_qr_tokens += 1
         return f"qr-token-{self.issued_qr_tokens}"
+
+
+class FakeStaffCredentials:
+    """Hands out the queued codes and PINs first (to force collisions), then sequential ones."""
+
+    def __init__(self, codes: list[str] | None = None, pins: list[str] | None = None) -> None:
+        self.codes = list(codes or [])
+        self.pins = list(pins or [])
+        self.issued_codes = 0
+        self.issued_pins = 0
+
+    def new_code(self) -> str:
+        if self.codes:
+            return self.codes.pop(0)
+        self.issued_codes += 1
+        return "STAFF" + STAFF_CODE_ALPHABET[self.issued_codes % len(STAFF_CODE_ALPHABET)]
+
+    def new_pin(self) -> str:
+        if self.pins:
+            return self.pins.pop(0)
+        self.issued_pins += 1
+        return f"{self.issued_pins:06d}"
 
 
 def _by_position(entity: Category | Item) -> tuple[int, str]:

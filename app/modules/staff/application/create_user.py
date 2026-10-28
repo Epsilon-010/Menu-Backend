@@ -23,3 +23,14 @@ class CreateUser:
         await self._users.add(user)
         await self._uow.commit()
         return user
+
+
+class LockEmail:
+    """Serializes sign-ups of one email until the transaction ends (the caller owns it), so a
+    concurrent replay of a sign-up waits for the first one and then finds its account."""
+
+    def __init__(self, users: UserRepository) -> None:
+        self._users = users
+
+    async def execute(self, email: str) -> None:
+        await self._users.lock_email(normalize_email(email))

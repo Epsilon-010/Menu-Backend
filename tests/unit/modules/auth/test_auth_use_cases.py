@@ -100,8 +100,21 @@ class World:
         return user
 
     async def add_staff(self, tenant: Tenant, username: str, role: Role = Role.WAITER) -> User:
+        """A member created before codes existed: a chosen username and password (they keep working)."""
         await self.tenants.add(tenant)
-        user = User.create_staff(tenant.id, username, "Juan Waiter", role, await self.hasher.hash(PASSWORD))
+        user = User(
+            tenant_id=tenant.id,
+            username=username,
+            full_name="Juan Waiter",
+            role=role,
+            password_hash=await self.hasher.hash(PASSWORD),
+        )
+        await self.users.add(user)
+        return user
+
+    async def add_coded_staff(self, tenant: Tenant, code: str, pin: str, role: Role = Role.WAITER) -> User:
+        await self.tenants.add(tenant)
+        user = User.create_staff(tenant.id, code, "Juan Waiter", role, await self.hasher.hash(pin))
         await self.users.add(user)
         return user
 
@@ -185,6 +198,24 @@ async def test_staff_member_logs_in_with_their_username_and_gets_a_shift_long_se
     assert session.refresh_expires_at == world.clock.now() + timedelta(hours=12)
     assert world.limiter.acquired == [("staff:juan.burger", CLIENT)]
     assert world.limiter.succeeded_logins == [("staff:juan.burger", CLIENT)]
+
+
+@pytest.mark.parametrize("typed", ["K7M2QX", "k7m2qx", " K7m2Qx "])
+async def test_staff_member_logs_in_with_their_code_in_any_case_and_their_pin(world: World, typed: str) -> None:
+    cook = await world.add_coded_staff(Tenant(name="Burger Place"), "K7M2QX", PIN, Role.KITCHEN)
+
+    session = await world.login().execute(typed, PIN, CLIENT)
+
+    assert session.role is Role.KITCHEN
+    assert session.access_token == f"access:{cook.id}:{cook.tenant_id}:kitchen"
+    assert world.limiter.acquired == [("staff:k7m2qx", CLIENT)]
+
+
+async def test_a_wrong_pin_fails_generically(world: World) -> None:
+    await world.add_coded_staff(Tenant(name="Burger Place"), "K7M2QX", PIN)
+
+    with pytest.raises(InvalidCredentials):
+        await world.login().execute("K7M2QX", "000000", CLIENT)
 
 
 async def test_login_with_an_unknown_username_fails_generically(world: World) -> None:

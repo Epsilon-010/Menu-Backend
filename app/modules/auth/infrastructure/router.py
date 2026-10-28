@@ -13,9 +13,16 @@ from app.modules.auth.application.login import Login
 from app.modules.auth.application.logout import Logout
 from app.modules.auth.application.qr_login import QrLogin
 from app.modules.auth.application.refresh_session import RefreshSession
+from app.modules.auth.application.register_business import RegisterBusiness
 from app.modules.auth.application.session_issuer import AuthSession, SessionIssuer
 from app.modules.auth.application.table_login import TableLogin
-from app.modules.auth.domain.errors import AccountNotFound, InvalidCredentials, InvalidRefreshToken, TooManyLoginAttempts
+from app.modules.auth.domain.errors import (
+    AccountNotFound,
+    BusinessIdTaken,
+    InvalidCredentials,
+    InvalidRefreshToken,
+    TooManyLoginAttempts,
+)
 from app.modules.auth.domain.refresh_token import ACCESS_TOKEN_TTL
 from app.modules.auth.infrastructure.rate_limiter import RedisLoginAttemptLimiter
 from app.modules.auth.infrastructure.refresh_tokens import OpaqueRefreshTokenCodec, SqlAlchemyRefreshTokenRepository
@@ -28,11 +35,15 @@ from app.modules.orders.infrastructure.repository import (
     SqlAlchemyBillRepository,
     SqlAlchemyGuestRepository,
 )
+from app.modules.staff.application.create_user import CreateUser, LockEmail
 from app.modules.staff.application.find_user import FindUserByLogin, GetUser
+from app.modules.staff.domain.errors import EmailAlreadyInUse, InvalidUserData
 from app.modules.staff.infrastructure.repository import SqlAlchemyUserRepository
 from app.modules.tables.application.find_table import FindTableByCode, FindTableByQrToken, GetTable
 from app.modules.tables.infrastructure.repository import SqlAlchemyTableRepository
+from app.modules.tenants.application.create_tenant import CreateTenant
 from app.modules.tenants.application.get_tenant import GetTenant
+from app.modules.tenants.domain.errors import InvalidTenantData, TenantIdTaken
 from app.modules.tenants.infrastructure.repository import SqlAlchemyTenantRepository
 from app.shared.domain.principal import Role
 from app.shared.infrastructure.config import get_settings
@@ -72,6 +83,16 @@ class QrLoginRequest(BaseModel):
     token: str = Field(min_length=1, max_length=64)
     # Shown next to what the guest adds to the shared cart; "Guest N" when left out.
     name: str | None = Field(default=None, max_length=MAX_GUEST_NAME_LENGTH)
+
+
+class RegisterRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Optional client-chosen id of the new business: repeating the sign-up signs in to it.
+    id: uuid.UUID | None = None
+    email: str = Field(max_length=254)
+    password: str = Field(max_length=200)
+    business_name: str = Field(max_length=200)
 
 
 class SessionResponse(BaseModel):
@@ -153,6 +174,31 @@ def get_login(request: Request, session: SessionDep) -> Login:
     return Login(
         FindUserByLogin(SqlAlchemyUserRepository(session)),
         Argon2PasswordHasher(),
+        _login_limiter(request),
+        _session_issuer(request, session),
+        SqlAlchemyUnitOfWork(session),
+    )
+
+
+class _CommitLater:
+    """Unit of work for the use cases a larger one composes: their `commit` does nothing, so the outer
+    use case commits everything at once (or nothing, when it fails)."""
+
+    async def commit(self) -> None:
+        return None
+
+
+def get_register_business(request: Request, session: SessionDep) -> RegisterBusiness:
+    users = SqlAlchemyUserRepository(session)
+    tenants = SqlAlchemyTenantRepository(session)
+    hasher = Argon2PasswordHasher()
+    return RegisterBusiness(
+        LockEmail(users),
+        FindUserByLogin(users),
+        GetTenant(tenants),
+        CreateTenant(tenants, _CommitLater()),
+        CreateUser(users, hasher, _CommitLater()),
+        hasher,
         _login_limiter(request),
         _session_issuer(request, session),
         SqlAlchemyUnitOfWork(session),
@@ -275,6 +321,29 @@ async def login(
         auth = await use_case.execute(body.username, body.password, _client_address(request))
     except InvalidCredentials:
         return problem(status.HTTP_401_UNAUTHORIZED, "Invalid username or password")
+    except TooManyLoginAttempts as error:
+        return _too_many_attempts(error)
+    return _session_response(response, auth)
+
+
+@router.post("/register", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
+async def register(
+    body: RegisterRequest,
+    request: Request,
+    response: Response,
+    use_case: Annotated[RegisterBusiness, Depends(get_register_business)],
+) -> SessionResponse | JSONResponse:
+    """Self sign-up: creates the business and its admin in one transaction and signs the admin in."""
+    try:
+        auth = await use_case.execute(
+            body.email, body.password, body.business_name, _client_address(request), body.id
+        )
+    except (InvalidUserData, InvalidTenantData) as error:
+        return problem(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error))
+    except EmailAlreadyInUse:
+        return problem(status.HTTP_409_CONFLICT, "Email already in use")
+    except (BusinessIdTaken, TenantIdTaken):
+        return problem(status.HTTP_409_CONFLICT, "That id is already used by something else")
     except TooManyLoginAttempts as error:
         return _too_many_attempts(error)
     return _session_response(response, auth)

@@ -10,10 +10,12 @@ MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_LENGTH = 128
 MAX_NAME_LENGTH = 120
 MAX_EMAIL_LENGTH = 254
-MIN_USERNAME_LENGTH = 3
-MAX_USERNAME_LENGTH = 40
 _EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-_USERNAME_PATTERN = re.compile(rf"^[a-z0-9._-]{{{MIN_USERNAME_LENGTH},{MAX_USERNAME_LENGTH}}}$")
+# Staff sign in with a generated code + PIN, like table devices (same alphabet, kept apart on purpose:
+# modules do not share domain code). Uppercase letters and digits without the look-alikes 0/O, 1/I/L.
+STAFF_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+STAFF_CODE_LENGTH = 6
+STAFF_PIN_LENGTH = 6
 
 # Accounts the admin manages from the staff panel (admins are not managed there).
 STAFF_MEMBER_ROLES = frozenset({Role.WAITER, Role.KITCHEN})
@@ -39,6 +41,19 @@ def validate_password(password: str) -> None:
         raise InvalidUserData(f"Password must have {MIN_PASSWORD_LENGTH} to {MAX_PASSWORD_LENGTH} characters")
 
 
+def validate_staff_code(code: str) -> str:
+    """A generated code, normalized for the (lowercase, unique) username column it is stored in."""
+    normalized = normalize_username(code)
+    if len(normalized) != STAFF_CODE_LENGTH or not set(normalized.upper()) <= set(STAFF_CODE_ALPHABET):
+        raise InvalidUserData(f"Staff code must have {STAFF_CODE_LENGTH} characters from {STAFF_CODE_ALPHABET}")
+    return normalized
+
+
+def validate_staff_member(full_name: str, role: Role) -> tuple[str, Role]:
+    """What the admin types for a new waiter or cook: only a name and a role."""
+    return _validate_full_name(full_name), _validate_staff_member_role(role)
+
+
 def _validate_full_name(full_name: str) -> str:
     full_name = full_name.strip()
     if not full_name or len(full_name) > MAX_NAME_LENGTH:
@@ -54,7 +69,11 @@ def _validate_staff_member_role(role: Role) -> Role:
 
 @dataclass(frozen=True)
 class User:
-    """Staff account of a tenant: an admin (signs in with email) or a waiter/cook (with username)."""
+    """Staff account of a tenant: an admin (signs in with email) or a waiter/cook (with a code + PIN).
+
+    A waiter's or cook's code lives in `username` (lowercase); `password_hash` holds the PIN's hash.
+    Members created before codes existed keep their chosen username and password until a new PIN.
+    """
 
     tenant_id: uuid.UUID
     full_name: str
@@ -82,27 +101,27 @@ class User:
     def create_staff(
         cls,
         tenant_id: uuid.UUID,
-        username: str,
+        code: str,
         full_name: str,
         role: Role,
-        password_hash: str,
+        pin_hash: str,
         user_id: uuid.UUID | None = None,
     ) -> "User":
         """`user_id` comes from the client to make the create idempotent; None generates one."""
-        username = normalize_username(username)
-        if not _USERNAME_PATTERN.match(username):
-            raise InvalidUserData(
-                f"Username must have {MIN_USERNAME_LENGTH} to {MAX_USERNAME_LENGTH} characters: "
-                "letters, digits, dots, hyphens or underscores"
-            )
+        full_name, role = validate_staff_member(full_name, role)
         return cls(
             tenant_id=tenant_id,
-            username=username,
-            full_name=_validate_full_name(full_name),
-            role=_validate_staff_member_role(role),
-            password_hash=password_hash,
+            username=validate_staff_code(code),
+            full_name=full_name,
+            role=role,
+            password_hash=pin_hash,
             id=user_id or uuid.uuid4(),
         )
+
+    @property
+    def code(self) -> str:
+        """The staff login shown to people: the username, uppercased (login ignores case)."""
+        return (self.username or "").upper()
 
     @property
     def is_staff_member(self) -> bool:
@@ -144,11 +163,24 @@ class UserRepository(Protocol):
 
     async def get_by_username(self, username: str) -> User | None: ...
 
+    async def lock_email(self, email: str) -> None:
+        """Serializes sign-ups of the same (normalized) email until the transaction ends, so a
+        concurrent replay waits for the first one and then finds it."""
+        ...
+
     async def list_staff(self, tenant_id: uuid.UUID) -> list[User]:
         """Waiters and cooks of the tenant, ordered by name."""
         ...
 
     async def update(self, user: User) -> None: ...
+
+
+class StaffCredentials(Protocol):
+    """Port: generates random staff codes and PINs."""
+
+    def new_code(self) -> str: ...
+
+    def new_pin(self) -> str: ...
 
 
 class SessionRevoker(Protocol):
