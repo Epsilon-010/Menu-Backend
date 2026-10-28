@@ -335,3 +335,24 @@ async def test_a_staff_id_reused_for_another_member_or_tenant_is_refused(
         await create.execute(TENANT_B, "juan.burger", "Juan Pérez", Role.WAITER, "s3cret-pass", member_id)
 
     assert [u.username for u in users.users.values()] == ["juan.burger"]
+
+
+async def test_a_staff_replay_with_another_password_is_refused(users: InMemoryUserRepository, uow: FakeUnitOfWork) -> None:
+    member_id = uuid.uuid4()
+    create = CreateStaffMember(users, FakePasswordHasher(), uow)
+    await create.execute(TENANT_A, "juan.burger", "Juan Pérez", Role.WAITER, "first-pass-123", member_id)
+
+    # Same id, same names, other password: not the same request, so it must not succeed silently.
+    with pytest.raises(StaffIdTaken):
+        await create.execute(TENANT_A, "juan.burger", "Juan Pérez", Role.WAITER, "second-pass-456", member_id)
+
+    assert users.users[member_id].password_hash == "hashed:first-pass-123"
+
+
+async def test_staff_creates_of_a_tenant_are_serialized(users: InMemoryUserRepository, uow: FakeUnitOfWork) -> None:
+    await CreateStaffMember(users, FakePasswordHasher(), uow).execute(
+        TENANT_A, "juan.burger", "Juan Pérez", Role.WAITER, "s3cret-pass", uuid.uuid4()
+    )
+
+    # Taken before the replay check, so a concurrent replay waits and then finds the first one.
+    assert users.create_locks == [TENANT_A]

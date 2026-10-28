@@ -3,7 +3,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from fastapi import Request
-from sqlalchemy import MetaData, Uuid, func, text
+from sqlalchemy import MetaData, Uuid, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -64,6 +64,15 @@ def violated_unique_constraint(error: IntegrityError) -> str | None:
         return None
     name = getattr(cause, "constraint_name", None)
     return name if isinstance(name, str) else None
+
+
+async def advisory_xact_lock(session: AsyncSession, key: str) -> None:
+    """Postgres lock on `key` held until the transaction ends.
+
+    For work that must not interleave but has no single row to lock: positions computed as max + 1,
+    or the replay check of an idempotent create that runs before its row exists.
+    """
+    await session.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(key, 0))))
 
 
 def affected_rows(result: Any) -> int:

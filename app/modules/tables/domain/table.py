@@ -71,6 +71,11 @@ class TableRepository(Protocol):
         """Whether the id is taken in any tenant (to answer a clash without revealing that row)."""
         ...
 
+    async def lock_creates(self, tenant_id: uuid.UUID) -> None:
+        """Serializes the tenant's table creates until the transaction ends, so a concurrent replay
+        of a create waits for the first one and then finds it."""
+        ...
+
     async def get_by_code(self, code: str) -> Table | None:
         """Platform-wide lookup, used only by the device login before any tenant is known."""
         ...

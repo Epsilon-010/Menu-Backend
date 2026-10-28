@@ -64,6 +64,8 @@ class CreateTable:
         """`table_id` makes the create idempotent: a repeat never makes a second table. It cannot return
         the PIN again (only its hash exists), so it raises TableAlreadyCreated instead."""
         name = validate_table_name(name)
+        # Taken before the replay check, so a concurrent replay waits and then finds the first one.
+        await self._tables.lock_creates(tenant_id)
         if table_id is not None:
             if await self._tables.get(tenant_id, table_id) is not None:
                 raise TableAlreadyCreated(table_id)

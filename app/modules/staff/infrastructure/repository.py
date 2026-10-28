@@ -8,7 +8,7 @@ from app.modules.staff.domain.errors import EmailAlreadyInUse, StaffIdTaken, Sta
 from app.modules.staff.domain.user import STAFF_MEMBER_ROLES, User
 from app.modules.staff.infrastructure.models import UserModel
 from app.shared.domain.principal import Role
-from app.shared.infrastructure.database import affected_rows, violated_unique_constraint
+from app.shared.infrastructure.database import affected_rows, advisory_xact_lock, violated_unique_constraint
 
 
 def _to_entity(model: UserModel) -> User:
@@ -69,6 +69,9 @@ class SqlAlchemyUserRepository:
 
     async def exists_anywhere(self, user_id: uuid.UUID) -> bool:
         return await self._session.scalar(select(UserModel.id).where(UserModel.id == user_id)) is not None
+
+    async def lock_creates(self, tenant_id: uuid.UUID) -> None:
+        await advisory_xact_lock(self._session, f"staff-create:{tenant_id}")
 
     async def get_by_email(self, email: str) -> User | None:
         model = await self._session.scalar(select(UserModel).where(UserModel.email == email))

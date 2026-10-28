@@ -66,6 +66,7 @@ class InMemoryUserRepository:
         self.users: dict[uuid.UUID, User] = {}
         # Ids read with get_for_update: proves a write use case locked its row.
         self.locked: list[uuid.UUID] = []
+        self.create_locks: list[uuid.UUID] = []
 
     async def add(self, user: User) -> None:
         self.users[user.id] = user
@@ -80,6 +81,9 @@ class InMemoryUserRepository:
 
     async def exists_anywhere(self, user_id: uuid.UUID) -> bool:
         return user_id in self.users
+
+    async def lock_creates(self, tenant_id: uuid.UUID) -> None:
+        self.create_locks.append(tenant_id)
 
     async def get_by_email(self, email: str) -> User | None:
         return next((user for user in self.users.values() if user.email == email), None)
@@ -99,6 +103,7 @@ class InMemoryTableRepository:
     def __init__(self) -> None:
         self.tables: dict[uuid.UUID, Table] = {}
         self.locked: list[uuid.UUID] = []
+        self.create_locks: list[uuid.UUID] = []
 
     async def add(self, table: Table) -> None:
         self.tables[table.id] = table
@@ -113,6 +118,9 @@ class InMemoryTableRepository:
 
     async def exists_anywhere(self, table_id: uuid.UUID) -> bool:
         return table_id in self.tables
+
+    async def lock_creates(self, tenant_id: uuid.UUID) -> None:
+        self.create_locks.append(tenant_id)
 
     async def get_by_code(self, code: str) -> Table | None:
         return next((table for table in self.tables.values() if table.code == code), None)

@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.tables.domain.errors import TableCodeTaken, TableIdTaken, TableNameNotAvailable, TableNotFound
 from app.modules.tables.domain.table import PIN_LENGTH, TABLE_CODE_ALPHABET, TABLE_CODE_LENGTH, Table
 from app.modules.tables.infrastructure.models import TableModel
-from app.shared.infrastructure.database import affected_rows, violated_unique_constraint
+from app.shared.infrastructure.database import affected_rows, advisory_xact_lock, violated_unique_constraint
 
 _NAME_INDEX = "uq_tables_tenant_id_lower_name"
 _CODE_INDEX = "uq_tables_code"
@@ -83,6 +83,9 @@ class SqlAlchemyTableRepository:
 
     async def exists_anywhere(self, table_id: uuid.UUID) -> bool:
         return await self._session.scalar(select(TableModel.id).where(TableModel.id == table_id)) is not None
+
+    async def lock_creates(self, tenant_id: uuid.UUID) -> None:
+        await advisory_xact_lock(self._session, f"tables-create:{tenant_id}")
 
     async def get_by_code(self, code: str) -> Table | None:
         # The only query without a tenant filter: the device login runs before any tenant is known.

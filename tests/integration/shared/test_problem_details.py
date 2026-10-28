@@ -114,6 +114,50 @@ def test_nul_characters_are_a_422_problem_in_every_module(admin: TestClient, pat
     )
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"name": "ok", "nested": {"deep": ["fine", "bad\u0000"]}},
+        {"name": "ok", "list": [{"x": "a\u0000"}]},
+        {"name": "ok", "ke\u0000y": "value"},
+    ],
+)
+def test_nul_characters_anywhere_in_the_body_are_refused(admin: TestClient, body: dict[str, Any]) -> None:
+    response = admin.post("/api/v1/catalog/categories", json=body)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Text cannot contain NUL characters"
+
+
+def test_nul_characters_are_refused_before_login_too(client: TestClient) -> None:
+    response = client.post("/api/v1/auth/login", json={"username": "owner\u0000@example.com", "password": "x"})
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Text cannot contain NUL characters"
+
+
+def test_deeply_nested_bodies_never_end_in_a_500(client: TestClient) -> None:
+    # Within what json.loads accepts but beyond what a recursive walk (two frames per level) could:
+    # the NUL check must not crash, so the route's own validation answers.
+    decodable = '{"username": ' + "[" * 700 + "]" * 700 + ', "password": "x"}'
+    response = client.post("/api/v1/auth/login", content=decodable, headers={"Content-Type": "application/json"})
+    assert response.status_code == 422
+    assert response.headers["content-type"] == PROBLEM_JSON
+
+    # Beyond the decoder itself: FastAPI refuses the body as a 400 problem before any route code runs.
+    too_deep = "[" * 50_000 + "]" * 50_000
+    response = client.post("/api/v1/auth/login", content=too_deep, headers={"Content-Type": "application/json"})
+    assert response.status_code == 400
+    assert response.headers["content-type"] == PROBLEM_JSON
+
+
+def test_a_malformed_json_body_is_left_to_route_validation(client: TestClient) -> None:
+    response = client.post("/api/v1/auth/login", content="{not json", headers={"Content-Type": "application/json"})
+
+    assert response.status_code == 422
+    assert response.json()["detail"] != "Text cannot contain NUL characters"
+
+
 def test_a_backslash_followed_by_u0000_is_ordinary_text(admin: TestClient) -> None:
     response = admin.post("/api/v1/catalog/categories", json={"name": "Ta\\u0000cos"})
 

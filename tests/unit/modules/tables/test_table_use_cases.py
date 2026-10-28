@@ -239,3 +239,9 @@ async def test_a_code_taken_by_a_concurrent_create_is_redrawn_not_a_500(world: W
     second = (await world.create().execute(TENANT_B, "Mesa 1")).table
 
     assert (first.code, second.code) == ("SAME22", "OTHER3")
+
+
+async def test_table_creates_of_a_tenant_are_serialized(world: World) -> None:
+    await world.create().execute(TENANT_A, "Mesa 4", uuid.uuid4())
+
+    assert world.tables.create_locks == [TENANT_A]

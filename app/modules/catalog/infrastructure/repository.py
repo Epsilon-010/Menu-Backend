@@ -14,7 +14,12 @@ from app.modules.catalog.domain.errors import (
     ItemNotFound,
 )
 from app.modules.catalog.infrastructure.models import CategoryModel, ItemModel
-from app.shared.infrastructure.database import affected_rows, violated_foreign_key, violated_unique_constraint
+from app.shared.infrastructure.database import (
+    affected_rows,
+    advisory_xact_lock,
+    violated_foreign_key,
+    violated_unique_constraint,
+)
 
 _CATEGORY_NAME_INDEX = "uq_categories_tenant_id_lower_name"
 _ITEM_CATEGORY_FK = "fk_items_category_id_tenant_id_categories"
@@ -40,12 +45,6 @@ def _item(model: ItemModel) -> Item:
         is_available=model.is_available,
         image_public_id=model.image_public_id,
     )
-
-
-async def _advisory_lock(session: AsyncSession, key: str) -> None:
-    """Transaction-scoped Postgres lock. Positions are computed as max + 1 or rewritten as a whole,
-    so creates, moves, deletes and reorders of the same list must run one after another."""
-    await session.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(key, 0))))
 
 
 def _ensure_whole_order(result: object, ordered_ids: list[uuid.UUID]) -> None:
@@ -112,7 +111,8 @@ class SqlAlchemyCategoryRepository:
         return await self._session.scalar(select(CategoryModel.id).where(CategoryModel.id == category_id)) is not None
 
     async def lock_order(self, tenant_id: uuid.UUID) -> None:
-        await _advisory_lock(self._session, f"catalog-order:{tenant_id}")
+        # Positions are max + 1 or rewritten whole: changes to one list run one after another.
+        await advisory_xact_lock(self._session, f"catalog-order:{tenant_id}")
 
     async def get_by_name(self, tenant_id: uuid.UUID, name: str) -> Category | None:
         model = await self._session.scalar(
@@ -217,7 +217,7 @@ class SqlAlchemyItemRepository:
     async def lock_order(self, tenant_id: uuid.UUID, category_ids: list[uuid.UUID]) -> None:
         # Always in the same order, so two moves between the same categories cannot deadlock.
         for category_id in sorted(set(category_ids)):
-            await _advisory_lock(self._session, f"catalog-items-order:{tenant_id}:{category_id}")
+            await advisory_xact_lock(self._session, f"catalog-items-order:{tenant_id}:{category_id}")
 
     async def list_in_category(self, tenant_id: uuid.UUID, category_id: uuid.UUID) -> list[Item]:
         models = await self._session.scalars(

@@ -46,6 +46,8 @@ class CreateStaffMember:
         validate_password(password)
         # Validate the rest before paying for the hash.
         draft = User.create_staff(tenant_id, username, full_name, role, password_hash="")
+        # Taken before the replay check, so a concurrent replay waits and then finds the first one.
+        await self._users.lock_creates(tenant_id)
         if user_id is not None:
             existing = await self._users.get(tenant_id, user_id)
             if existing is not None:
@@ -54,7 +56,12 @@ class CreateStaffMember:
                     draft.full_name,
                     draft.role,
                 )
-                if not (existing.is_staff_member and same):
+                # A replay is the same request: the password too, or a new one would be dropped silently.
+                if not (
+                    existing.is_staff_member
+                    and same
+                    and await self._hasher.verify(existing.password_hash, password)
+                ):
                     raise StaffIdTaken(user_id)
                 return existing
             if await self._users.exists_anywhere(user_id):
