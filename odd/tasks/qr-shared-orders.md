@@ -25,12 +25,20 @@ Branch: `feat/qr-shared-orders` (Backend and Menu-Frontend). Delivery: single PR
   cart/order write re-checks the guest in the same transaction); guest sessions last at most 12 h.
 
 ## Tasks
-- [ ] T1 (S1) inline — menu read endpoint, Redis cache + invalidation; frontend menu page.
-- [ ] T2 (S2-S6) inline — `orders` module: bills, guests, carts, orders; use cases, routers, migration.
-- [ ] T3 (S7) inline — QR token on tables, guest auth (login, refresh, /me, revocation).
-- [ ] T4 (S4) inline — SSE table events.
-- [ ] T5 (S2-S7) inline — frontend: shared cart, send confirmation, orders, `/q/:token`, waiter tables, admin QR.
-- [ ] T6 — e2e probes on the dev stack; independent verifier (risk items 1, 2, 4).
+- [x] T1 (S1) inline — menu endpoint + generation-keyed Redis cache invalidated after every catalog write. RED: 404;
+  GREEN `1c50fef` (5 tests incl. the stale-write race).
+- [x] T2 (S2-S6) inline — `orders` module (bills, guests, carts, orders), table lock per visit, migration
+  `32b04396f6b8`. GREEN `441ff45` (13 API tests: shared cart, stale version 409, 4 concurrent sends → 1 order,
+  idempotent add/send, backend prices, unavailable items, isolation, roles, open/pay/close).
+- [x] T3 (S7) inline — QR token on tables, `guest` role, `POST /auth/qr`, refresh and /me for guests, 12 h cap, new
+  QR / deactivation / payment end guests; migration `709cd38442c8` (down/up OK). GREEN `5984ae8` (13 API + 4 unit
+  tests). Mutation check: removing the in-transaction guest check fails 5 tests (Redis-less, reopened table, 12 h,
+  forged claims).
+- [x] T4 (S4) inline — SSE `GET /table/events` from the tenant stream, filtered by table; guest stream ends on
+  `bill.closed`; 5-minute streams. GREEN `98d1219` (4 tests). Full suite 352 passed.
+- [ ] T5 (S1-S7) delegated (context backstop) — frontend: menu, shared cart, send confirmation, orders, `/q/:token`,
+  waiter tables, admin QR link.
+- [ ] T6 — independent verifier (risk items 1, 2, 4) and e2e probes on the dev stack.
 
 ## Log
 - L1 (2026-10-27): "se me courre cambiar o agregar otra cosa a la logica de negocio, quiero que cambie un poco o se añada
@@ -45,3 +53,6 @@ Branch: `feat/qr-shared-orders` (Backend and Menu-Frontend). Delivery: single PR
   not part of this feature: orders are stored `queued`.
 - L4: The QR token is stored in plain text (unique), unlike the PIN: it is printed and stuck on the table anyway, the
   admin must be able to reprint it, and access is gated by the open bill, not by the token's secrecy.
+- L5: Unit tests cover tables' new QR use cases; the ordering use cases are covered by API tests against Postgres
+  (their guarantees are locks, unique indexes and transactions, which in-memory fakes would not prove).
+- L6: QR images need a library (not added without the user's approval): the admin copies the link for now.
