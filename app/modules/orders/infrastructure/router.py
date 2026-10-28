@@ -19,6 +19,7 @@ from app.modules.orders.application.bills import (
     TableOverview,
 )
 from app.modules.orders.application.kitchen import (
+    AddDishToOrder,
     ChangeDishStatus,
     GetOrderSettings,
     Kitchen,
@@ -40,6 +41,7 @@ from app.modules.orders.application.ordering import (
     authorize,
 )
 from app.modules.orders.domain.errors import (
+    BillClosed,
     BillHasOrders,
     BillNotFound,
     CartChanged,
@@ -138,7 +140,9 @@ OrderingDep = Annotated[Ordering, Depends(get_ordering)]
 def get_kitchen(request: Request, session: SessionDep) -> Kitchen:
     return Kitchen(
         locks=PostgresTableLocks(session),
+        bills=SqlAlchemyBillRepository(session),
         orders=SqlAlchemyOrderRepository(session),
+        menu=CatalogMenu(session),
         settings=SqlAlchemyOrderSettingsRepository(session),
         tables=TablesModule(session),
         events=RedisTableEvents(request.app.state.redis),
@@ -237,6 +241,14 @@ class DishStatusIn(_In):
         if len(set(item_ids)) != len(item_ids):
             raise ValueError("Each dish can appear only once")
         return item_ids
+
+
+class OrderDishIn(_In):
+    # Optional client-chosen id: repeating the add never adds the dish twice.
+    id: uuid.UUID | None = None
+    item_id: uuid.UUID
+    quantity: int = Field(default=1, strict=True, ge=1, le=MAX_QUANTITY)
+    note: str = Field(default="", max_length=MAX_NOTE_LENGTH)
 
 
 class OrderSettingsIn(_In):
@@ -423,6 +435,8 @@ async def _run(call: Awaitable[T]) -> T | JSONResponse:
         return problem(status.HTTP_403_FORBIDDEN, f"Your role cannot mark dishes as {error.args[0]}")
     except DishesChanged:
         return problem(status.HTTP_409_CONFLICT, "Some dishes already changed; reload the order")
+    except BillClosed:
+        return problem(status.HTTP_409_CONFLICT, "This bill is already paid; its dishes can no longer change")
 
 
 # --- Table routes: the tablet and the guests of its open visit ---------------------------------
@@ -565,6 +579,21 @@ async def change_dish_status(
         ChangeDishStatus(ctx).execute(member, order_id, body.item_ids, OrderItemStatus(body.status), body.reason)
     )
     return result if isinstance(result, JSONResponse) else _staff_order_out(result)
+
+
+@staff_router.post("/orders/{order_id}/items", response_model=OrderOut, status_code=status.HTTP_201_CREATED)
+async def add_order_dish(
+    order_id: uuid.UUID, body: OrderDishIn, staff: Staff, ctx: KitchenDep, response: Response
+) -> OrderOut | JSONResponse:
+    """Adds a dish to an order of an open bill (a staff correction); 200 when it repeats an add already made."""
+    result = await _run(
+        AddDishToOrder(ctx).execute(staff.tenant_id, order_id, body.item_id, body.quantity, body.note, body.id)
+    )
+    if isinstance(result, JSONResponse):
+        return result
+    if not result.created:
+        response.status_code = status.HTTP_200_OK
+    return _order_out(result.order)
 
 
 @staff_router.get("/staff/events")

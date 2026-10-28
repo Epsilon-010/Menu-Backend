@@ -3,6 +3,7 @@ from datetime import datetime
 
 from sqlalchemy import delete, exists, func, select, update
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.orders.domain.model import (
@@ -16,6 +17,7 @@ from app.modules.orders.domain.model import (
     OrderItemStatus,
     PaymentMethod,
 )
+from app.modules.orders.domain.errors import OrderIdTaken
 from app.modules.orders.domain.ports import DishChange
 from app.modules.orders.infrastructure.models import (
     BillModel,
@@ -28,7 +30,7 @@ from app.modules.orders.infrastructure.models import (
     OrderModel,
     OrderSettingsModel,
 )
-from app.shared.infrastructure.database import advisory_xact_lock, affected_rows
+from app.shared.infrastructure.database import advisory_xact_lock, affected_rows, violated_unique_constraint
 
 
 class PostgresTableLocks:
@@ -357,7 +359,46 @@ class SqlAlchemyOrderRepository:
         with_dishes = select(OrderItemModel.order_id).where(
             OrderItemModel.tenant_id == tenant_id, OrderItemModel.status.in_([status.value for status in statuses])
         )
-        return await self._orders(tenant_id, OrderModel.id.in_(with_dishes))
+        # A paid bill is frozen: its orders leave the staff queues.
+        open_bills = select(BillModel.id).where(BillModel.tenant_id == tenant_id, BillModel.closed_at.is_(None))
+        return await self._orders(tenant_id, OrderModel.id.in_(with_dishes), OrderModel.bill_id.in_(open_bills))
+
+    async def add_dish(self, tenant_id: uuid.UUID, order_id: uuid.UUID, dish: OrderItem) -> None:
+        # The caller holds the table lock, so no other dish of this order takes the same position.
+        last = await self._session.scalar(
+            select(func.max(OrderItemModel.position)).where(
+                OrderItemModel.tenant_id == tenant_id, OrderItemModel.order_id == order_id
+            )
+        )
+        self._session.add(
+            OrderItemModel(
+                id=dish.id,
+                tenant_id=tenant_id,
+                order_id=order_id,
+                item_id=dish.item_id,
+                name=dish.name,
+                unit_price_cents=dish.unit_price_cents,
+                quantity=dish.quantity,
+                note=dish.note,
+                added_by=dish.added_by,
+                status=dish.status.value,
+                position=(last if last is not None else -1) + 1,
+                updated_at=dish.updated_at,
+            )
+        )
+        try:
+            await self._session.flush()
+        except IntegrityError as error:
+            # A concurrent add with the same id (or one of another tenant) got there first.
+            if violated_unique_constraint(error) == "pk_order_items":
+                raise OrderIdTaken(dish.id) from error
+            raise
+
+    async def dish_id_taken(self, dish_id: uuid.UUID) -> bool:
+        found = await self._session.scalar(
+            select(exists().where(OrderItemModel.id == dish_id) | exists().where(CartLineModel.id == dish_id))
+        )
+        return bool(found)
 
     async def change_dishes(self, tenant_id: uuid.UUID, order_id: uuid.UUID, change: DishChange) -> bool:
         ids = list(change.item_ids)

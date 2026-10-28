@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-from app.modules.orders.domain.model import Bill, Cart, CartLine, Guest, Order, OrderItemStatus
+from app.modules.orders.domain.model import Bill, Cart, CartLine, Guest, Order, OrderItem, OrderItemStatus
 
 
 class TableLocks(Protocol):
@@ -91,7 +91,15 @@ class OrderRepository(Protocol):
         ...
 
     async def list_with_dishes_in(self, tenant_id: uuid.UUID, statuses: frozenset[OrderItemStatus]) -> list[Order]:
-        """Orders with at least one dish in one of `statuses` (with all their dishes), by number."""
+        """Orders of open bills with at least one dish in one of `statuses` (with all their dishes), by number."""
+        ...
+
+    async def add_dish(self, tenant_id: uuid.UUID, order_id: uuid.UUID, dish: OrderItem) -> None:
+        """Appends the dish after the order's last one. Raises OrderIdTaken when its id already exists."""
+        ...
+
+    async def dish_id_taken(self, dish_id: uuid.UUID) -> bool:
+        """Whether the id belongs to any dish or cart line, of any tenant (a sent line keeps its id)."""
         ...
 
     async def change_dishes(self, tenant_id: uuid.UUID, order_id: uuid.UUID, change: DishChange) -> bool:

@@ -4,22 +4,38 @@ deliver them, and anyone may cancel one nobody started.
 Everything is grouped by order. A status change takes the order's table lock first (the same one paying
 the bill takes), then moves every requested dish with one update conditioned on the states it may come
 from: either all of them change, or none does.
+
+A paid bill is frozen: its dishes never change again and its orders leave the queues. While the bill is
+open, waiters (and admins) may add a dish to a sent order; it is priced from the menu like a sent cart.
 """
 
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
-from app.modules.orders.domain.errors import DishesChanged, DishesNotInOrder, OrderNotFound
+from app.modules.orders.domain.errors import (
+    BillClosed,
+    DishesChanged,
+    DishesNotInOrder,
+    ItemsUnavailable,
+    OrderIdTaken,
+    OrderNotFound,
+)
 from app.modules.orders.domain.model import (
+    STAFF_NAME,
     Order,
+    OrderItem,
     OrderItemStatus,
     sources_for,
     validate_change_reason,
     validate_late_order_minutes,
+    validate_note,
+    validate_quantity,
 )
 from app.modules.orders.domain.ports import (
+    BillRepository,
     DishChange,
+    Menu,
     OrderRepository,
     OrderSettingsRepository,
     TableEvents,
@@ -38,7 +54,9 @@ class Kitchen:
     """Everything the staff order use cases share; built once per request by the infrastructure."""
 
     locks: TableLocks
+    bills: BillRepository
     orders: OrderRepository
+    menu: Menu
     settings: OrderSettingsRepository
     tables: Tables
     events: TableEvents
@@ -68,6 +86,13 @@ async def _with_table_names(ctx: Kitchen, tenant_id: uuid.UUID, orders: list[Ord
         table = await ctx.tables.get(tenant_id, table_id)
         names[table_id] = table.name if table is not None else ""
     return [StaffOrder(order=order, table_name=names[order.table_id]) for order in orders]
+
+
+async def _require_open_bill(ctx: Kitchen, order: Order) -> None:
+    """Call it under the table lock: paying takes the same lock, so the bill cannot close meanwhile."""
+    bill = await ctx.bills.get(order.tenant_id, order.bill_id)
+    if bill is None or not bill.is_open:
+        raise BillClosed(order.bill_id)
 
 
 class ListKitchenOrders:
@@ -121,6 +146,7 @@ class ChangeDishStatus:
         sources = sources_for(target, staff.role)
 
         await ctx.locks.lock(staff.tenant_id, order.table_id)
+        await _require_open_bill(ctx, order)
         change = DishChange(
             item_ids=frozenset(item_ids),
             sources=sources,
@@ -135,6 +161,73 @@ class ChangeDishStatus:
         await ctx.events.publish(staff.tenant_id, order.table_id, "order.updated", order_id=order.id)
         changed = await ctx.orders.get(staff.tenant_id, order.id)
         return (await _with_table_names(ctx, staff.tenant_id, [changed or order]))[0]
+
+
+@dataclass(frozen=True)
+class AddedDish:
+    order: Order
+    # False when the call repeated an add that had already been made (same id, same dish).
+    created: bool
+
+
+class AddDishToOrder:
+    """Adds a queued dish to an order of an open bill at the current menu price (never the client's).
+
+    `dish_id` makes it idempotent: repeating the same add returns the order unchanged.
+    """
+
+    def __init__(self, ctx: Kitchen) -> None:
+        self._ctx = ctx
+
+    async def execute(
+        self,
+        tenant_id: uuid.UUID,
+        order_id: uuid.UUID,
+        item_id: uuid.UUID,
+        quantity: int,
+        note: str = "",
+        dish_id: uuid.UUID | None = None,
+    ) -> AddedDish:
+        ctx = self._ctx
+        quantity, note = validate_quantity(quantity), validate_note(note)
+        order = await ctx.orders.get(tenant_id, order_id)
+        if order is None:
+            raise OrderNotFound(order_id)
+        await ctx.locks.lock(tenant_id, order.table_id)
+        # Read again under the lock: a concurrent add may have changed it.
+        order = await ctx.orders.get(tenant_id, order_id) or order
+        if dish_id is not None:
+            existing = next((item for item in order.items if item.id == dish_id), None)
+            if existing is not None and (existing.item_id, existing.quantity, existing.note) == (
+                item_id,
+                quantity,
+                note,
+            ):
+                return AddedDish(order=order, created=False)
+            if existing is not None or await ctx.orders.dish_id_taken(dish_id):
+                raise OrderIdTaken(dish_id)
+        await _require_open_bill(ctx, order)
+        item = (await ctx.menu.orderable(tenant_id, {item_id})).get(item_id)
+        if item is None:
+            raise ItemsUnavailable([item_id])
+        now = ctx.clock.now()
+        await ctx.orders.add_dish(
+            tenant_id,
+            order.id,
+            OrderItem(
+                item_id=item_id,
+                name=item.name,
+                unit_price_cents=item.price_cents,
+                quantity=quantity,
+                note=note,
+                added_by=STAFF_NAME,
+                updated_at=now,
+                id=dish_id or uuid.uuid4(),
+            ),
+        )
+        await ctx.uow.commit()
+        await ctx.events.publish(tenant_id, order.table_id, "order.updated", order_id=order.id)
+        return AddedDish(order=await ctx.orders.get(tenant_id, order.id) or order, created=True)
 
 
 class GetOrderSettings:

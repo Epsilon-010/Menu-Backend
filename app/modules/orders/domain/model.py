@@ -17,6 +17,8 @@ MAX_NOTE_LENGTH = 200
 MAX_CART_LINES = 100
 MAX_GUEST_NAME_LENGTH = 30
 MAX_REASON_LENGTH = 200
+# Who a dish added by the staff to a sent order shows as added by.
+STAFF_NAME = "Staff"
 # Orders waiting longer than this are highlighted; each tenant may change it.
 DEFAULT_LATE_ORDER_MINUTES = 15
 MAX_LATE_ORDER_MINUTES = 240

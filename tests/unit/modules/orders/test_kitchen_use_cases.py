@@ -5,6 +5,7 @@ from datetime import timedelta
 import pytest
 
 from app.modules.orders.application.kitchen import (
+    AddDishToOrder,
     ChangeDishStatus,
     GetOrderSettings,
     Kitchen,
@@ -14,14 +15,24 @@ from app.modules.orders.application.kitchen import (
     UpdateOrderSettings,
 )
 from app.modules.orders.domain.errors import (
+    BillClosed,
     DishesChanged,
     DishesNotInOrder,
     InvalidOrderData,
+    ItemsUnavailable,
+    OrderIdTaken,
     OrderNotFound,
     TransitionNotAllowed,
 )
-from app.modules.orders.domain.model import DEFAULT_LATE_ORDER_MINUTES, Order, OrderItem, OrderItemStatus
-from app.modules.orders.domain.ports import DishChange, TableInfo
+from app.modules.orders.domain.model import (
+    DEFAULT_LATE_ORDER_MINUTES,
+    Bill,
+    Order,
+    OrderItem,
+    OrderItemStatus,
+    PaymentMethod,
+)
+from app.modules.orders.domain.ports import DishChange, MenuItem, TableInfo
 from app.shared.domain.principal import Role
 from tests.unit.fakes import FakeClock, FakeUnitOfWork
 
@@ -39,10 +50,37 @@ QUEUED, PREPARING, READY, DELIVERED, CANCELLED = (
 )
 
 
-class InMemoryOrders:
+class InMemoryBills:
     def __init__(self) -> None:
+        self.bills: dict[uuid.UUID, Bill] = {}
+
+    async def get(self, tenant_id: uuid.UUID, bill_id: uuid.UUID) -> Bill | None:
+        bill = self.bills.get(bill_id)
+        return bill if bill is not None and bill.tenant_id == tenant_id else None
+
+
+class FakeMenu:
+    def __init__(self) -> None:
+        self.items: dict[uuid.UUID, MenuItem] = {}
+
+    async def orderable(self, tenant_id: uuid.UUID, item_ids: set[uuid.UUID]) -> dict[uuid.UUID, MenuItem]:
+        return {item_id: self.items[item_id] for item_id in item_ids if item_id in self.items}
+
+
+class InMemoryOrders:
+    def __init__(self, bills: InMemoryBills) -> None:
         self.orders: dict[uuid.UUID, Order] = {}
         self.history: list[DishChange] = []
+        self._bills = bills
+
+    async def add_dish(self, tenant_id: uuid.UUID, order_id: uuid.UUID, dish: OrderItem) -> None:
+        if await self.dish_id_taken(dish.id):
+            raise OrderIdTaken(dish.id)
+        order = self.orders[order_id]
+        self.orders[order_id] = replace(order, items=(*order.items, dish))
+
+    async def dish_id_taken(self, dish_id: uuid.UUID) -> bool:
+        return any(item.id == dish_id for order in self.orders.values() for item in order.items)
 
     async def get(self, tenant_id: uuid.UUID, order_id: uuid.UUID) -> Order | None:
         order = self.orders.get(order_id)
@@ -50,7 +88,13 @@ class InMemoryOrders:
 
     async def list_with_dishes_in(self, tenant_id: uuid.UUID, statuses: frozenset[OrderItemStatus]) -> list[Order]:
         return sorted(
-            (o for o in self.orders.values() if o.tenant_id == tenant_id and any(i.status in statuses for i in o.items)),
+            (
+                o
+                for o in self.orders.values()
+                if o.tenant_id == tenant_id
+                and self._bills.bills[o.bill_id].is_open
+                and any(i.status in statuses for i in o.items)
+            ),
             key=lambda o: o.number,
         )
 
@@ -122,7 +166,9 @@ class FakeSettings:
 
 class World:
     def __init__(self) -> None:
-        self.orders = InMemoryOrders()
+        self.bills = InMemoryBills()
+        self.menu = FakeMenu()
+        self.orders = InMemoryOrders(self.bills)
         self.locks = FakeLocks()
         self.events = FakeEvents()
         self.settings = FakeSettings()
@@ -130,7 +176,9 @@ class World:
         self.uow = FakeUnitOfWork()
         self.ctx = Kitchen(
             locks=self.locks,
+            bills=self.bills,
             orders=self.orders,
+            menu=self.menu,
             settings=self.settings,
             tables=FakeTables(),
             events=self.events,
@@ -139,10 +187,12 @@ class World:
         )
 
     def order(self, number: int, *statuses: OrderItemStatus, tenant_id: uuid.UUID = TENANT_A) -> Order:
+        bill = Bill(tenant_id=tenant_id, table_id=TABLE, opened_at=self.clock.now())
+        self.bills.bills[bill.id] = bill
         order = Order(
             tenant_id=tenant_id,
             table_id=TABLE,
-            bill_id=uuid.uuid4(),
+            bill_id=bill.id,
             number=number,
             created_at=self.clock.now(),
             sent_by="Guest 1",
@@ -168,6 +218,15 @@ class World:
         staff = StaffMember(tenant_id=TENANT_A, user_id=uuid.uuid4(), role=role)
         result = await ChangeDishStatus(self.ctx).execute(staff, order.id, [i.id for i in items], target, reason)
         return result.order
+
+    def pay(self, order: Order) -> None:
+        bill = self.bills.bills[order.bill_id]
+        self.bills.bills[bill.id] = bill.paid(self.clock.now(), PaymentMethod.CASH, order.total_cents)
+
+    def menu_item(self, name: str, price_cents: int) -> uuid.UUID:
+        item_id = uuid.uuid4()
+        self.menu.items[item_id] = MenuItem(item_id=item_id, name=name, price_cents=price_cents)
+        return item_id
 
 
 async def test_the_kitchen_marks_several_dishes_of_one_order_at_once() -> None:
@@ -273,3 +332,75 @@ async def test_the_late_order_threshold_defaults_to_15_minutes_per_tenant() -> N
     for out_of_range in (0, 241):
         with pytest.raises(InvalidOrderData):
             await UpdateOrderSettings(world.ctx).execute(TENANT_A, out_of_range)
+
+
+@pytest.mark.parametrize("target", [PREPARING, READY, DELIVERED, CANCELLED])
+async def test_no_dish_of_a_paid_bill_changes(target: OrderItemStatus) -> None:
+    world = World()
+    order = world.order(1, READY if target is DELIVERED else QUEUED)
+    world.pay(order)
+
+    with pytest.raises(BillClosed):
+        await world.change(Role.ADMIN, order, list(order.items), target, "Left" if target is CANCELLED else None)
+    assert world.orders.orders[order.id] == order
+    assert (world.orders.history, world.uow.commits, world.events.published) == ([], 0, [])
+
+
+async def test_paid_orders_leave_both_queues() -> None:
+    world = World()
+    paid, open_order = world.order(1, QUEUED, READY), world.order(2, QUEUED, READY)
+    world.pay(paid)
+
+    assert [view.order.id for view in await ListKitchenOrders(world.ctx).execute(TENANT_A)] == [open_order.id]
+    assert [view.order.id for view in await ListDeliveries(world.ctx).execute(TENANT_A)] == [open_order.id]
+
+
+async def test_staff_add_a_queued_dish_at_the_menu_price() -> None:
+    world = World()
+    order = world.order(1, QUEUED)
+    taco = world.menu_item("Taco", 1800)
+
+    added = await AddDishToOrder(world.ctx).execute(TENANT_A, order.id, taco, 2, " no onion ")
+
+    assert added.created
+    dish = added.order.items[-1]
+    assert (dish.name, dish.unit_price_cents, dish.quantity, dish.note) == ("Taco", 1800, 2, "no onion")
+    assert (dish.status, dish.added_by) == (QUEUED, "Staff")
+    assert world.locks.locked == [(TENANT_A, TABLE)]
+    assert world.uow.commits == 1
+    assert world.events.published == [(TENANT_A, TABLE, "order.updated", order.id)]
+
+
+async def test_adding_needs_an_orderable_item_an_open_bill_and_a_known_order() -> None:
+    world = World()
+    order = world.order(1, QUEUED)
+    taco = world.menu_item("Taco", 1800)
+    add = AddDishToOrder(world.ctx)
+
+    with pytest.raises(ItemsUnavailable):
+        await add.execute(TENANT_A, order.id, uuid.uuid4(), 1)
+    with pytest.raises(OrderNotFound):
+        await add.execute(TENANT_B, order.id, taco, 1)
+    world.pay(order)
+    with pytest.raises(BillClosed):
+        await add.execute(TENANT_A, order.id, taco, 1)
+    assert world.orders.orders[order.id] == order
+    assert world.uow.commits == 0
+
+
+async def test_repeating_an_add_returns_the_order_and_a_reused_id_is_taken() -> None:
+    world = World()
+    order, other = world.order(1, QUEUED), world.order(2, QUEUED)
+    taco = world.menu_item("Taco", 1800)
+    add = AddDishToOrder(world.ctx)
+    dish_id = uuid.uuid4()
+
+    first = await add.execute(TENANT_A, order.id, taco, 1, dish_id=dish_id)
+    again = await add.execute(TENANT_A, order.id, taco, 1, dish_id=dish_id)
+
+    assert again == replace(first, created=False)
+    with pytest.raises(OrderIdTaken):
+        await add.execute(TENANT_A, order.id, taco, 2, dish_id=dish_id)
+    with pytest.raises(OrderIdTaken):
+        await add.execute(TENANT_A, other.id, taco, 1, dish_id=dish_id)
+    assert world.uow.commits == 1

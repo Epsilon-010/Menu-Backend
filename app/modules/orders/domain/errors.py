@@ -64,3 +64,7 @@ class TransitionNotAllowed(Exception):
 
 class DishesChanged(Exception):
     """Some dishes are no longer in a state the change can start from: nothing was changed."""
+
+
+class BillClosed(Exception):
+    """The order's bill was already paid (or closed): its dishes are frozen."""
