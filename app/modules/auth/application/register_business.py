@@ -22,8 +22,8 @@ class RegisterBusiness:
 
     One transaction: `create_tenant` and `create_user` must be built with a unit of work that does not
     commit, so the tenant, the admin and the refresh token are committed together here, or nothing is.
-    `tenant_id` is chosen by the client to make the sign-up idempotent: repeating it with the same email
-    and password signs in to the account already created.
+    `tenant_id` is chosen by the client to make the sign-up idempotent: repeating it with the same email,
+    password and business name signs in to the account already created.
     """
 
     def __init__(
@@ -60,12 +60,15 @@ class RegisterBusiness:
 
         # Validate everything before locking, hashing or writing.
         validate_password(password)
-        Tenant.create(business_name)
+        business = Tenant.create(business_name)
         User.create(uuid.uuid4(), email, ADMIN_NAME, Role.ADMIN, password_hash="")
 
         # Taken before the checks, so a concurrent replay waits for the first sign-up and then finds it.
         await self._lock_email.execute(email)
-        if tenant_id is not None and await self._get_tenant.execute(tenant_id) is not None:
+        if tenant_id is not None and (existing := await self._get_tenant.execute(tenant_id)) is not None:
+            # A different name is another sign-up, never one to drop silently.
+            if existing.name != business.name:
+                raise BusinessIdTaken(tenant_id)
             return await self._sign_in_again(tenant_id, email, password)
         if await self._find_user.execute(email) is not None:
             raise EmailAlreadyInUse(email)

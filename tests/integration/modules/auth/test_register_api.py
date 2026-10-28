@@ -122,7 +122,8 @@ def test_repeating_the_same_sign_up_signs_in_to_the_account_already_created(new_
 
 @pytest.mark.parametrize(
     "fields",
-    [{"email": "other@example.com"}, {"password": "other-pass-123"}],
+    # A replay must be the same sign-up: a different business name is never dropped silently.
+    [{"email": "other@example.com"}, {"password": "other-pass-123"}, {"business_name": "Another Diner"}],
 )
 def test_the_same_id_with_other_credentials_is_refused(new_client: ClientFactory, fields: dict[str, str]) -> None:
     chosen = str(uuid.uuid4())

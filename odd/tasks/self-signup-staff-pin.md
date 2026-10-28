@@ -14,7 +14,7 @@ in Backend and Menu-Frontend (stacked on `feat/slice-7-kitchen`). Delivery: ask-
   (same cookies as login, `201 {expires_in, role: "admin"}`). Validation as today: email format, password 8-128,
   business name 1-120. Email taken: 409 "Email already in use". Rate limited per client IP (namespace `signup:`).
   The admin's `full_name` is "Admin" (no extra field: no friction). Idempotent: `id` is the tenant id chosen by the
-  client; repeating the same sign-up (same id, email and password) signs in to the account already created; the same
+  client; repeating the same sign-up (same id, email, password and business name) signs in to the account already created; the same
   id with other data: 409 "That id is already used by something else".
 - **S2** Sign-up UI: `/register`, two steps in one form (step 1 email + password, step 2 business name), then
   redirect to `/admin`. Link from `/login`. Errors shown inline.
@@ -47,7 +47,7 @@ in Backend and Menu-Frontend (stacked on `feat/slice-7-kitchen`). Delivery: ask-
 
 | ID | Specs | Route | Status | Commit |
 |----|-------|-------|--------|--------|
-| T1 | S1, S4-S9 backend | delegated (writer reason: parallel units, backend + frontend, disjoint repos) | done; 3 out-of-surface tests pending (L5) | d545148, 25a9842, adf863c |
+| T1 | S1, S4-S9 backend | delegated (writer reason: parallel units, backend + frontend, disjoint repos) | done (L6) | d545148, 25a9842, adf863c, 5e519cf, L6 fix |
 | T2 | S2, S3, S4, S6, S7 frontend | delegated (same parallel launch) | done (RED/GREEN: register.test.ts, staff/api.test.ts) | Menu-Frontend f12d46f, 387f5ca |
 | T3 | all | inline: docs (CLAUDE.md, ROADMAP.md), e2e check, risk/verify | pending | |
 
@@ -87,3 +87,11 @@ in Backend and Menu-Frontend (stacked on `feat/slice-7-kitchen`). Delivery: ask-
   `create_member(admin, username, role)`, which now creates through the API and turns the member into a legacy
   account (S8 path) so their chosen username + `STAFF_PASSWORD` still sign in; migrating them to `add_member` +
   code/PIN is optional. `/auth/me` keeps `user.username` (the code in lowercase) unchanged.
+- **L6** (2026-10-28, parent) Out-of-surface tests moved to the new contract (`5e519cf`); full suite 556 passed.
+  Independent verifier: S1-S9 pass, baseline differential clean (admin/table login, refresh, logout unchanged). Blocker
+  B1: a replay with the same id/email/password but another business name returned 201 and dropped the new name.
+  Fix: S1 replay now also requires the same business name (409 "That id is already used by something else"
+  otherwise; RED observed in `test_the_same_id_with_other_credentials_is_refused[fields2]`, then GREEN); the frontend
+  draft key includes the business name, so a corrected name is a new sign-up. Advisories kept: every sign-up attempt
+  counts toward the per-IP limit (5 per 15 min; Docker Desktop shares one IP in dev), 429 text says "login attempts",
+  sign-up reveals whether an email is registered (by spec), StaffPanel replay 409 reloads the whole list.
