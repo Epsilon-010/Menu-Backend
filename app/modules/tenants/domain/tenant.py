@@ -13,11 +13,12 @@ class Tenant:
     id: uuid.UUID = field(default_factory=uuid.uuid4)
 
     @classmethod
-    def create(cls, name: str) -> "Tenant":
+    def create(cls, name: str, tenant_id: uuid.UUID | None = None) -> "Tenant":
+        """`tenant_id` comes from the client (sign-up) to make the create idempotent; None generates one."""
         name = name.strip()
         if not name or len(name) > MAX_NAME_LENGTH:
             raise InvalidTenantData(f"Tenant name must have 1 to {MAX_NAME_LENGTH} characters")
-        return cls(name=name)
+        return cls(name=name, id=tenant_id or uuid.uuid4())
 
 
 class TenantRepository(Protocol):

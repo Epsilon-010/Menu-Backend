@@ -1,9 +1,12 @@
 import uuid
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.tenants.domain.errors import TenantIdTaken
 from app.modules.tenants.domain.tenant import Tenant
 from app.modules.tenants.infrastructure.models import TenantModel
+from app.shared.infrastructure.database import violated_unique_constraint
 
 
 class SqlAlchemyTenantRepository:
@@ -12,7 +15,13 @@ class SqlAlchemyTenantRepository:
 
     async def add(self, tenant: Tenant) -> None:
         self._session.add(TenantModel(id=tenant.id, name=tenant.name))
-        await self._session.flush()
+        try:
+            await self._session.flush()
+        except IntegrityError as error:
+            # A client-chosen id (sign-up) that a concurrent request took first.
+            if violated_unique_constraint(error) == "pk_tenants":
+                raise TenantIdTaken(tenant.id) from error
+            raise
 
     async def get(self, tenant_id: uuid.UUID) -> Tenant | None:
         model = await self._session.get(TenantModel, tenant_id)

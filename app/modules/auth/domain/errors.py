@@ -12,5 +12,9 @@ class InvalidRefreshToken(Exception):
     pass
 
 
+class BusinessIdTaken(Exception):
+    """A sign-up's client-chosen id belongs to a business it cannot sign in to (other email or password)."""
+
+
 class AccountNotFound(Exception):
     """The token's subject does not exist (or is inactive) inside the token's tenant."""
