@@ -20,6 +20,7 @@ class BillModel(UUIDPrimaryKey, Base):
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     payment_method: Mapped[str | None] = mapped_column(String(10))
     paid_cents: Mapped[int | None] = mapped_column(Integer)
+    bill_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class GuestModel(UUIDPrimaryKey, Base):

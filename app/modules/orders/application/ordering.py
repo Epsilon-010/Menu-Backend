@@ -7,6 +7,7 @@ bill takes the same lock, so nothing can be added or sent once it has been paid.
 
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 
 from app.modules.orders.domain.errors import (
     CartChanged,
@@ -15,6 +16,7 @@ from app.modules.orders.domain.errors import (
     CartLineNotFound,
     DinerNotAllowed,
     ItemsUnavailable,
+    NothingToPay,
     OrderIdTaken,
 )
 from app.modules.orders.domain.model import (
@@ -307,3 +309,54 @@ class ListTableOrders:
         if visit.bill is None:
             return []
         return await self._ctx.orders.list_for_bill(diner.tenant_id, visit.bill.id)
+
+
+class GetBillRequest:
+    """When the table asked for the bill on its open visit, or None."""
+
+    def __init__(self, ctx: Ordering) -> None:
+        self._ctx = ctx
+
+    async def execute(self, diner: Diner) -> datetime | None:
+        visit = await authorize(self._ctx, diner, lock=False)
+        return visit.bill.bill_requested_at if visit.bill is not None else None
+
+
+class RequestBill:
+    """Alerts the waiter that the table wants to pay; asking again keeps the first request."""
+
+    def __init__(self, ctx: Ordering) -> None:
+        self._ctx = ctx
+
+    async def execute(self, diner: Diner) -> datetime:
+        ctx = self._ctx
+        visit = await authorize(ctx, diner, lock=True)
+        if visit.bill is None or not await ctx.orders.list_for_bill(diner.tenant_id, visit.bill.id):
+            raise NothingToPay()
+        if visit.bill.bill_requested_at is not None:
+            return visit.bill.bill_requested_at
+        at = ctx.clock.now()
+        await ctx.bills.update(visit.bill.bill_requested(at))
+        await ctx.uow.commit()
+        await ctx.events.publish(diner.tenant_id, diner.table_id, "bill.requested")
+        return at
+
+
+class CancelBillRequest:
+    """The table no longer wants the bill (say, they order dessert); cancelling nothing is fine."""
+
+    def __init__(self, ctx: Ordering) -> None:
+        self._ctx = ctx
+
+    async def execute(self, diner: Diner) -> None:
+        ctx = self._ctx
+        visit = await authorize(ctx, diner, lock=True)
+        if visit.bill is not None and visit.bill.bill_requested_at is not None:
+            await clear_bill_request(ctx, visit.bill)
+
+
+async def clear_bill_request(ctx: Ordering, bill: Bill) -> None:
+    """Stores the bill without its request, commits and notifies. The caller holds the table lock."""
+    await ctx.bills.update(bill.bill_request_cleared())
+    await ctx.uow.commit()
+    await ctx.events.publish(bill.tenant_id, bill.table_id, "bill.request_cleared")

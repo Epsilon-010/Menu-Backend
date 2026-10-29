@@ -68,3 +68,7 @@ class DishesChanged(Exception):
 
 class BillClosed(Exception):
     """The order's bill was already paid (or closed): its dishes are frozen."""
+
+
+class NothingToPay(Exception):
+    """The table asked for the bill before ordering anything on this visit."""

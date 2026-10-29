@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.orders.application.bills import (
     BillDetail,
     CloseTable,
+    DismissBillRequest,
     GetBill,
     ListTables,
     OpenTable,
@@ -31,11 +32,14 @@ from app.modules.orders.application.kitchen import (
 )
 from app.modules.orders.application.ordering import (
     AddCartLine,
+    CancelBillRequest,
     CartView,
+    GetBillRequest,
     GetCart,
     ListTableOrders,
     Ordering,
     RemoveCartLine,
+    RequestBill,
     SubmitCart,
     UpdateCartLine,
     authorize,
@@ -53,6 +57,7 @@ from app.modules.orders.domain.errors import (
     DishesNotInOrder,
     InvalidOrderData,
     ItemsUnavailable,
+    NothingToPay,
     OrderIdTaken,
     OrderNotFound,
     TableNotFound,
@@ -291,8 +296,14 @@ class BillOut(BaseModel):
     opened_at: datetime
     closed_at: datetime | None
     payment_method: PaymentMethod | None
+    # When the table asked for the bill and nobody attended it yet.
+    bill_requested_at: datetime | None
     orders: list[OrderOut]
     total_cents: int
+
+
+class BillRequestOut(BaseModel):
+    requested_at: datetime | None
 
 
 class TableOverviewOut(BaseModel):
@@ -383,6 +394,7 @@ def _bill_out(detail: BillDetail) -> BillOut:
         opened_at=detail.bill.opened_at,
         closed_at=detail.bill.closed_at,
         payment_method=detail.bill.payment_method,
+        bill_requested_at=detail.bill.bill_requested_at,
         orders=[_order_out(order) for order in detail.orders],
         total_cents=detail.total_cents,
     )
@@ -419,6 +431,8 @@ async def _run(call: Awaitable[T]) -> T | JSONResponse:
         )
     except OrderIdTaken:
         return problem(status.HTTP_409_CONFLICT, "That id is already used by something else")
+    except NothingToPay:
+        return problem(status.HTTP_409_CONFLICT, "There is nothing to pay yet")
     except BillHasOrders:
         return problem(status.HTTP_409_CONFLICT, "A bill with orders is closed by registering its payment")
     except CartLineNotFound:
@@ -480,8 +494,8 @@ async def table_events_stream(
     request: Request,
     last_event_id: Annotated[str | None, Header()] = None,
 ) -> Response:
-    """SSE: `cart.updated` (with `cart_version`), `order.created`, `order.updated`, `bill.opened` and
-    `bill.closed` for this table.
+    """SSE: `cart.updated` (with `cart_version`), `order.created`, `order.updated`, `bill.opened`,
+    `bill.requested`, `bill.request_cleared` and `bill.closed` for this table.
 
     The visit is checked once, in a short transaction, so an open stream never holds a database connection.
     """
@@ -511,6 +525,25 @@ async def list_table_orders(diner: DinerDep, ctx: OrderingDep) -> list[OrderOut]
     return result if isinstance(result, JSONResponse) else [_order_out(order) for order in result]
 
 
+@table_router.get("/bill-request", response_model=BillRequestOut)
+async def read_bill_request(diner: DinerDep, ctx: OrderingDep) -> BillRequestOut | JSONResponse:
+    result = await _run(GetBillRequest(ctx).execute(diner))
+    return result if isinstance(result, JSONResponse) else BillRequestOut(requested_at=result)
+
+
+@table_router.post("/bill-request", response_model=BillRequestOut)
+async def request_bill(diner: DinerDep, ctx: OrderingDep) -> BillRequestOut | JSONResponse:
+    """Alerts the waiters once; asking again returns the same request."""
+    result = await _run(RequestBill(ctx).execute(diner))
+    return result if isinstance(result, JSONResponse) else BillRequestOut(requested_at=result)
+
+
+@table_router.delete("/bill-request", status_code=status.HTTP_204_NO_CONTENT)
+async def cancel_bill_request(diner: DinerDep, ctx: OrderingDep) -> Response:
+    result = await _run(CancelBillRequest(ctx).execute(diner))
+    return result if isinstance(result, JSONResponse) else Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 # --- Bill routes: waiters and admins -----------------------------------------------------------
 
 
@@ -535,6 +568,13 @@ async def read_bill(bill_id: uuid.UUID, staff: Staff, ctx: OrderingDep) -> BillO
 async def pay_bill(bill_id: uuid.UUID, body: PaymentIn, staff: Staff, ctx: OrderingDep) -> BillOut | JSONResponse:
     result = await _run(PayBill(ctx).execute(staff.tenant_id, bill_id, body.method))
     return result if isinstance(result, JSONResponse) else _bill_out(result)
+
+
+@bills_router.delete("/{bill_id}/request", status_code=status.HTTP_204_NO_CONTENT)
+async def dismiss_bill_request(bill_id: uuid.UUID, staff: Staff, ctx: OrderingDep) -> Response:
+    """The waiter attends the table that asked for the bill."""
+    result = await _run(DismissBillRequest(ctx).execute(staff.tenant_id, bill_id))
+    return result if isinstance(result, JSONResponse) else Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @bills_router.post("/{bill_id}/close", status_code=status.HTTP_204_NO_CONTENT)

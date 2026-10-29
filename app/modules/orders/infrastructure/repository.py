@@ -50,6 +50,7 @@ def _bill(model: BillModel) -> Bill:
         closed_at=model.closed_at,
         payment_method=PaymentMethod(model.payment_method) if model.payment_method else None,
         paid_cents=model.paid_cents,
+        bill_requested_at=model.bill_requested_at,
     )
 
 
@@ -91,6 +92,7 @@ class SqlAlchemyBillRepository:
                 closed_at=bill.closed_at,
                 payment_method=bill.payment_method.value if bill.payment_method else None,
                 paid_cents=bill.paid_cents,
+                bill_requested_at=bill.bill_requested_at,
             )
         )
 

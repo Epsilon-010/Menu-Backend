@@ -7,7 +7,7 @@ and discards the unsent cart, all in one transaction: after that nobody at the t
 import uuid
 from dataclasses import dataclass
 
-from app.modules.orders.application.ordering import Ordering
+from app.modules.orders.application.ordering import Ordering, clear_bill_request
 from app.modules.orders.domain.errors import BillHasOrders, BillNotFound, TableNotFound
 from app.modules.orders.domain.model import Bill, Order, PaymentMethod
 
@@ -147,3 +147,16 @@ class CloseTable:
         if await ctx.orders.list_for_bill(tenant_id, bill.id):
             raise BillHasOrders(bill_id)
         await _end_visit(ctx, bill.closed_without_payment(ctx.clock.now()))
+
+
+class DismissBillRequest:
+    """The waiter attends the table that asked for the bill; the alert goes away for every waiter."""
+
+    def __init__(self, ctx: Ordering) -> None:
+        self._ctx = ctx
+
+    async def execute(self, tenant_id: uuid.UUID, bill_id: uuid.UUID) -> None:
+        ctx = self._ctx
+        bill = await _locked_open_bill(ctx, tenant_id, bill_id)
+        if bill.bill_requested_at is not None:
+            await clear_bill_request(ctx, bill)
