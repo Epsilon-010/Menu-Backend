@@ -98,3 +98,15 @@ Branch `feat/slice-12-layout` in Backend and Menu-Frontend. Delivery: ask-on-ris
   density/cart value would crash the menu (the server prevents it); `MenuHero` has no fallback for a theme without
   `layout` (frontend and backend deploy together); no render tests for `MenuBrowser`/`MenuPage`; downgrade also strips
   a document that was already v3. Dev data: the verifier left tenant "Verify layout other". Slice 12 done.
+- L12 2026-10-29 (user): "si pero arregla lo que me dices de los avisos". Frontend `4b1c6c7`, RED first (5 new layout
+  tests): three columns from a 37rem menu (the column beside the cart bar is ~630px with the scrollbar), four from
+  50rem with the menu page widened to `max-w-7xl` (`menuWidthClass`); `cartPlacement` moved to `layout.ts` with a test
+  that the compact cart shows exactly where the side panel does not; `normalizeLayout`/`withDrawableLayout` at the API
+  boundary (published, draft, presets), so a missing or unknown value falls back to the default (also covers
+  `MenuHero` and an older server). Render tests without new libraries (`react-dom/server`): `MenuBrowser.test.tsx`
+  (each navigation, view, density, header style, empty menu) and `MenuHero.test.tsx` (hidden parts). Checks: typecheck,
+  lint, `npm test` 205 passed, build ok; headless widths 390-1440 x 2/3/4 columns with the cart bar: default unchanged
+  (2 from 672px), 3 columns from 1024px desktop (199px cards), 4 from 1280px (188px), no horizontal scroll, theme
+  restored. Not changed: downgrade stripping a document that was already v3 (cannot be told apart; by spec). The
+  verifier's dev tenant "Verify layout other" stays (harmless dev data). Native review of the frontend range: medium,
+  `under_budget` (1055 lines).
