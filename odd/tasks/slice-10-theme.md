@@ -17,10 +17,10 @@ Branch: `feat/slice-10-theme` (Backend + Menu-Frontend). Delivery: single-pr per
 ## Tasks
 | ID | Specs | Route | Status | Evidence |
 |---|---|---|---|---|
-| T1 | S1, S4, S5, S7 | inline | open | Backend domain: theme document, defaults, value validation, contrast |
-| T2 | S2, S3, S6, S7, S9 | inline | open | Backend: `themes` table (JSONB), use cases, `/theme` router, Redis cache, theme images via media registry |
-| T3 | S6 | inline | open | Frontend: `/menu` applies the published theme through CSS variables |
-| T4 | S3, S4, S5, S8 | inline | open | Frontend: admin Design editor, live preview (tablet/phone), contrast warning, uploads |
+| T1 | S1, S4, S5, S7 | inline | done | Backend domain: theme document, defaults, value validation, contrast. RED: `No module named app.modules.theming`; GREEN 41 tests. Commit `d42332a` |
+| T2 | S2, S3, S6, S7, S9 | inline | done | Backend: `themes` table (JSONB), use cases, `/theme` router, Redis cache, theme images via media registry. GREEN 11 use-case + 12 API tests; full suite 631 passed. Commit `5d8688b` |
+| T3 | S6 | inline | done | Frontend: `/menu` applies the published theme through CSS variables (semantic tokens in `index.css`, defaults = previous zinc). RED: missing `./style.ts`; GREEN. Commit `9381753` |
+| T4 | S3, S4, S5, S8 | inline | done | Frontend: admin Design editor (`/admin/design`), live preview (tablet/phone), contrast warning, uploads. RED: missing `./editor.ts`; GREEN; 163 tests, typecheck, lint, build ok. Commit `6c60ab5` |
 | T5 | S8 | inline | open | Docs, independent verifier, native review, push |
 
 Route evidence: backend and frontend share the API contract (frontend depends on it), so no parallel-writer reason; all inline.
@@ -31,3 +31,6 @@ Assumptions (2026-10-28): contrast below WCAG AA (4.5:1) is a warning only; an i
 - L1 (2026-10-28, user, verbatim): "Arrancamos el Slice 10 — Motor de theme + colores y marca. [...] Seguí el flujo de siempre: documento ODD en Backend/odd/tasks/slice-10-theme.md, TDD (RED → GREEN), tests de aislamiento por tenant y de que el rol table/guest no puede editar el theme, y un test de que un valor inválido (color mal formado, CSS inyectado) se rechaza."
 - L2 (2026-10-28): branches created from main (Backend 3851ca4, Frontend 1a71e9c). `Backend/.env` has no `CLOUDINARY_*` values: real uploads return 503; tests use the fake.
 - L3 (2026-10-28, user decisions): dark mode = "Una paleta + mode"; brand background = "Imagen + patrones curados".
+- L4 (2026-10-28): backend done. API: `GET /theme` (any signed-in role, published or defaults, Redis cache by generation), `GET|PUT /theme/draft`, `POST /theme/publish`, `POST /theme/images/signature {kind: logo|banner|background}` (admin). Draft responses carry `contrast_warnings`, `defaults.{light,dark}` palettes and `image_urls` by public id. Native assess on 3851ca4..5d8688b: medium, `under_budget` (review at slice end, as the user asked).
+- L5 (2026-10-28, user question, verbatim): "que es mejor usar cloudinary o aws un buecket en s3?" Answered: Cloudinary for now (on-the-fly transformations, signed direct upload); S3 is cheaper at scale but needs CDN + resizing; switching is one `ImageStorage` adapter.
+- L6 (2026-10-28): frontend done. HTTP e2e against Docker (demo tenant, Mesa 5): save normalizes `#ABC` to `#aabbcc`; injected CSS 422 problem+json naming the field; the table keeps the published colors until publish, then sees the new ones; table PUT draft / publish 403. Demo theme restored afterwards. Open menus refresh the theme every 60 s and when shown again (no SSE event in this slice).
