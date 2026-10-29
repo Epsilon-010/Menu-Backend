@@ -7,8 +7,10 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from redis import Redis
 
 from app.seed import SeedResult
+from app.shared.infrastructure.config import get_settings
 from app.shared.infrastructure.images import UnconfiguredImageStorage
 from tests.integration.modules.auth.test_auth_api import _seed, login
 from tests.integration.modules.catalog.test_catalog_api import ClientFactory, admin_of, ok
@@ -253,3 +255,118 @@ def test_a_tenant_never_sees_nor_changes_another_tenant_theme(
     assert save(owner_b, doc_b).status_code == 422
     ok(owner_b.post(PUBLISH_URL))
     assert ok(owner_a.get(THEME_URL))["theme"]["colors"]["primary"] == "#111111"
+
+
+# --- Typography (Slice 11): "cada elemento del menú puede tener su propia fuente y tamaño, se ve en la vista previa y
+# se aplica al publicar"
+
+
+def test_each_element_gets_its_own_font_and_size_and_tables_see_it_only_after_publishing(
+    new_client: ClientFactory, tenant_a: SeedResult
+) -> None:
+    admin = admin_of(new_client)
+    tablet = tablet_of(new_client, created(create_table(admin)))
+    doc = draft_of(admin)["draft"]
+    assert doc["schema_version"] == 2
+    doc["typography"]["fonts"]["heading"] = "playfair_display"
+    doc["typography"]["fonts"]["price"] = "oswald"
+    doc["typography"]["elements"]["business_name"].update(size=48, weight=800, style="italic", transform="uppercase")
+    doc["typography"]["elements"]["price"].update(font="price", size=20, weight=700)
+    saved = ok(save(admin, doc))["draft"]["typography"]
+    assert saved == doc["typography"]
+
+    assert ok(tablet.get(THEME_URL))["theme"]["typography"]["fonts"]["heading"] == "geist"
+    ok(admin.post(PUBLISH_URL))
+    published = ok(tablet.get(THEME_URL))["theme"]["typography"]
+    assert published["fonts"]["heading"] == "playfair_display"
+    assert published["elements"]["business_name"]["size"] == 48
+    assert published["elements"]["price"]["weight"] == 700
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("fonts", "heading"), "comic_sans"),
+        (("fonts", "body"), "Inter; } body { display: none"),
+        (("fonts", "button"), "https://evil.test/font.woff2"),
+        (("scale",), 200),
+        (("elements", "category", "size"), 9),
+        (("elements", "category", "line_height"), 500),
+        (("elements", "category", "letter_spacing"), -100),
+        (("elements", "category", "align"), "justify"),
+        (("elements", "category", "transform"), "small-caps"),
+        (("elements", "description", "style"), "italic"),  # Geist has no italics
+        (("elements", "price", "weight"), 650),
+    ],
+)
+def test_a_font_outside_the_list_or_a_value_out_of_range_is_rejected_and_nothing_changes(
+    new_client: ClientFactory, tenant_a: SeedResult, path: tuple[str, ...], value: Any
+) -> None:
+    admin = admin_of(new_client)
+    before = draft_of(admin)
+    doc = copy.deepcopy(before["draft"])
+    target = doc["typography"]
+    *parents, leaf = path
+    for key in parents:
+        target = target[key]
+    target[leaf] = value
+    response = save(admin, doc)
+    assert response.status_code == 422, response.text
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json()["detail"] == f"Invalid theme value: typography.{'.'.join(path)}"
+    assert str(value) not in response.json()["detail"]
+    assert draft_of(admin) == before
+
+
+def test_a_weight_the_chosen_font_does_not_have_is_rejected(new_client: ClientFactory, tenant_a: SeedResult) -> None:
+    admin = admin_of(new_client)
+    doc = draft_of(admin)["draft"]
+    doc["typography"]["fonts"]["price"] = "bebas_neue"  # only 400; price defaults to 600
+    response = save(admin, doc)
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Invalid theme value: typography.elements.price.weight"
+    doc["typography"]["elements"]["price"]["weight"] = 400
+    assert ok(save(admin, doc))["draft"]["typography"]["fonts"]["price"] == "bebas_neue"
+
+
+def test_tables_guests_and_staff_cannot_change_the_typography(new_client: ClientFactory, tenant_a: SeedResult) -> None:
+    admin = admin_of(new_client)
+    table = created(create_table(admin))
+    tablet = tablet_of(new_client, table)
+    open_table(admin, table)
+    guest = guest_of(new_client, table["qr_token"])
+    doc = draft_of(admin)["draft"]
+    doc["typography"]["fonts"]["heading"] = "pacifico"
+    doc["typography"]["elements"]["business_name"]["weight"] = 400
+    for client in (tablet, guest):
+        assert save(client, doc).status_code == 403
+        assert client.post(PUBLISH_URL).status_code == 403
+    assert draft_of(admin)["draft"]["typography"]["fonts"]["heading"] == "geist"
+    assert ok(tablet.get(THEME_URL))["theme"]["typography"]["fonts"]["heading"] == "geist"
+
+
+def test_a_tenant_typography_never_reaches_another_tenant(
+    new_client: ClientFactory, tenant_a: SeedResult, tenant_b: SeedResult
+) -> None:
+    owner_a = admin_of(new_client)
+    owner_b = admin_of(new_client, "boss@example.com")
+    tablet_b = tablet_of(new_client, created(create_table(owner_b)))
+    doc = draft_of(owner_a)["draft"]
+    doc["typography"]["fonts"]["heading"] = "lora"
+    doc["typography"]["scale"] = 120
+    ok(save(owner_a, doc))
+    ok(owner_a.post(PUBLISH_URL))
+    for typography in (draft_of(owner_b)["draft"]["typography"], ok(tablet_b.get(THEME_URL))["theme"]["typography"]):
+        assert typography["fonts"]["heading"] == "geist"
+        assert typography["scale"] == 100
+
+
+def test_a_theme_cached_before_the_schema_change_is_never_served(
+    new_client: ClientFactory, tenant_a: SeedResult
+) -> None:
+    admin = admin_of(new_client)
+    stale = '{"theme": {"schema_version": 1}, "image_urls": {}}'
+    with Redis.from_url(get_settings().redis_url) as redis:
+        # Where Slice 10 stored the published theme of generation 0.
+        redis.set(f"theme:{tenant_a.tenant_id}:0", stale)
+    assert ok(admin.get(THEME_URL))["theme"]["schema_version"] == 2

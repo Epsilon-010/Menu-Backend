@@ -13,7 +13,7 @@ from typing import Any
 
 from app.shared.domain.images import ImageKind, InvalidImage, ensure_owned_image
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 MODES = ("light", "dark")
 LOGO_SIZES = ("sm", "md", "lg")
@@ -21,6 +21,18 @@ LOGO_POSITIONS = ("left", "center")
 BANNER_HEIGHTS = ("sm", "md", "lg")
 BACKGROUND_KINDS = ("none", "image", "pattern")
 BACKGROUND_PATTERNS = ("dots", "grid", "stripes", "waves", "checks", "zigzag")
+
+FONT_ROLES = ("heading", "body", "price", "button")
+TEXT_ELEMENTS = ("business_name", "category", "product_name", "description", "price", "button")
+FONT_STYLES = ("normal", "italic")
+TEXT_TRANSFORMS = ("none", "uppercase", "lowercase", "capitalize")
+TEXT_ALIGNS = ("left", "center", "right")
+WEIGHTS = tuple(range(100, 1000, 100))
+
+MIN_SCALE, MAX_SCALE = 80, 130  # % of every size
+MIN_SIZE, MAX_SIZE = 10, 72  # px, before the scale
+MIN_LINE_HEIGHT, MAX_LINE_HEIGHT = 100, 200  # % of the size
+MIN_LETTER_SPACING, MAX_LETTER_SPACING = -50, 200  # thousandths of an em
 
 MAX_NAME_LENGTH = 60
 MAX_TAGLINE_LENGTH = 120
@@ -110,10 +122,81 @@ class Brand:
 
 
 @dataclass(frozen=True)
+class Font:
+    """A curated Google Fonts family: the weights it really has and whether it has italics."""
+
+    family: str
+    weights: tuple[int, ...]
+    italic: bool
+
+
+def _span(low: int, high: int) -> tuple[int, ...]:
+    return tuple(range(low, high + 1, 100))
+
+
+# The curated list (ids are what the theme stores). Geist is the default: the menu looked like it before.
+FONTS: dict[str, Font] = {
+    "geist": Font("Geist", _span(100, 900), italic=False),
+    "inter": Font("Inter", _span(100, 900), italic=True),
+    "poppins": Font("Poppins", _span(100, 900), italic=True),
+    "montserrat": Font("Montserrat", _span(100, 900), italic=True),
+    "lato": Font("Lato", (100, 300, 400, 700, 900), italic=True),
+    "nunito": Font("Nunito", _span(200, 900), italic=True),
+    "playfair_display": Font("Playfair Display", _span(400, 900), italic=True),
+    "lora": Font("Lora", _span(400, 700), italic=True),
+    "merriweather": Font("Merriweather", (300, 400, 700, 900), italic=True),
+    "oswald": Font("Oswald", _span(200, 700), italic=False),
+    "bebas_neue": Font("Bebas Neue", (400,), italic=False),
+    "pacifico": Font("Pacifico", (400,), italic=False),
+    "caveat": Font("Caveat", _span(400, 700), italic=False),
+}
+
+
+@dataclass(frozen=True)
+class RoleFonts:
+    heading: str
+    body: str
+    price: str
+    button: str
+
+
+@dataclass(frozen=True)
+class TextStyle:
+    """How one element of the menu is written. `font` is a role, whose family is in `RoleFonts`."""
+
+    font: str
+    size: int
+    weight: int
+    style: str
+    line_height: int
+    letter_spacing: int
+    transform: str
+    align: str
+
+
+@dataclass(frozen=True)
+class TextElements:
+    business_name: TextStyle
+    category: TextStyle
+    product_name: TextStyle
+    description: TextStyle
+    price: TextStyle
+    button: TextStyle
+
+
+@dataclass(frozen=True)
+class Typography:
+    scale: int
+    fonts: RoleFonts
+    elements: TextElements
+
+
+@dataclass(frozen=True)
 class Theme:
     schema_version: int
     colors: Colors
     brand: Brand
+    typography: Typography
 
     def images(self) -> dict[str, ImageKind]:
         """Every image the theme uses, with the slot (folder) it belongs to."""
@@ -199,6 +282,25 @@ def default_colors(mode: str) -> Colors:
     return _DARK if mode == "dark" else _LIGHT
 
 
+def _text(font: str, size: int, weight: int, line_height: int, letter_spacing: int = 0, align: str = "left") -> TextStyle:
+    return TextStyle(font, size, weight, "normal", line_height, letter_spacing, "none", align)
+
+
+# The sizes, weights and spacing the menu had before typography could be customized.
+_DEFAULT_TYPOGRAPHY = Typography(
+    scale=100,
+    fonts=RoleFonts(heading="geist", body="geist", price="geist", button="geist"),
+    elements=TextElements(
+        business_name=_text("heading", 30, 600, 120, -25, align="center"),
+        category=_text("heading", 20, 600, 140, -25),
+        product_name=_text("heading", 16, 600, 150),
+        description=_text("body", 14, 400, 143),
+        price=_text("price", 16, 600, 150),
+        button=_text("button", 14, 600, 143),
+    ),
+)
+
+
 def default_theme() -> Theme:
     return Theme(
         schema_version=SCHEMA_VERSION,
@@ -211,6 +313,7 @@ def default_theme() -> Theme:
             banner=Banner(image_id=None, height="md", overlay_color="#000000", overlay_opacity=30),
             background=Background(kind="none", image_id=None, pattern="dots", opacity=10, blur=0),
         ),
+        typography=_DEFAULT_TYPOGRAPHY,
     )
 
 
@@ -373,6 +476,43 @@ def _parse_brand(doc: _Reader, tenant_id: uuid.UUID) -> Brand:
     return brand
 
 
+def _parse_text_style(doc: _Reader, fonts: RoleFonts) -> TextStyle:
+    role = doc.choice("font", FONT_ROLES)
+    font = FONTS[getattr(fonts, role)]
+    weight = doc.number("weight", WEIGHTS[0], WEIGHTS[-1])
+    if weight not in font.weights:
+        raise InvalidTheme(doc.name("weight"))
+    style = doc.choice("style", FONT_STYLES)
+    if style == "italic" and not font.italic:
+        raise InvalidTheme(doc.name("style"))
+    text_style = TextStyle(
+        font=role,
+        size=doc.number("size", MIN_SIZE, MAX_SIZE),
+        weight=weight,
+        style=style,
+        line_height=doc.number("line_height", MIN_LINE_HEIGHT, MAX_LINE_HEIGHT),
+        letter_spacing=doc.number("letter_spacing", MIN_LETTER_SPACING, MAX_LETTER_SPACING),
+        transform=doc.choice("transform", TEXT_TRANSFORMS),
+        align=doc.choice("align", TEXT_ALIGNS),
+    )
+    doc.done()
+    return text_style
+
+
+def _parse_typography(doc: _Reader) -> Typography:
+    fonts_doc = doc.child("fonts")
+    fonts = RoleFonts(**{role: fonts_doc.choice(role, tuple(FONTS)) for role in FONT_ROLES})
+    fonts_doc.done()
+    elements_doc = doc.child("elements")
+    elements = TextElements(
+        **{element: _parse_text_style(elements_doc.child(element), fonts) for element in TEXT_ELEMENTS}
+    )
+    elements_doc.done()
+    typography = Typography(scale=doc.number("scale", MIN_SCALE, MAX_SCALE), fonts=fonts, elements=elements)
+    doc.done()
+    return typography
+
+
 def parse_theme(raw: Any, tenant_id: uuid.UUID) -> Theme:
     """Validates a whole theme document (as JSON) for that tenant. Raises InvalidTheme naming the field."""
     doc = _Reader(raw, "")
@@ -383,6 +523,7 @@ def parse_theme(raw: Any, tenant_id: uuid.UUID) -> Theme:
         schema_version=SCHEMA_VERSION,
         colors=_parse_colors(doc.child("colors")),
         brand=_parse_brand(doc.child("brand"), tenant_id),
+        typography=_parse_typography(doc.child("typography")),
     )
     doc.done()
     return theme

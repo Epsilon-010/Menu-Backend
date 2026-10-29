@@ -120,10 +120,44 @@ class BrandDoc(_Strict):
     background: BackgroundDoc
 
 
+class RoleFontsDoc(_Strict):
+    heading: StrictStr
+    body: StrictStr
+    price: StrictStr
+    button: StrictStr
+
+
+class TextStyleDoc(_Strict):
+    font: StrictStr
+    size: StrictInt
+    weight: StrictInt
+    style: StrictStr
+    line_height: StrictInt
+    letter_spacing: StrictInt
+    transform: StrictStr
+    align: StrictStr
+
+
+class TextElementsDoc(_Strict):
+    business_name: TextStyleDoc
+    category: TextStyleDoc
+    product_name: TextStyleDoc
+    description: TextStyleDoc
+    price: TextStyleDoc
+    button: TextStyleDoc
+
+
+class TypographyDoc(_Strict):
+    scale: StrictInt
+    fonts: RoleFontsDoc
+    elements: TextElementsDoc
+
+
 class ThemeDoc(_Strict):
     schema_version: StrictInt
     colors: ColorsDoc
     brand: BrandDoc
+    typography: TypographyDoc
 
 
 class ContrastWarningOut(BaseModel):
