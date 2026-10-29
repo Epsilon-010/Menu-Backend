@@ -13,7 +13,7 @@ from typing import Any
 
 from app.shared.domain.images import ImageKind, InvalidImage, ensure_owned_image
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 MODES = ("light", "dark")
 LOGO_SIZES = ("sm", "md", "lg")
@@ -28,6 +28,13 @@ FONT_STYLES = ("normal", "italic")
 TEXT_TRANSFORMS = ("none", "uppercase", "lowercase", "capitalize")
 TEXT_ALIGNS = ("left", "center", "right")
 WEIGHTS = tuple(range(100, 1000, 100))
+
+NAVIGATIONS = ("chips", "tabs", "sidebar", "sections")
+PRODUCT_VIEWS = ("grid", "list", "carousel")
+DENSITIES = ("compact", "comfortable", "spacious")
+CATEGORY_HEADERS = ("plain", "underline", "band")
+CART_STYLES = ("bar", "panel", "floating")
+MIN_COLUMNS, MAX_COLUMNS = 1, 4  # the grid on wide screens; narrow screens show fewer
 
 MIN_SCALE, MAX_SCALE = 80, 130  # % of every size
 MIN_SIZE, MAX_SIZE = 10, 72  # px, before the scale
@@ -192,11 +199,28 @@ class Typography:
 
 
 @dataclass(frozen=True)
+class Layout:
+    """How the menu is arranged: category navigation, product view, spacing, sections shown and the cart."""
+
+    navigation: str
+    product_view: str
+    columns: int
+    density: str
+    sticky_header: bool
+    category_header: str
+    show_banner: bool
+    show_tagline: bool
+    show_welcome: bool
+    cart: str
+
+
+@dataclass(frozen=True)
 class Theme:
     schema_version: int
     colors: Colors
     brand: Brand
     typography: Typography
+    layout: Layout
 
     def images(self) -> dict[str, ImageKind]:
         """Every image the theme uses, with the slot (folder) it belongs to."""
@@ -301,6 +325,21 @@ _DEFAULT_TYPOGRAPHY = Typography(
 )
 
 
+# The arrangement the menu had before the layout could be customized.
+DEFAULT_LAYOUT = Layout(
+    navigation="chips",
+    product_view="grid",
+    columns=2,
+    density="comfortable",
+    sticky_header=True,
+    category_header="plain",
+    show_banner=True,
+    show_tagline=True,
+    show_welcome=True,
+    cart="bar",
+)
+
+
 def default_theme() -> Theme:
     return Theme(
         schema_version=SCHEMA_VERSION,
@@ -314,6 +353,7 @@ def default_theme() -> Theme:
             background=Background(kind="none", image_id=None, pattern="dots", opacity=10, blur=0),
         ),
         typography=_DEFAULT_TYPOGRAPHY,
+        layout=DEFAULT_LAYOUT,
     )
 
 
@@ -513,6 +553,23 @@ def _parse_typography(doc: _Reader) -> Typography:
     return typography
 
 
+def _parse_layout(doc: _Reader) -> Layout:
+    layout = Layout(
+        navigation=doc.choice("navigation", NAVIGATIONS),
+        product_view=doc.choice("product_view", PRODUCT_VIEWS),
+        columns=doc.number("columns", MIN_COLUMNS, MAX_COLUMNS),
+        density=doc.choice("density", DENSITIES),
+        sticky_header=doc.flag("sticky_header"),
+        category_header=doc.choice("category_header", CATEGORY_HEADERS),
+        show_banner=doc.flag("show_banner"),
+        show_tagline=doc.flag("show_tagline"),
+        show_welcome=doc.flag("show_welcome"),
+        cart=doc.choice("cart", CART_STYLES),
+    )
+    doc.done()
+    return layout
+
+
 def parse_theme(raw: Any, tenant_id: uuid.UUID) -> Theme:
     """Validates a whole theme document (as JSON) for that tenant. Raises InvalidTheme naming the field."""
     doc = _Reader(raw, "")
@@ -524,6 +581,7 @@ def parse_theme(raw: Any, tenant_id: uuid.UUID) -> Theme:
         colors=_parse_colors(doc.child("colors")),
         brand=_parse_brand(doc.child("brand"), tenant_id),
         typography=_parse_typography(doc.child("typography")),
+        layout=_parse_layout(doc.child("layout")),
     )
     doc.done()
     return theme

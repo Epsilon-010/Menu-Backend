@@ -1,4 +1,4 @@
-"""Presets: complete designs (palette, mode and typography) an admin starts from instead of designing from scratch.
+"""Presets: complete designs (palette, mode, typography and layout) an admin starts from instead of designing from scratch.
 
 A preset never carries brand content (name, texts, images): applying one keeps the tenant's brand. Every preset is
 a valid theme and readable (WCAG AA); the tests check it, so a new preset cannot ship inconsistent.
@@ -8,8 +8,10 @@ from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 from app.modules.theming.domain.theme import (
+    DEFAULT_LAYOUT,
     Colors,
     Gradient,
+    Layout,
     RoleFonts,
     TextElements,
     TextStyle,
@@ -27,9 +29,10 @@ class ThemePreset:
     description: str
     colors: Colors
     typography: Typography
+    layout: Layout
 
     def apply(self, theme: Theme) -> Theme:
-        return replace(theme, colors=self.colors, typography=self.typography)
+        return replace(theme, colors=self.colors, typography=self.typography, layout=self.layout)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -38,6 +41,7 @@ class ThemePreset:
             "description": self.description,
             "colors": colors_to_dict(self.colors),
             "typography": asdict(self.typography),
+            "layout": asdict(self.layout),
         }
 
 
@@ -55,6 +59,25 @@ def _style(
     return TextStyle(font, size, weight, style, line_height, letter_spacing, transform, align)
 
 
+def _layout(
+    navigation: str,
+    product_view: str,
+    columns: int,
+    density: str,
+    category_header: str,
+    cart: str,
+) -> Layout:
+    return replace(
+        DEFAULT_LAYOUT,
+        navigation=navigation,
+        product_view=product_view,
+        columns=columns,
+        density=density,
+        category_header=category_header,
+        cart=cart,
+    )
+
+
 def _flat(color: str, to: str) -> Gradient:
     return Gradient(enabled=False, from_color=color, to_color=to, angle=135)
 
@@ -67,6 +90,7 @@ CLASSIC = ThemePreset(
     description="Clean and neutral, with warm orange accents. The default design.",
     colors=_DEFAULT.colors,
     typography=_DEFAULT.typography,
+    layout=_DEFAULT.layout,
 )
 
 BISTRO = ThemePreset(
@@ -105,6 +129,7 @@ BISTRO = ThemePreset(
             button=_style("button", 13, 700, 143, 80, transform="uppercase"),
         ),
     ),
+    layout=_layout("sidebar", "list", 1, "spacious", "underline", "panel"),
 )
 
 FIESTA = ThemePreset(
@@ -143,6 +168,7 @@ FIESTA = ThemePreset(
             button=_style("button", 14, 800, 143, 20),
         ),
     ),
+    layout=_layout("chips", "carousel", 2, "comfortable", "band", "floating"),
 )
 
 CAFE = ThemePreset(
@@ -181,6 +207,7 @@ CAFE = ThemePreset(
             button=_style("button", 14, 700, 143, 20),
         ),
     ),
+    layout=_layout("sections", "grid", 3, "comfortable", "underline", "bar"),
 )
 
 GARDEN = ThemePreset(
@@ -219,6 +246,7 @@ GARDEN = ThemePreset(
             button=_style("button", 14, 600, 143),
         ),
     ),
+    layout=_layout("tabs", "grid", 2, "spacious", "plain", "panel"),
 )
 
 STREET = ThemePreset(
@@ -257,6 +285,7 @@ STREET = ThemePreset(
             button=_style("button", 14, 600, 143, 60, transform="uppercase"),
         ),
     ),
+    layout=_layout("tabs", "list", 1, "compact", "band", "floating"),
 )
 
 # The order the gallery shows them; the default design comes first.

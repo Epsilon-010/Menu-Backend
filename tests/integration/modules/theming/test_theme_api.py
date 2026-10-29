@@ -267,7 +267,7 @@ def test_each_element_gets_its_own_font_and_size_and_tables_see_it_only_after_pu
     admin = admin_of(new_client)
     tablet = tablet_of(new_client, created(create_table(admin)))
     doc = draft_of(admin)["draft"]
-    assert doc["schema_version"] == 2
+    assert doc["schema_version"] == 3
     doc["typography"]["fonts"]["heading"] = "playfair_display"
     doc["typography"]["fonts"]["price"] = "oswald"
     doc["typography"]["elements"]["business_name"].update(size=48, weight=800, style="italic", transform="uppercase")
@@ -369,7 +369,9 @@ def test_a_theme_cached_before_the_schema_change_is_never_served(
     with Redis.from_url(get_settings().redis_url) as redis:
         # Where Slice 10 stored the published theme of generation 0.
         redis.set(f"theme:{tenant_a.tenant_id}:0", stale)
-    assert ok(admin.get(THEME_URL))["theme"]["schema_version"] == 2
+        # Where Slice 11 stored it (schema_version 2).
+        redis.set(f"theme:{tenant_a.tenant_id}:v2:0", stale)
+    assert ok(admin.get(THEME_URL))["theme"]["schema_version"] == 3
 
 
 # --- Presets (templates): "si no quiere personalizar el menú o quieren algo rápido las seleccione"
@@ -390,11 +392,12 @@ def test_admin_applies_a_preset_keeping_the_brand_and_tables_see_it_only_after_p
     presets = draft_of(admin)["presets"]
     assert [preset["id"] for preset in presets][:1] == ["classic"]
     assert presets[0]["colors"] == mine["colors"] and presets[0]["typography"] == mine["typography"]
-    assert set(presets[0]) == {"id", "name", "description", "colors", "typography"}
+    assert presets[0]["layout"] == mine["layout"]
+    assert set(presets[0]) == {"id", "name", "description", "colors", "typography", "layout"}
     street = next(preset for preset in presets if preset["id"] == "street")
 
     # The editor applies it to the draft: colors and typography change, the brand stays.
-    applied = {**mine, "colors": street["colors"], "typography": street["typography"]}
+    applied = {**mine, "colors": street["colors"], "typography": street["typography"], "layout": street["layout"]}
     saved = ok(save(admin, applied))
     assert saved["draft"] == applied
     assert saved["draft"]["brand"] == mine["brand"]
@@ -411,3 +414,60 @@ def test_presets_come_with_every_draft_response(new_client: ClientFactory, tenan
     assert len(expected) >= 6
     assert ok(save(admin, draft_of(admin)["draft"]))["presets"] == expected
     assert ok(admin.post(PUBLISH_URL))["presets"] == expected
+
+
+# --- Layout (Slice 12): "si que el admin pueda elegir" the navigation, product view and cart
+
+
+def test_admin_picks_the_layout_and_tables_see_it_only_after_publishing(
+    new_client: ClientFactory, tenant_a: SeedResult
+) -> None:
+    admin = admin_of(new_client)
+    tablet = tablet_of(new_client, created(create_table(admin)))
+    doc = draft_of(admin)["draft"]
+    assert doc["layout"]["navigation"] == "chips" and doc["layout"]["cart"] == "bar"
+    doc["layout"].update(
+        navigation="sidebar", product_view="carousel", columns=3, density="compact", sticky_header=False,
+        category_header="band", show_banner=False, show_tagline=False, show_welcome=False, cart="floating",
+    )  # fmt: skip
+    assert ok(save(admin, doc))["draft"]["layout"] == doc["layout"]
+
+    assert ok(tablet.get(THEME_URL))["theme"]["layout"]["navigation"] == "chips"
+    ok(admin.post(PUBLISH_URL))
+    assert ok(tablet.get(THEME_URL))["theme"]["layout"] == doc["layout"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("navigation", "dropdown"), ("product_view", "masonry"), ("columns", 5), ("cart", "drawer")],
+)
+def test_an_invalid_layout_value_is_rejected_naming_the_field(
+    new_client: ClientFactory, tenant_a: SeedResult, field: str, value: object
+) -> None:
+    admin = admin_of(new_client)
+    doc = draft_of(admin)["draft"]
+    before = copy.deepcopy(doc)
+    doc["layout"][field] = value
+    response = save(admin, doc)
+    assert response.status_code == 422
+    assert response.json()["detail"] == f"Invalid theme value: layout.{field}"
+    assert draft_of(admin)["draft"] == before
+
+
+def test_tables_and_staff_cannot_change_the_layout_and_tenants_never_see_each_other(
+    new_client: ClientFactory, tenant_a: SeedResult, tenant_b: SeedResult
+) -> None:
+    owner_a = admin_of(new_client)
+    owner_b = admin_of(new_client, "boss@example.com")
+    tablet_a = tablet_of(new_client, created(create_table(owner_a)))
+    tablet_b = tablet_of(new_client, created(create_table(owner_b)))
+    doc = draft_of(owner_a)["draft"]
+    doc["layout"]["navigation"] = "tabs"
+    assert save(tablet_a, doc).status_code == 403
+    assert draft_of(owner_a)["draft"]["layout"]["navigation"] == "chips"
+
+    ok(save(owner_a, doc))
+    ok(owner_a.post(PUBLISH_URL))
+    assert ok(tablet_a.get(THEME_URL))["theme"]["layout"]["navigation"] == "tabs"
+    assert draft_of(owner_b)["draft"]["layout"]["navigation"] == "chips"
+    assert ok(tablet_b.get(THEME_URL))["theme"]["layout"]["navigation"] == "chips"

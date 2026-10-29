@@ -154,11 +154,25 @@ class TypographyDoc(_Strict):
     elements: TextElementsDoc
 
 
+class LayoutDoc(_Strict):
+    navigation: StrictStr
+    product_view: StrictStr
+    columns: StrictInt
+    density: StrictStr
+    sticky_header: StrictBool
+    category_header: StrictStr
+    show_banner: StrictBool
+    show_tagline: StrictBool
+    show_welcome: StrictBool
+    cart: StrictStr
+
+
 class ThemeDoc(_Strict):
     schema_version: StrictInt
     colors: ColorsDoc
     brand: BrandDoc
     typography: TypographyDoc
+    layout: LayoutDoc
 
 
 class ContrastWarningOut(BaseModel):
@@ -178,6 +192,7 @@ class ThemePresetOut(BaseModel):
     description: str
     colors: ColorsDoc
     typography: TypographyDoc
+    layout: LayoutDoc
 
 
 class ThemeDraftOut(BaseModel):
@@ -187,7 +202,7 @@ class ThemeDraftOut(BaseModel):
     has_unpublished_changes: bool
     contrast_warnings: list[ContrastWarningOut]
     defaults: DefaultPalettesOut
-    # Complete designs (colors and typography) the editor applies to the draft; the brand is never part of one.
+    # Complete designs (colors, typography and layout) the editor applies to the draft; the brand is never part of one.
     presets: list[ThemePresetOut]
     # Delivery URL of every image the draft or the published theme uses, by public id.
     image_urls: dict[str, str]

@@ -33,7 +33,7 @@ def document(**changes: Any) -> dict[str, Any]:
 
 def test_the_default_theme_is_complete_and_valid() -> None:
     doc = default_theme().to_dict()
-    assert doc["schema_version"] == SCHEMA_VERSION == 2
+    assert doc["schema_version"] == SCHEMA_VERSION == 3
     assert doc["colors"]["mode"] == "light"
     assert parse_theme(doc, TENANT).to_dict() == doc
     assert set(doc["colors"]) == {
@@ -121,7 +121,7 @@ def test_unknown_or_missing_fields_and_other_versions_are_rejected() -> None:
     with pytest.raises(InvalidTheme, match=r"brand\.tagline"):
         parse_theme(missing, TENANT)
 
-    for version in (1, 3, True):
+    for version in (1, 2, 4, True):
         with pytest.raises(InvalidTheme, match="schema_version"):
             parse_theme(document(schema_version=version), TENANT)
 
