@@ -4,6 +4,8 @@ import uuid
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
+from app.modules.theming.domain.theme import SCHEMA_VERSION
+
 logger = logging.getLogger(__name__)
 
 _TTL_SECONDS = 600
@@ -26,7 +28,7 @@ class RedisThemeCache:
 
     @staticmethod
     def _theme_key(tenant_id: uuid.UUID, generation: str) -> str:
-        return f"theme:{tenant_id}:{generation}"
+        return f"theme:{tenant_id}:v{SCHEMA_VERSION}:{generation}"
 
     async def get(self, tenant_id: uuid.UUID) -> tuple[str | None, str | None]:
         """(generation, cached theme); the generation is None when Redis cannot be read."""
