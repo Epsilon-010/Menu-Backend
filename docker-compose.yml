@@ -1,4 +1,6 @@
 # Full development environment. The frontend is a sibling repository cloned at ../Menu-Frontend.
+# Only the frontend is published to the network (tablets and phones reach it); Postgres, Redis, RabbitMQ and the
+# API listen on this machine only (HOST_BIND_IP), so a device on the restaurant Wi-Fi cannot reach them directly.
 services:
   postgres:
     image: postgres:17-alpine
@@ -7,7 +9,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
-      - "${POSTGRES_HOST_PORT:-5440}:5432"
+      - "${HOST_BIND_IP:-127.0.0.1}:${POSTGRES_HOST_PORT:-5440}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -18,8 +20,12 @@ services:
 
   redis:
     image: redis:8-alpine
+    # Redis holds login limits, session floors and the cached menu and theme: never without a password.
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}"]
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
     ports:
-      - "${REDIS_HOST_PORT:-6380}:6379"
+      - "${HOST_BIND_IP:-127.0.0.1}:${REDIS_HOST_PORT:-6380}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -35,8 +41,8 @@ services:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-menu}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-menu}
     ports:
-      - "${RABBITMQ_HOST_PORT:-5673}:5672"
-      - "${RABBITMQ_MANAGEMENT_HOST_PORT:-15673}:15672"
+      - "${HOST_BIND_IP:-127.0.0.1}:${RABBITMQ_HOST_PORT:-5673}:5672"
+      - "${HOST_BIND_IP:-127.0.0.1}:${RABBITMQ_MANAGEMENT_HOST_PORT:-15673}:15672"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
@@ -50,7 +56,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-menu}:${RABBITMQ_PASSWORD:-menu}@rabbitmq:5672//
       # Bind mounts from Windows/macOS hosts do not emit file events; poll for hot reload.
       WATCHFILES_FORCE_POLLING: "true"
@@ -59,7 +65,7 @@ services:
       FORWARDED_ALLOW_IPS: ${FRONTEND_IP:-10.213.57.10}
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     ports:
-      - "${BACKEND_HOST_PORT:-8020}:8000"
+      - "${HOST_BIND_IP:-127.0.0.1}:${BACKEND_HOST_PORT:-8020}:8000"
     volumes:
       - .:/app
     depends_on:
@@ -75,7 +81,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-menu}:${RABBITMQ_PASSWORD:-menu}@rabbitmq:5672//
     # mingle/gossip use transient reply queues that RabbitMQ 4 refuses; one worker does not need them.
     command: celery -A app.worker worker --beat --without-mingle --without-gossip --loglevel=info --concurrency=2 --schedule=/tmp/celerybeat-schedule
