@@ -41,6 +41,15 @@ class PostgresTableLocks:
         await advisory_xact_lock(self._session, f"table-visit:{tenant_id}:{table_id}")
 
 
+async def _claim_id(session: AsyncSession, client_id: uuid.UUID) -> None:
+    """Serializes every request that checks or takes this client-chosen id, until its transaction ends.
+
+    The table lock only covers one table, and a cart line and an order item share ids (an item keeps its
+    line's id), so no single unique index can stop two tables from taking the same one at once.
+    """
+    await advisory_xact_lock(session, f"client-id:{client_id}")
+
+
 def _bill(model: BillModel) -> Bill:
     return Bill(
         id=model.id,
@@ -188,7 +197,8 @@ class SqlAlchemyCartRepository:
         return _line(model) if model is not None else None
 
     async def line_exists_anywhere(self, line_id: uuid.UUID) -> bool:
-        """In any cart or already sent in any order (an order item keeps its line's id)."""
+        """In any cart or already sent in any order (an order item keeps its line's id). Claims the id."""
+        await _claim_id(self._session, line_id)
         found = await self._session.scalar(
             select(
                 exists().where(CartLineModel.id == line_id) | exists().where(OrderItemModel.id == line_id)
@@ -223,7 +233,12 @@ class SqlAlchemyCartRepository:
                 created_at=line.created_at,
             )
         )
-        await self._session.flush()
+        try:
+            await self._session.flush()
+        except IntegrityError as error:
+            if violated_unique_constraint(error) == "pk_cart_lines":
+                raise OrderIdTaken(line.id) from error
+            raise
 
     async def update_line(self, line: CartLine) -> None:
         await self._session.execute(
@@ -269,7 +284,7 @@ class SqlAlchemyOrderRepository:
                 created_at=order.created_at,
             )
         )
-        await self._session.flush()
+        await self._flush_new(order.id)
         self._session.add_all(
             OrderItemModel(
                 id=item.id,
@@ -287,7 +302,16 @@ class SqlAlchemyOrderRepository:
             )
             for position, item in enumerate(order.items)
         )
-        await self._session.flush()
+        await self._flush_new(order.id)
+
+    async def _flush_new(self, order_id: uuid.UUID) -> None:
+        try:
+            await self._session.flush()
+        except IntegrityError as error:
+            # Another request took the id first (its check ran under another table's lock).
+            if violated_unique_constraint(error) in ("pk_orders", "pk_order_items"):
+                raise OrderIdTaken(order_id) from error
+            raise
 
     async def _orders(self, tenant_id: uuid.UUID, *conditions: object) -> list[Order]:
         models = list(
@@ -341,6 +365,8 @@ class SqlAlchemyOrderRepository:
         return orders[0] if orders else None
 
     async def exists_anywhere(self, order_id: uuid.UUID) -> bool:
+        """In any tenant. Claims the id."""
+        await _claim_id(self._session, order_id)
         return bool(await self._session.scalar(select(exists().where(OrderModel.id == order_id))))
 
     async def list_for_bill(self, tenant_id: uuid.UUID, bill_id: uuid.UUID) -> list[Order]:
@@ -397,6 +423,8 @@ class SqlAlchemyOrderRepository:
             raise
 
     async def dish_id_taken(self, dish_id: uuid.UUID) -> bool:
+        """As an order item or a cart line of any tenant. Claims the id."""
+        await _claim_id(self._session, dish_id)
         found = await self._session.scalar(
             select(exists().where(OrderItemModel.id == dish_id) | exists().where(CartLineModel.id == dish_id))
         )
