@@ -70,8 +70,9 @@ def test_stored_v2_themes_get_the_default_layout_and_downgrade_removes_it(at_hea
     assert stored(draft_only.tenant_id) == (lone_draft, None)
 
 
-def test_upgrading_twice_leaves_version_3_documents_untouched(at_head_afterwards: Config) -> None:  # noqa: F811
+def test_the_upgrade_leaves_documents_already_at_version_3_untouched(at_head_afterwards: Config) -> None:  # noqa: F811
     tenant: SeedResult = asyncio.run(_seed("La Taquería", "owner@example.com"))
+    command.downgrade(at_head_afterwards, WITH_TYPOGRAPHY)
     current = default_theme().to_dict()
     current["layout"]["navigation"] = "tabs"
     run(

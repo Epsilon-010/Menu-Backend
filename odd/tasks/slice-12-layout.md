@@ -11,11 +11,29 @@ Branch `feat/slice-12-layout` in Backend and Menu-Frontend. Delivery: ask-on-ris
     warning (also button text on its hover color), its mode matches its background, ids are unique.
   - Presets come with the draft (`presets` field next to `defaults`); no new endpoint. Layout (S2+) and cards
     (Slice 13) extend each preset when they exist. History and import/export stay in Slice 14.
-- S2+ (layout): pending the user's decisions (navigation styles, product views, carousel, migration to v3).
+- S2 (layout, from L7/L8): "si que el admin pueda elegir porfavor" (all four category navigations); category header
+  image: "si sin imagen" (no image per category; the theme only styles the header).
+  - Theme `schema_version` 3 adds `layout`: `navigation` chips|tabs|sidebar|sections (chips = today: sticky chips that
+    jump within one long page; sections = one long page with a sticky text bar that highlights the current section;
+    tabs and sidebar show one category at a time, the sidebar becomes a row on narrow screens), `product_view`
+    grid|list|carousel (carousel = CSS scroll-snap, no new library), `columns` 1-4 (grid; fewer on narrow screens),
+    `density` compact|comfortable|spacious, `sticky_header` bool, `category_header` plain|underline|band,
+    `show_banner`/`show_tagline`/`show_welcome` bools, `cart` bar|panel|floating (bar = today).
+  - Defaults reproduce today's menu (chips, grid, 2 columns, comfortable, sticky header, plain, all shown, bar).
+  - Alembic data migration: every stored v2 draft/published gets the default layout and version 3; downgrade removes
+    it. The cache key carries the version (v3).
+  - Every preset defines a layout too; applying a preset sets colors, typography and layout, never the brand.
+  - The admin picks each option in `/admin/design`; the preview shows it at tablet and phone size; the menu stays usable
+    on both (no horizontal scroll, the cart is always reachable).
 
 ## Tasks
 - T1 (S1) backend preset catalog + `presets` in the draft response, with tests — inline — done (commit below)
 - T2 (S1) frontend template gallery in `/admin/design`, with tests — inline — done (commit below)
+- T3 (S2) backend layout in theme v3 (domain, HTTP schema, presets) + data migration v2→v3, with tests — inline (no
+  writer reason: frontend depends on this contract) — Risk item 1 (stored format) — done `b916d64`
+- T4 (S2) frontend: menu renders the layout (navigation, product view, density, headers, sections, cart), with tests —
+  inline — pending
+- T5 (S2) frontend: layout controls in the editor + presets carry the layout, with tests — inline — pending
 
 ## Log
 - L1 2026-10-29 (user): "ya exitse la rama para la slice 12 empiezala y antes quiero que aladas tipo pantillas para eur
@@ -49,3 +67,14 @@ Branch `feat/slice-12-layout` in Backend and Menu-Frontend. Delivery: ask-on-ris
   127.0.0.1), so host URLs (config defaults, `.env.example`, local `.env`) now use 127.0.0.1. Full backend suite alone:
   712 passed in 4:25 (earlier errors came from two pytest runs sharing `menu_test`). Frontend: 183 passed, typecheck,
   lint clean.
+- L7 2026-10-29 (user, on which category navigations enter): "si que el admin pueda elegir porfavor".
+- L8 2026-10-29 (user, on a header image per category): "si sin imagen". Carousel without a library (CSS scroll-snap)
+  and presets carrying a layout were announced without objection. Specs S2, tasks T3-T5.
+- L9 2026-10-29: T3 done (`b916d64`). RED observed (ImportError: no CART_STYLES). `Layout` in the domain, `LayoutDoc`
+  in the HTTP schema, `DEFAULT_LAYOUT` = today's menu; presets: classic default, bistro sidebar/list/panel, fiesta
+  chips/carousel/floating, cafe sections/grid 3, garden tabs/grid/panel, street tabs/list/compact/floating. Migration
+  `9c2e41b7d5a3` (v2→v3 with a frozen default layout; downgrade removes it); the typography migration test now stops at
+  its own revision. A wrong JSON type (e.g. `sticky_header: 1`) is a schema 422 ("Invalid field"), like
+  `gradient.enabled`. Backend `uv run pytest` 755 passed. Native review (risk + reliability) approved
+  `review-a174c8ab271beb43`; its advisory (the "already v3" migration test ran at head, so it never ran the upgrade)
+  fixed in the next commit.
