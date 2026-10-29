@@ -370,3 +370,44 @@ def test_a_theme_cached_before_the_schema_change_is_never_served(
         # Where Slice 10 stored the published theme of generation 0.
         redis.set(f"theme:{tenant_a.tenant_id}:0", stale)
     assert ok(admin.get(THEME_URL))["theme"]["schema_version"] == 2
+
+
+# --- Presets (templates): "si no quiere personalizar el menú o quieren algo rápido las seleccione"
+
+
+def test_admin_applies_a_preset_keeping_the_brand_and_tables_see_it_only_after_publishing(
+    new_client: ClientFactory, tenant_a: SeedResult, images: FakeImageStorage
+) -> None:
+    admin = admin_of(new_client)
+    tablet = tablet_of(new_client, created(create_table(admin)))
+    logo = upload(admin, images, "logo", "svg")
+    doc = draft_of(admin)["draft"]
+    doc["brand"]["name"] = "Tacos El Primo"
+    doc["brand"]["logo"]["image_id"] = logo
+    mine = ok(save(admin, doc))["draft"]
+    ok(admin.post(PUBLISH_URL))
+
+    presets = draft_of(admin)["presets"]
+    assert [preset["id"] for preset in presets][:1] == ["classic"]
+    assert presets[0]["colors"] == mine["colors"] and presets[0]["typography"] == mine["typography"]
+    assert set(presets[0]) == {"id", "name", "description", "colors", "typography"}
+    street = next(preset for preset in presets if preset["id"] == "street")
+
+    # The editor applies it to the draft: colors and typography change, the brand stays.
+    applied = {**mine, "colors": street["colors"], "typography": street["typography"]}
+    saved = ok(save(admin, applied))
+    assert saved["draft"] == applied
+    assert saved["draft"]["brand"] == mine["brand"]
+    assert saved["contrast_warnings"] == []
+    assert ok(tablet.get(THEME_URL))["theme"] == mine
+
+    ok(admin.post(PUBLISH_URL))
+    assert ok(tablet.get(THEME_URL))["theme"] == applied
+
+
+def test_presets_come_with_every_draft_response(new_client: ClientFactory, tenant_a: SeedResult) -> None:
+    admin = admin_of(new_client)
+    expected = draft_of(admin)["presets"]
+    assert len(expected) >= 6
+    assert ok(save(admin, draft_of(admin)["draft"]))["presets"] == expected
+    assert ok(admin.post(PUBLISH_URL))["presets"] == expected

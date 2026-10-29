@@ -9,8 +9,8 @@ class Settings(BaseSettings):
 
     app_name: str = "Menu SaaS API"
     environment: str = "development"
-    database_url: str = "postgresql+asyncpg://menu:menu@localhost:5440/menu"
-    redis_url: str = "redis://localhost:6380/0"
+    database_url: str = "postgresql+asyncpg://menu:menu@127.0.0.1:5440/menu"
+    redis_url: str = "redis://127.0.0.1:6380/0"
 
     # Signing key for access tokens (HS256). Required: there is no default on purpose.
     jwt_secret: SecretStr = Field(min_length=32)
@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     cloudinary_api_secret: SecretStr | None = None
 
     # Background jobs: Celery with RabbitMQ as broker (see app/worker.py).
-    celery_broker_url: str = "amqp://menu:menu@localhost:5673//"
+    celery_broker_url: str = "amqp://menu:menu@127.0.0.1:5673//"
     # A signed upload never attached to an item is deleted after this many minutes.
     image_pending_ttl_minutes: int = Field(default=60, gt=0)
     # Celery beat runs the image cleanup this often, besides the immediate request after each change.
