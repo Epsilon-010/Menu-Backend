@@ -642,8 +642,9 @@ async def staff_events_stream(
     request: Request,
     last_event_id: Annotated[str | None, Header()] = None,
 ) -> Response:
-    """SSE for the kitchen, waiters and admins: `order.created`, `order.updated`, `bill.opened` and
-    `bill.closed` of the tenant, with `{table_id, order_id?}`; never cart changes or prices."""
+    """SSE for the kitchen, waiters and admins: `order.created`, `order.updated`, `bill.opened`,
+    `bill.requested`, `bill.request_cleared` and `bill.closed` of the tenant, with `{table_id, order_id?}`;
+    never cart changes or prices."""
     events = staff_events(
         request.app.state.redis,
         staff.tenant_id,
