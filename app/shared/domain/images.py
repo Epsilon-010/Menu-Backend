@@ -22,9 +22,19 @@ class ImageKind(StrEnum):
     """What an image is for; the value is its folder inside the tenant's folder."""
 
     ITEM = "items"
+    LOGO = "logos"
+    BANNER = "banners"
+    BACKGROUND = "backgrounds"
 
 
-ALLOWED_FORMATS: dict[ImageKind, tuple[str, ...]] = {ImageKind.ITEM: ("jpg", "png", "webp")}
+_PHOTO_FORMATS = ("jpg", "png", "webp")
+# SVG only for logos: it is always served as an image (never inline), so its scripts never run.
+ALLOWED_FORMATS: dict[ImageKind, tuple[str, ...]] = {
+    ImageKind.ITEM: _PHOTO_FORMATS,
+    ImageKind.LOGO: (*_PHOTO_FORMATS, "svg"),
+    ImageKind.BANNER: _PHOTO_FORMATS,
+    ImageKind.BACKGROUND: _PHOTO_FORMATS,
+}
 
 
 class ImageVariant(StrEnum):
@@ -32,6 +42,9 @@ class ImageVariant(StrEnum):
 
     THUMBNAIL = "thumbnail"
     CARD = "card"
+    LOGO = "logo"
+    BANNER = "banner"
+    BACKGROUND = "background"
 
 
 class InvalidImage(ValueError):

@@ -13,6 +13,8 @@ from app.modules.staff.domain.user import STAFF_CODE_ALPHABET, STAFF_MEMBER_ROLE
 from app.modules.tables.domain.table import Table
 from app.modules.tenants.domain.errors import TenantIdTaken
 from app.modules.tenants.domain.tenant import Tenant
+from app.modules.theming.domain.repository import ThemeRecord
+from app.modules.theming.domain.theme import Theme
 from app.shared.domain.images import ImageStorageUnavailable, ImageVariant, StoredImage, UploadSignature
 
 
@@ -514,3 +516,28 @@ class NoActiveGuests:
 
     async def execute(self, tenant_id: uuid.UUID, guest_id: uuid.UUID) -> None:
         return None
+
+
+class InMemoryThemeRepository:
+    def __init__(self) -> None:
+        self.records: dict[uuid.UUID, ThemeRecord] = {}
+
+    async def get(self, tenant_id: uuid.UUID) -> ThemeRecord | None:
+        return self.records.get(tenant_id)
+
+    async def lock(self, tenant_id: uuid.UUID, initial: Theme) -> ThemeRecord:
+        if tenant_id not in self.records:
+            self.records[tenant_id] = ThemeRecord(uuid.uuid4(), tenant_id, initial, None, None)
+        return self.records[tenant_id]
+
+    async def update(self, record: ThemeRecord) -> None:
+        assert self.records[record.tenant_id].id == record.id
+        self.records[record.tenant_id] = record
+
+
+class FakePublishedThemeCache:
+    def __init__(self) -> None:
+        self.invalidated: list[uuid.UUID] = []
+
+    async def invalidate(self, tenant_id: uuid.UUID) -> None:
+        self.invalidated.append(tenant_id)
