@@ -14,10 +14,10 @@ Branch: `feat/slice-11-typography` (Backend + Menu-Frontend). Delivery: single-p
 ## Tasks
 | ID | Specs | Route | Status | Evidence |
 |---|---|---|---|---|
-| T1 | S1, S2, S3 | inline | todo | Backend domain: font catalog, typography parsing, defaults, v2 |
-| T2 | S3, S6, S7 | inline | todo | Backend infra: Pydantic schema, Alembic data migration, cache key by schema version, API tests |
-| T3 | S2, S4 | inline | todo | Frontend: types, font catalog, typography CSS variables, Google Fonts loader, menu elements use them |
-| T4 | S2, S5 | inline | todo | Frontend editor: typography controls, weight/italic clamping on font change, preview |
+| T1 | S1, S2, S3 | inline | done | Backend domain: font catalog, typography parsing, defaults, v2. RED: `cannot import name FONT_ROLES`; GREEN 82 unit tests. Commit `36d3f18` |
+| T2 | S3, S6, S7 | inline | done | Backend infra: Pydantic schema, cache key `theme:{tenant}:v2:{gen}`, API tests (`36d3f18`); data migration `3f7686d2fe3f` + up/down test (`b102c86`). RED 29 failed; GREEN; full suite 678 passed. Cache test fails if the version is removed from the key (mutation check). Dev DB upgraded |
+| T3 | S2, S4 | inline | done | Frontend: `typography.ts` (catalog, `typographyVariables`, `googleFontsUrl`, `fitToFont`), `useFontStylesheet`, unlayered `type-*` classes in `index.css`, ThemeScope sets vars + body font. RED: missing `./typography.ts`; GREEN 7. Commit `02a0be1` |
+| T4 | S2, S5 | inline | done | Frontend: `withRoleFont`/`withTextStyle`/`withScale` (RED: `withRoleFont is not a function`; GREEN), `TypographyControls` card in `/admin/design`; preview reuses MenuHero/MenuBrowser. typecheck, lint, 173 tests, build ok. Commit `02a0be1` |
 | T5 | S5 | inline + verifier | todo | Independent verifier (risk item 1), native review, ROADMAP/CLAUDE.md/memory, push |
 
 Route evidence: frontend depends on the backend contract and one behavior spans both repos; no parallel-writer reason, all inline. T2 is high risk (item 1: persisted format change + data migration) → independent verifier at T5.
@@ -32,3 +32,5 @@ Assumptions (2026-10-28, mine, open to correction):
 - L1 (2026-10-28, user, verbatim): "Arrancamos el Slice 11 — Tipografía. [...] 4. Antes de codificar, explorá el módulo `theming` del backend [...] y preguntame de a una las decisiones que el ROADMAP no define. [...] 5. Seguí el flujo de siempre: documento ODD en Backend/odd/tasks/slice-11-typography.md, TDD (RED → GREEN), tests de aislamiento por tenant y de que table/guest no pueden editar, y tests de que una fuente fuera de la lista o un valor fuera de rango se rechaza. La fuente de la app (Geist) no cambia: la tipografía del negocio solo aplica dentro del menú. 6. Al terminar: verificador independiente, revisión nativa con `--base-ref <último revisado> --committed-only` [...], actualizar ROADMAP.md, \"Estado actual\" en CLAUDE.md y la memoria, y push de las dos ramas para que yo abra los PRs."
 - L2 (2026-10-28): branches from main (Backend `c85b72a`, Frontend `8219287`). `docs/slice-10-closing` still not merged (reminded). CI of main: asked the user (no `gh` session). Docker up.
 - L3 (2026-10-28, user decisions): source = "Google Fonts CDN"; list = "12 fuentes"; per-element = "Completo"; v1 → v2 = "Migración de datos Alembic"; default = "Geist como fuente 13".
+- L4 (2026-10-28): backend done (`36d3f18`, `b102c86`). Native assess c85b72a..b102c86 with `--escalate-item 1`: high, `review_due` → verifier then native review at T5. ruff/mypy are not project dependencies (CI runs pytest only).
+- L5 (2026-10-28): frontend done (`02a0be1`). Decisions while building: md cart buttons take `type-button-face` (button font/weight/style/spacing/case, keep their 16px size) so defaults do not shrink them; alignment is hidden in the editor for price and buttons (they sit in a row) but still stored; the tagline follows the business name alignment; the rest of the menu text takes the body font.
