@@ -33,7 +33,8 @@ Branch `feat/slice-12-layout` in Backend and Menu-Frontend. Delivery: ask-on-ris
   writer reason: frontend depends on this contract) — Risk item 1 (stored format) — done `b916d64`
 - T4 (S2) frontend: menu renders the layout (navigation, product view, density, headers, sections, cart), with tests —
   inline — pending
-- T5 (S2) frontend: layout controls in the editor + presets carry the layout, with tests — inline — pending
+- T5 (S2) frontend: layout controls in the editor + presets carry the layout, with tests — inline — done `c015092`
+  (Frontend)
 
 ## Log
 - L1 2026-10-29 (user): "ya exitse la rama para la slice 12 empiezala y antes quiero que aladas tipo pantillas para eur
@@ -78,3 +79,22 @@ Branch `feat/slice-12-layout` in Backend and Menu-Frontend. Delivery: ask-on-ris
   `gradient.enabled`. Backend `uv run pytest` 755 passed. Native review (risk + reliability) approved
   `review-a174c8ab271beb43`; its advisory (the "already v3" migration test ran at head, so it never ran the upgrade)
   fixed in the next commit.
+- L10 2026-10-29: T4/T5 done (Frontend `de78ace`, `c015092`). RED observed (missing `layout.ts`). `layout.ts` (options,
+  `DEFAULT_LAYOUT`, fixed class maps for columns and density, `showsOneCategory`, `currentCategoryId`), `withLayout`;
+  `withPreset`/`matchingPreset` include the layout. `MenuBrowser`: chips (today), sections (scroll-spy bar), tabs and
+  sidebar (one category; the sidebar is a row when the menu is narrow), grid/list/carousel (scroll-snap), category header
+  plain/underline/band; it is its own size container (beside the cart panel the menu is narrower than the page).
+  `MenuHero` hides banner/tagline/welcome; `AppShell` `fixedBar`; `MenuPage` cart bar/panel (from md)/floating;
+  `LayoutControls.tsx` in `/admin/design`. Checks: typecheck, lint, `npm test` 190 passed, build ok. Headless Chrome on
+  the demo tenant (4 layouts x phone 390 / tablet 820 / desktop 1280, then the theme restored): no horizontal scroll,
+  cart reachable in all 12, default keeps 1/2/2 columns and a fixed header, tabs switch category, sidebar is a column
+  only on desktop with the panel. Native review: frontend range medium, `under_budget` (766 lines), pending in the
+  slice. Independent verifier launched for the feature (item 1).
+- L11 2026-10-29: independent verifier (S2): schema, migration (scratch DB `menu_verify_layout`, dropped), presets,
+  editor, cart reachability, 403 for tables and tenant isolation ok; 1 blocker: the default grid went to two columns from
+  a 576px menu (608px screen) instead of a 672px screen. Fixed in Frontend `f739059`: two columns from a 39rem
+  (624px) menu; headless check over 13 widths (600-1280) matches the old rule exactly (2 columns iff screen >= 672px).
+  Advisories kept: 3-4 columns never show on large screens with the `bar` cart (the menu column is 640px); an unknown
+  density/cart value would crash the menu (the server prevents it); `MenuHero` has no fallback for a theme without
+  `layout` (frontend and backend deploy together); no render tests for `MenuBrowser`/`MenuPage`; downgrade also strips
+  a document that was already v3. Dev data: the verifier left tenant "Verify layout other". Slice 12 done.
