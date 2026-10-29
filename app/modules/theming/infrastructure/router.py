@@ -16,6 +16,7 @@ from app.modules.theming.application.manage_theme import (
     SaveThemeDraft,
     ThemeState,
 )
+from app.modules.theming.domain.presets import PRESETS
 from app.modules.theming.domain.theme import InvalidTheme, Theme, colors_to_dict, contrast_warnings, default_colors
 from app.modules.theming.infrastructure.repository import SqlAlchemyThemeRepository
 from app.modules.theming.infrastructure.theme_cache import RedisThemeCache
@@ -171,6 +172,14 @@ class DefaultPalettesOut(BaseModel):
     dark: ColorsDoc
 
 
+class ThemePresetOut(BaseModel):
+    id: str
+    name: str
+    description: str
+    colors: ColorsDoc
+    typography: TypographyDoc
+
+
 class ThemeDraftOut(BaseModel):
     draft: ThemeDoc
     published: ThemeDoc | None
@@ -178,6 +187,8 @@ class ThemeDraftOut(BaseModel):
     has_unpublished_changes: bool
     contrast_warnings: list[ContrastWarningOut]
     defaults: DefaultPalettesOut
+    # Complete designs (colors and typography) the editor applies to the draft; the brand is never part of one.
+    presets: list[ThemePresetOut]
     # Delivery URL of every image the draft or the published theme uses, by public id.
     image_urls: dict[str, str]
 
@@ -239,6 +250,7 @@ def _draft_out(state: ThemeState, images: ImageStorage) -> ThemeDraftOut:
             light=ColorsDoc.model_validate(colors_to_dict(default_colors("light"))),
             dark=ColorsDoc.model_validate(colors_to_dict(default_colors("dark"))),
         ),
+        presets=[ThemePresetOut.model_validate(preset.to_dict()) for preset in PRESETS],
         image_urls=_image_urls(images, state.draft, state.published),
     )
 
