@@ -28,6 +28,10 @@ _NOT_REACHABLE = "Image storage is not reachable right now. Try again in a momen
 _VARIANT_TRANSFORMATIONS: dict[ImageVariant, dict[str, Any]] = {
     ImageVariant.THUMBNAIL: {"width": 160, "height": 160, "crop": "fill", "fetch_format": "auto", "quality": "auto"},
     ImageVariant.CARD: {"width": 640, "height": 480, "crop": "fill", "fetch_format": "auto", "quality": "auto"},
+    # Theme images keep their proportions ("limit" only shrinks): a logo is never cropped.
+    ImageVariant.LOGO: {"width": 512, "height": 512, "crop": "limit", "fetch_format": "auto", "quality": "auto"},
+    ImageVariant.BANNER: {"width": 1600, "height": 600, "crop": "fill", "fetch_format": "auto", "quality": "auto"},
+    ImageVariant.BACKGROUND: {"width": 1600, "crop": "limit", "fetch_format": "auto", "quality": "auto"},
 }
 
 
