@@ -57,10 +57,10 @@ class Bill:
         return replace(self, bill_requested_at=None)
 
     def paid(self, at: datetime, method: PaymentMethod, total_cents: int) -> "Bill":
-        return replace(self, closed_at=at, payment_method=method, paid_cents=total_cents)
+        return replace(self, closed_at=at, payment_method=method, paid_cents=total_cents, bill_requested_at=None)
 
     def closed_without_payment(self, at: datetime) -> "Bill":
-        return replace(self, closed_at=at)
+        return replace(self, closed_at=at, bill_requested_at=None)
 
 
 def validate_guest_name(name: str | None) -> str | None:

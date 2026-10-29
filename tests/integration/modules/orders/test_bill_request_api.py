@@ -125,6 +125,7 @@ def test_paying_ends_the_request_and_the_next_visit_starts_without_one(visit: Vi
     pay(visit.waiter, visit.bill_id)
 
     assert requested_at(visit.tablet) is None
+    assert ok(visit.waiter.get(f"{BILLS_URL}/{visit.bill_id}"))["bill_requested_at"] is None
     assert visit.waiter.delete(dismiss_url(visit.bill_id)).status_code == 404
     next_bill = open_table(visit.waiter, visit.table)
     assert card(visit.waiter, visit.table)["bill"]["id"] == next_bill
