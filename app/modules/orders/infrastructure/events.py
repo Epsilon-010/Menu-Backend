@@ -25,7 +25,9 @@ STREAM_SECONDS = 300.0
 # Ends a guest's stream: their visit is over (the client then finds its session ended).
 _CLOSING_KINDS = frozenset({"bill.closed"})
 # What the staff hear: never cart changes (they belong to the table) and never prices.
-STAFF_KINDS = frozenset({"order.created", "order.updated", "bill.opened", "bill.closed"})
+STAFF_KINDS = frozenset(
+    {"order.created", "order.updated", "bill.opened", "bill.closed", "bill.requested", "bill.request_cleared"}
+)
 
 # Turns a stream entry into the (event, data) to send, or None to skip it.
 Selector = Callable[[dict[str, str]], tuple[str, dict[str, object]] | None]
