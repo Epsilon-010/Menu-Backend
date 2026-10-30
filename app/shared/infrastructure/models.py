@@ -18,7 +18,7 @@ from app.modules.orders.infrastructure.models import (
 from app.modules.staff.infrastructure.models import UserModel
 from app.modules.tables.infrastructure.models import TableModel
 from app.modules.tenants.infrastructure.models import TenantModel
-from app.modules.theming.infrastructure.models import ThemeModel
+from app.modules.theming.infrastructure.models import ThemeModel, ThemeVersionModel
 from app.shared.infrastructure.database import Base
 
 __all__ = [
@@ -37,5 +37,6 @@ __all__ = [
     "TableModel",
     "TenantModel",
     "ThemeModel",
+    "ThemeVersionModel",
     "UserModel",
 ]
