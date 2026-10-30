@@ -72,6 +72,7 @@ def test_the_table_sees_only_visible_categories_with_available_items(
                         "card_url": f"https://images.test/card/{public_id}",
                     },
                     "badges": [],
+                    "modifier_groups": [],
                 }
             ],
         }

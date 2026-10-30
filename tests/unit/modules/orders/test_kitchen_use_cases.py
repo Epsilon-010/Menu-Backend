@@ -32,6 +32,7 @@ from app.modules.orders.domain.model import (
     OrderItemStatus,
     PaymentMethod,
 )
+from app.modules.orders.domain.modifiers import MenuModifierGroup, MenuModifierOption
 from app.modules.orders.domain.ports import DishChange, MenuItem, TableInfo
 from app.shared.domain.principal import Role
 from tests.unit.fakes import FakeClock, FakeUnitOfWork
@@ -369,6 +370,35 @@ async def test_staff_add_a_queued_dish_at_the_menu_price() -> None:
     assert world.locks.locked == [(TENANT_A, TABLE)]
     assert world.uow.commits == 1
     assert world.events.published == [(TENANT_A, TABLE, "order.updated", order.id)]
+
+
+async def test_staff_add_a_dish_with_its_options_priced_by_the_menu() -> None:
+    world = World()
+    order = world.order(1, QUEUED)
+    small = MenuModifierOption(option_id=uuid.uuid4(), name="Small", price_cents=0)
+    large = MenuModifierOption(option_id=uuid.uuid4(), name="Large", price_cents=700)
+    size = MenuModifierGroup(group_id=uuid.uuid4(), name="Size", min_select=1, max_select=1, options=(small, large))
+    taco = world.menu_item("Taco", 1800)
+    world.menu.items[taco] = replace(world.menu.items[taco], modifier_groups=(size,))
+    add = AddDishToOrder(world.ctx)
+    dish_id = uuid.uuid4()
+
+    added = await add.execute(TENANT_A, order.id, taco, 2, dish_id=dish_id, modifier_option_ids=(large.option_id,))
+    again = await add.execute(TENANT_A, order.id, taco, 2, dish_id=dish_id, modifier_option_ids=(large.option_id,))
+
+    dish = added.order.items[-1]
+    assert (dish.unit_price_cents, dish.subtotal_cents) == (2500, 5000)
+    assert [(m.group, m.name, m.price_cents) for m in dish.modifiers] == [("Size", "Large", 700)]
+    assert not again.created
+    with pytest.raises(OrderIdTaken):
+        await add.execute(TENANT_A, order.id, taco, 2, dish_id=dish_id, modifier_option_ids=(small.option_id,))
+    with pytest.raises(InvalidOrderData, match="Choose 1 option for Size"):
+        await add.execute(TENANT_A, order.id, taco, 1)
+    with pytest.raises(InvalidOrderData, match="Each option can be chosen once"):
+        await add.execute(
+            TENANT_A, order.id, taco, 2, dish_id=dish_id, modifier_option_ids=(large.option_id, large.option_id)
+        )
+    assert world.uow.commits == 1
 
 
 async def test_adding_needs_an_orderable_item_an_open_bill_and_a_known_order() -> None:

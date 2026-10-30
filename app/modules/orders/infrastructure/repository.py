@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import delete, exists, func, select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -18,6 +19,7 @@ from app.modules.orders.domain.model import (
     PaymentMethod,
 )
 from app.modules.orders.domain.errors import OrderIdTaken
+from app.modules.orders.domain.modifiers import ChosenModifier
 from app.modules.orders.domain.ports import DishChange
 from app.modules.orders.infrastructure.models import (
     BillModel,
@@ -170,6 +172,23 @@ def _line(model: CartLineModel) -> CartLine:
         note=model.note,
         added_by=model.added_by,
         created_at=model.created_at,
+        modifier_option_ids=tuple(model.modifier_option_ids),
+    )
+
+
+def _modifiers_json(modifiers: tuple[ChosenModifier, ...]) -> list[dict[str, Any]]:
+    return [
+        {"option_id": str(m.option_id), "group": m.group, "name": m.name, "price_cents": m.price_cents}
+        for m in modifiers
+    ]
+
+
+def _modifiers(stored: list[dict[str, Any]]) -> tuple[ChosenModifier, ...]:
+    return tuple(
+        ChosenModifier(
+            option_id=uuid.UUID(m["option_id"]), group=m["group"], name=m["name"], price_cents=m["price_cents"]
+        )
+        for m in stored
     )
 
 
@@ -231,6 +250,7 @@ class SqlAlchemyCartRepository:
                 note=line.note,
                 added_by=line.added_by,
                 created_at=line.created_at,
+                modifier_option_ids=list(line.modifier_option_ids),
             )
         )
         try:
@@ -244,7 +264,7 @@ class SqlAlchemyCartRepository:
         await self._session.execute(
             update(CartLineModel)
             .where(CartLineModel.tenant_id == line.tenant_id, CartLineModel.id == line.id)
-            .values(quantity=line.quantity, note=line.note)
+            .values(quantity=line.quantity, note=line.note, modifier_option_ids=list(line.modifier_option_ids))
         )
 
     async def delete_line(self, tenant_id: uuid.UUID, line_id: uuid.UUID) -> None:
@@ -299,6 +319,7 @@ class SqlAlchemyOrderRepository:
                 status=item.status.value,
                 position=position,
                 updated_at=item.updated_at or order.created_at,
+                modifiers=_modifiers_json(item.modifiers),
             )
             for position, item in enumerate(order.items)
         )
@@ -343,6 +364,7 @@ class SqlAlchemyOrderRepository:
                     status=OrderItemStatus(item.status),
                     ready_at=item.ready_at,
                     updated_at=item.updated_at,
+                    modifiers=_modifiers(item.modifiers),
                     cancel_reason=item.cancel_reason,
                 )
             )
@@ -412,6 +434,7 @@ class SqlAlchemyOrderRepository:
                 status=dish.status.value,
                 position=(last if last is not None else -1) + 1,
                 updated_at=dish.updated_at,
+                modifiers=_modifiers_json(dish.modifiers),
             )
         )
         try:

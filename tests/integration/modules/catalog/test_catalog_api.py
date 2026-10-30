@@ -120,6 +120,7 @@ def test_admin_builds_the_catalog_with_images(
         "is_available": True,
         "image": None,
         "badges": [],
+        "modifier_group_ids": [],
     }
     suadero = ok(create_item(admin, tacos["id"], "Suadero", 2200), 201)
 

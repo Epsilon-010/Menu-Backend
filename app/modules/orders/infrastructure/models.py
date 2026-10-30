@@ -1,7 +1,9 @@
 import uuid
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Uuid, text
+from sqlalchemy import ARRAY, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Uuid, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.infrastructure.database import Base, UUIDPrimaryKey
@@ -55,6 +57,8 @@ class CartLineModel(UUIDPrimaryKey, Base):
     note: Mapped[str] = mapped_column(String(200))
     added_by: Mapped[str] = mapped_column(String(30))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # Chosen options of the catalog (no foreign key, like item_id: a removed one makes the line unavailable).
+    modifier_option_ids: Mapped[list[uuid.UUID]] = mapped_column(ARRAY(Uuid), server_default=text("'{}'"))
 
 
 class OrderModel(UUIDPrimaryKey, Base):
@@ -93,6 +97,8 @@ class OrderItemModel(UUIDPrimaryKey, Base):
     ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     cancel_reason: Mapped[str | None] = mapped_column(String(200))
+    # Copy of the chosen options when ordered: [{"option_id", "group", "name", "price_cents"}].
+    modifiers: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, server_default=text("'[]'"))
 
 
 class OrderItemChangeModel(UUIDPrimaryKey, Base):

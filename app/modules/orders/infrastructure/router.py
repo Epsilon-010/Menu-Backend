@@ -63,6 +63,7 @@ from app.modules.orders.domain.errors import (
     TableNotFound,
     TransitionNotAllowed,
 )
+from app.modules.orders.domain.modifiers import MAX_CHOSEN_OPTIONS
 from app.modules.orders.domain.model import (
     MAX_LATE_ORDER_MINUTES,
     MAX_NOTE_LENGTH,
@@ -172,11 +173,15 @@ class CartLineIn(_In):
     item_id: uuid.UUID
     quantity: int = Field(default=1, strict=True, ge=1, le=MAX_QUANTITY)
     note: str = Field(default="", max_length=MAX_NOTE_LENGTH)
+    # Repeats are refused by the selection rules (each option once); the bound only stops huge bodies.
+    modifier_option_ids: list[uuid.UUID] = Field(default_factory=list, max_length=MAX_CHOSEN_OPTIONS)
 
 
 class CartLineUpdate(_In):
     quantity: int | None = Field(default=None, strict=True, ge=1, le=MAX_QUANTITY)
     note: str | None = Field(default=None, max_length=MAX_NOTE_LENGTH)
+    # Replaces the whole selection when sent.
+    modifier_option_ids: list[uuid.UUID] | None = Field(default=None, max_length=MAX_CHOSEN_OPTIONS)
 
 
 class SubmitIn(_In):
@@ -193,6 +198,26 @@ class PaymentIn(_In):
     method: PaymentMethod
 
 
+class CartModifierOut(BaseModel):
+    option_id: uuid.UUID
+    group: str
+    name: str
+    price_cents: int
+
+
+class OrderModifierOut(BaseModel):
+    group: str
+    name: str
+    price_cents: int
+
+
+class StaffModifierOut(BaseModel):
+    """What the kitchen and delivery queues show of an option: never its price."""
+
+    group: str
+    name: str
+
+
 class CartLineOut(BaseModel):
     id: uuid.UUID
     item_id: uuid.UUID
@@ -200,6 +225,7 @@ class CartLineOut(BaseModel):
     quantity: int
     note: str
     added_by: str
+    modifiers: list[CartModifierOut]
     available: bool
     unit_price_cents: int | None
     subtotal_cents: int
@@ -220,6 +246,8 @@ class OrderItemOut(BaseModel):
     added_by: str
     status: OrderItemStatus
     cancel_reason: str | None
+    modifiers: list[OrderModifierOut]
+    # Includes the options' prices.
     unit_price_cents: int
     subtotal_cents: int
 
@@ -254,6 +282,7 @@ class OrderDishIn(_In):
     item_id: uuid.UUID
     quantity: int = Field(default=1, strict=True, ge=1, le=MAX_QUANTITY)
     note: str = Field(default="", max_length=MAX_NOTE_LENGTH)
+    modifier_option_ids: list[uuid.UUID] = Field(default_factory=list, max_length=MAX_CHOSEN_OPTIONS)
 
 
 class OrderSettingsIn(_In):
@@ -272,6 +301,7 @@ class StaffOrderItemOut(BaseModel):
     quantity: int
     note: str
     added_by: str
+    modifiers: list[StaffModifierOut]
     status: OrderItemStatus
     cancel_reason: str | None
     ready_at: datetime | None
@@ -323,6 +353,10 @@ def _cart_out(cart: CartView) -> CartOut:
                 quantity=view.line.quantity,
                 note=view.line.note,
                 added_by=view.line.added_by,
+                modifiers=[
+                    CartModifierOut(option_id=m.option_id, group=m.group, name=m.name, price_cents=m.price_cents)
+                    for m in view.modifiers
+                ],
                 available=view.available,
                 unit_price_cents=view.unit_price_cents,
                 subtotal_cents=view.subtotal_cents,
@@ -350,6 +384,7 @@ def _order_out(order: Order) -> OrderOut:
                 added_by=item.added_by,
                 status=item.status,
                 cancel_reason=item.cancel_reason,
+                modifiers=[OrderModifierOut(group=m.group, name=m.name, price_cents=m.price_cents) for m in item.modifiers],
                 unit_price_cents=item.unit_price_cents,
                 subtotal_cents=item.subtotal_cents,
             )
@@ -376,6 +411,7 @@ def _staff_order_out(view: StaffOrder) -> StaffOrderOut:
                 quantity=item.quantity,
                 note=item.note,
                 added_by=item.added_by,
+                modifiers=[StaffModifierOut(group=m.group, name=m.name) for m in item.modifiers],
                 status=item.status,
                 cancel_reason=item.cancel_reason,
                 ready_at=item.ready_at,
@@ -464,7 +500,9 @@ async def read_cart(diner: DinerDep, ctx: OrderingDep) -> CartOut | JSONResponse
 
 @table_router.post("/cart/lines", response_model=CartOut)
 async def add_cart_line(body: CartLineIn, diner: DinerDep, ctx: OrderingDep) -> CartOut | JSONResponse:
-    result = await _run(AddCartLine(ctx).execute(diner, body.item_id, body.quantity, body.note, body.id))
+    result = await _run(AddCartLine(ctx).execute(
+            diner, body.item_id, body.quantity, body.note, body.id, tuple(body.modifier_option_ids)
+        ))
     return result if isinstance(result, JSONResponse) else _cart_out(result)
 
 
@@ -472,7 +510,13 @@ async def add_cart_line(body: CartLineIn, diner: DinerDep, ctx: OrderingDep) -> 
 async def update_cart_line(
     line_id: uuid.UUID, body: CartLineUpdate, diner: DinerDep, ctx: OrderingDep
 ) -> CartOut | JSONResponse:
-    result = await _run(UpdateCartLine(ctx).execute(diner, line_id, body.quantity, body.note))
+    result = await _run(UpdateCartLine(ctx).execute(
+            diner,
+            line_id,
+            body.quantity,
+            body.note,
+            None if body.modifier_option_ids is None else tuple(body.modifier_option_ids),
+        ))
     return result if isinstance(result, JSONResponse) else _cart_out(result)
 
 
@@ -627,7 +671,15 @@ async def add_order_dish(
 ) -> OrderOut | JSONResponse:
     """Adds a dish to an order of an open bill (a staff correction); 200 when it repeats an add already made."""
     result = await _run(
-        AddDishToOrder(ctx).execute(staff.tenant_id, order_id, body.item_id, body.quantity, body.note, body.id)
+        AddDishToOrder(ctx).execute(
+            staff.tenant_id,
+            order_id,
+            body.item_id,
+            body.quantity,
+            body.note,
+            body.id,
+            tuple(body.modifier_option_ids),
+        )
     )
     if isinstance(result, JSONResponse):
         return result

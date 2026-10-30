@@ -8,7 +8,12 @@ from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.catalog.application.menu import GetOrderableItems
-from app.modules.catalog.infrastructure.repository import SqlAlchemyCategoryRepository, SqlAlchemyItemRepository
+from app.modules.catalog.infrastructure.repository import (
+    SqlAlchemyCategoryRepository,
+    SqlAlchemyItemRepository,
+    SqlAlchemyModifierGroupRepository,
+)
+from app.modules.orders.domain.modifiers import MenuModifierGroup, MenuModifierOption
 from app.modules.orders.domain.ports import MenuItem, TableInfo
 from app.modules.tables.application.find_table import GetTable
 from app.modules.tables.application.manage_tables import ListTables
@@ -26,12 +31,38 @@ def table_events_stream(tenant_id: uuid.UUID) -> str:
 
 class CatalogMenu:
     def __init__(self, session: AsyncSession) -> None:
-        self._items = GetOrderableItems(SqlAlchemyCategoryRepository(session), SqlAlchemyItemRepository(session))
+        self._items = GetOrderableItems(
+            SqlAlchemyCategoryRepository(session),
+            SqlAlchemyItemRepository(session),
+            SqlAlchemyModifierGroupRepository(session),
+        )
 
     async def orderable(self, tenant_id: uuid.UUID, item_ids: set[uuid.UUID]) -> dict[uuid.UUID, MenuItem]:
         return {
-            item_id: MenuItem(item_id=item_id, name=item.name, price_cents=item.price_cents)
-            for item_id, item in (await self._items.execute(tenant_id, item_ids)).items()
+            item_id: MenuItem(
+                item_id=item_id,
+                name=entry.item.name,
+                price_cents=entry.item.price_cents,
+                modifier_groups=tuple(
+                    MenuModifierGroup(
+                        group_id=group.id,
+                        name=group.name,
+                        min_select=group.min_select,
+                        max_select=group.max_select,
+                        options=tuple(
+                            MenuModifierOption(
+                                option_id=option.id,
+                                name=option.name,
+                                price_cents=option.price_cents,
+                                available=option.is_available,
+                            )
+                            for option in group.options
+                        ),
+                    )
+                    for group in entry.modifier_groups
+                ),
+            )
+            for item_id, entry in (await self._items.execute(tenant_id, item_ids)).items()
         }
 
 

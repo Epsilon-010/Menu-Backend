@@ -32,6 +32,7 @@ from app.modules.orders.domain.model import (
     validate_note,
     validate_quantity,
 )
+from app.modules.orders.domain.modifiers import choose_modifiers, unit_price, validate_option_ids
 from app.modules.orders.domain.ports import (
     BillRepository,
     DishChange,
@@ -187,9 +188,11 @@ class AddDishToOrder:
         quantity: int,
         note: str = "",
         dish_id: uuid.UUID | None = None,
+        modifier_option_ids: tuple[uuid.UUID, ...] = (),
     ) -> AddedDish:
         ctx = self._ctx
         quantity, note = validate_quantity(quantity), validate_note(note)
+        modifier_option_ids = validate_option_ids(modifier_option_ids)
         order = await ctx.orders.get(tenant_id, order_id)
         if order is None:
             raise OrderNotFound(order_id)
@@ -198,10 +201,12 @@ class AddDishToOrder:
         order = await ctx.orders.get(tenant_id, order_id) or order
         if dish_id is not None:
             existing = next((item for item in order.items if item.id == dish_id), None)
-            if existing is not None and (existing.item_id, existing.quantity, existing.note) == (
+            chosen_before = frozenset(modifier.option_id for modifier in existing.modifiers) if existing else None
+            if existing is not None and (existing.item_id, existing.quantity, existing.note, chosen_before) == (
                 item_id,
                 quantity,
                 note,
+                frozenset(modifier_option_ids),
             ):
                 return AddedDish(order=order, created=False)
             if existing is not None or await ctx.orders.dish_id_taken(dish_id):
@@ -210,6 +215,7 @@ class AddDishToOrder:
         item = (await ctx.menu.orderable(tenant_id, {item_id})).get(item_id)
         if item is None:
             raise ItemsUnavailable([item_id])
+        chosen = choose_modifiers(item, modifier_option_ids)
         now = ctx.clock.now()
         await ctx.orders.add_dish(
             tenant_id,
@@ -217,11 +223,12 @@ class AddDishToOrder:
             OrderItem(
                 item_id=item_id,
                 name=item.name,
-                unit_price_cents=item.price_cents,
+                unit_price_cents=unit_price(item, chosen),
                 quantity=quantity,
                 note=note,
                 added_by=STAFF_NAME,
                 updated_at=now,
+                modifiers=chosen,
                 id=dish_id or uuid.uuid4(),
             ),
         )

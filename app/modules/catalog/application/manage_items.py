@@ -8,8 +8,11 @@ import uuid
 from dataclasses import dataclass, replace
 
 from app.modules.catalog.application.manage_categories import get_category
+from app.modules.catalog.application.manage_modifiers import ensure_groups_exist
 from app.modules.catalog.domain.catalog import CategoryRepository, Item, ItemRepository, ensure_complete_order
+from app.modules.catalog.domain.catalog import validate_group_ids
 from app.modules.catalog.domain.errors import CatalogIdTaken, InvalidCatalogData, ItemNotFound
+from app.modules.catalog.domain.modifiers import ModifierGroupRepository
 from app.shared.domain.images import ImageCleanupScheduler, ImageRegistry
 from app.shared.domain.ports import UnitOfWork
 
@@ -21,6 +24,7 @@ class ItemDraft:
     description: str
     price_cents: int
     badges: tuple[str, ...] = ()
+    modifier_group_ids: tuple[uuid.UUID, ...] = ()
     # Sent by the client to make the create idempotent; None generates one.
     id: uuid.UUID | None = None
 
@@ -35,6 +39,7 @@ class ItemChanges:
     is_available: bool | None = None
     category_id: uuid.UUID | None = None
     badges: tuple[str, ...] | None = None
+    modifier_group_ids: tuple[uuid.UUID, ...] | None = None
 
 
 async def get_item(items: ItemRepository, tenant_id: uuid.UUID, item_id: uuid.UUID, for_update: bool = False) -> Item:
@@ -70,9 +75,12 @@ class CreateItem:
     created instead of a second one.
     """
 
-    def __init__(self, categories: CategoryRepository, items: ItemRepository, uow: UnitOfWork) -> None:
+    def __init__(
+        self, categories: CategoryRepository, items: ItemRepository, groups: ModifierGroupRepository, uow: UnitOfWork
+    ) -> None:
         self._categories = categories
         self._items = items
+        self._groups = groups
         self._uow = uow
 
     async def execute(self, tenant_id: uuid.UUID, draft: ItemDraft) -> Item:
@@ -82,11 +90,20 @@ class CreateItem:
         if draft.id is not None:
             existing = await self._items.get(tenant_id, draft.id)
             if existing is not None:
-                if not existing.same_draft(draft.category_id, draft.name, draft.description, draft.price_cents, draft.badges):
+                if not existing.same_draft(
+                    draft.category_id,
+                    draft.name,
+                    draft.description,
+                    draft.price_cents,
+                    draft.badges,
+                    draft.modifier_group_ids,
+                ):
                     raise CatalogIdTaken(draft.id)
                 return existing
             if await self._items.exists_anywhere(draft.id):
                 raise CatalogIdTaken(draft.id)
+        # Locked after the order lock and before writing: a concurrent delete of a group waits or wins first.
+        await ensure_groups_exist(self._groups, tenant_id, validate_group_ids(draft.modifier_group_ids))
         item = Item.create(
             tenant_id,
             draft.category_id,
@@ -96,6 +113,7 @@ class CreateItem:
             await self._items.next_position(tenant_id, draft.category_id),
             draft.id,
             draft.badges,
+            draft.modifier_group_ids,
         )
         await self._items.add(item)
         await self._uow.commit()
@@ -105,9 +123,12 @@ class CreateItem:
 class UpdateItem:
     """Edits an item; moving it to another category puts it last there."""
 
-    def __init__(self, categories: CategoryRepository, items: ItemRepository, uow: UnitOfWork) -> None:
+    def __init__(
+        self, categories: CategoryRepository, items: ItemRepository, groups: ModifierGroupRepository, uow: UnitOfWork
+    ) -> None:
         self._categories = categories
         self._items = items
+        self._groups = groups
         self._uow = uow
 
     async def execute(self, tenant_id: uuid.UUID, item_id: uuid.UUID, changes: ItemChanges) -> Item:
@@ -122,7 +143,11 @@ class UpdateItem:
             price_cents=changes.price_cents,
             is_available=changes.is_available,
             badges=changes.badges,
+            modifier_group_ids=changes.modifier_group_ids,
         )
+        if changes.modifier_group_ids is not None:
+            # Row lock first, then the groups (the same order as every other item write).
+            await ensure_groups_exist(self._groups, tenant_id, updated.modifier_group_ids)
         if changes.category_id is not None and changes.category_id != item.category_id:
             await get_category(self._categories, tenant_id, changes.category_id)
             position = await self._items.next_position(tenant_id, changes.category_id)

@@ -20,3 +20,7 @@ class ItemNotFound(Exception):
 
 class CatalogIdTaken(Exception):
     """A client-supplied id already belongs to another category or item (other data or another tenant)."""
+
+
+class ModifierGroupNotFound(Exception):
+    """No modifier group with that id in the caller's tenant."""

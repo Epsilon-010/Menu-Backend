@@ -12,6 +12,7 @@ MAX_DESCRIPTION_LENGTH = 500
 MAX_PRICE_CENTS = 10_000_000
 # The badges a product can show, in the order the menu shows them.
 BADGES = ("new", "popular", "spicy", "vegan", "vegetarian", "gluten_free")
+MAX_GROUPS_PER_ITEM = 10
 
 
 def validate_category_name(name: str) -> str:
@@ -47,6 +48,14 @@ def validate_badges(badges: Iterable[str]) -> tuple[str, ...]:
     if not chosen <= set(BADGES):
         raise InvalidCatalogData(f"Badges must be some of: {', '.join(BADGES)}")
     return tuple(badge for badge in BADGES if badge in chosen)
+
+
+def validate_group_ids(group_ids: Iterable[uuid.UUID]) -> tuple[uuid.UUID, ...]:
+    """The modifier groups of an item in its order; a repeated id keeps its first place."""
+    unique = tuple(dict.fromkeys(group_ids))
+    if len(unique) > MAX_GROUPS_PER_ITEM:
+        raise InvalidCatalogData(f"An item can have at most {MAX_GROUPS_PER_ITEM} modifier groups")
+    return unique
 
 
 def ensure_complete_order(current_ids: Iterable[uuid.UUID], requested_ids: list[uuid.UUID]) -> None:
@@ -101,6 +110,8 @@ class Item:
     is_available: bool = True
     image_public_id: str | None = None
     badges: tuple[str, ...] = ()
+    # Modifier groups of the tenant's library, in the order the item shows them.
+    modifier_group_ids: tuple[uuid.UUID, ...] = ()
     id: uuid.UUID = field(default_factory=uuid.uuid4)
 
     @classmethod
@@ -114,6 +125,7 @@ class Item:
         position: int,
         item_id: uuid.UUID | None = None,
         badges: Iterable[str] = (),
+        modifier_group_ids: Iterable[uuid.UUID] = (),
     ) -> "Item":
         """`item_id` comes from the client to make the create idempotent; None generates one."""
         return cls(
@@ -124,19 +136,28 @@ class Item:
             price_cents=validate_price(price_cents),
             position=position,
             badges=validate_badges(badges),
+            modifier_group_ids=validate_group_ids(modifier_group_ids),
             id=item_id or uuid.uuid4(),
         )
 
     def same_draft(
-        self, category_id: uuid.UUID, name: str, description: str, price_cents: int, badges: Iterable[str] = ()
+        self,
+        category_id: uuid.UUID,
+        name: str,
+        description: str,
+        price_cents: int,
+        badges: Iterable[str] = (),
+        modifier_group_ids: Iterable[uuid.UUID] = (),
     ) -> bool:
         """Whether a repeated create asks for exactly this item (after the same normalization)."""
-        return (self.category_id, self.name, self.description, self.price_cents, self.badges) == (
+        mine = (self.category_id, self.name, self.description, self.price_cents, self.badges, self.modifier_group_ids)
+        return mine == (
             category_id,
             validate_item_name(name),
             validate_description(description),
             validate_price(price_cents),
             validate_badges(badges),
+            validate_group_ids(modifier_group_ids),
         )
 
     def with_changes(
@@ -146,6 +167,7 @@ class Item:
         price_cents: int | None = None,
         is_available: bool | None = None,
         badges: Iterable[str] | None = None,
+        modifier_group_ids: Iterable[uuid.UUID] | None = None,
     ) -> "Item":
         return replace(
             self,
@@ -154,6 +176,9 @@ class Item:
             price_cents=self.price_cents if price_cents is None else validate_price(price_cents),
             is_available=self.is_available if is_available is None else is_available,
             badges=self.badges if badges is None else validate_badges(badges),
+            modifier_group_ids=(
+                self.modifier_group_ids if modifier_group_ids is None else validate_group_ids(modifier_group_ids)
+            ),
         )
 
 

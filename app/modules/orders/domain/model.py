@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 
 from app.modules.orders.domain.errors import InvalidOrderData, TransitionNotAllowed
+from app.modules.orders.domain.modifiers import ChosenModifier
 from app.shared.domain.principal import Role
 
 MAX_QUANTITY = 50
@@ -130,19 +131,34 @@ class CartLine:
     note: str
     added_by: str
     created_at: datetime
+    # The chosen options, checked against the menu when added and again whenever the cart is read.
+    modifier_option_ids: tuple[uuid.UUID, ...] = ()
     # Sending the cart keeps this id on the order item, so a repeated add after sending adds nothing.
     id: uuid.UUID = field(default_factory=uuid.uuid4)
 
-    def with_changes(self, quantity: int | None = None, note: str | None = None) -> "CartLine":
+    def with_changes(
+        self,
+        quantity: int | None = None,
+        note: str | None = None,
+        modifier_option_ids: tuple[uuid.UUID, ...] | None = None,
+    ) -> "CartLine":
         return replace(
             self,
             quantity=self.quantity if quantity is None else validate_quantity(quantity),
             note=self.note if note is None else validate_note(note),
+            modifier_option_ids=self.modifier_option_ids if modifier_option_ids is None else modifier_option_ids,
         )
 
-    def same_request(self, item_id: uuid.UUID, quantity: int, note: str) -> bool:
-        """Whether a repeated add with this line's id asks for the same thing."""
-        return (self.item_id, self.quantity, self.note) == (item_id, quantity, validate_note(note))
+    def same_request(
+        self, item_id: uuid.UUID, quantity: int, note: str, modifier_option_ids: tuple[uuid.UUID, ...] = ()
+    ) -> bool:
+        """Whether a repeated add with this line's id asks for the same thing (options in any order)."""
+        return (self.item_id, self.quantity, self.note, frozenset(self.modifier_option_ids)) == (
+            item_id,
+            quantity,
+            validate_note(note),
+            frozenset(modifier_option_ids),
+        )
 
 
 @dataclass(frozen=True)
@@ -233,6 +249,8 @@ class OrderItem:
     ready_at: datetime | None = None
     updated_at: datetime | None = None
     cancel_reason: str | None = None
+    # A copy of the options chosen when it was ordered; `unit_price_cents` already includes them.
+    modifiers: tuple[ChosenModifier, ...] = ()
     id: uuid.UUID = field(default_factory=uuid.uuid4)
 
     @property
