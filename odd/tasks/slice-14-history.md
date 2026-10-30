@@ -30,7 +30,7 @@ Branch `feat/slice-14-history` in Backend and Menu-Frontend. Delivery: ask-on-ri
 
 ## Tasks
 - [x] T1 S1, S2 — Backend history: table + data migration, repository, publish/save keep images, `GET /theme/versions`. Route: inline. Commit `2c695a9`.
-- [ ] T2 S5, S6 — Backend import: domain upgrade v1-v3 → v4, image stripping, `POST /theme/import`. Route: inline.
+- [x] T2 S5, S6 — Backend import: domain upgrade v1-v3 → v4, image stripping, `POST /theme/import`. Route: inline. Commit `9272808`.
 - [ ] T3 S2, S3, S4, S5, S6 — Frontend: history list with restore, reset, export and import in `/admin/design`. Route: inline.
 - [ ] T4 S7 — Closing: e2e between two tenants, independent verifier (item 1), native review, docs, ROADMAP. Route: verifier delegated.
 
@@ -50,3 +50,17 @@ slice, made of work-unit commits, each reviewed natively by range (`--base-ref <
   fixed). GREEN: unit 187 passed; theming integration 52 passed; race test `test_theme_concurrency.py` passes with the
   row lock and fails with `UniqueViolationError` when `.with_for_update()` is removed. Full suite 822 passed. Behavior
   change pinned: republishing no longer discards the old published image while a kept version uses it.
+- L8 (2026-10-30, T1 review): native review `review-86f2884d090ad43f` (risk + reliability, Sonnet) approved with no
+  findings and acknowledged. Reviewed boundary: `1764a03`.
+- L9 (2026-10-30, T2): RED observed (ImportError; then `schema_version: 4.0` accepted by `parse_theme` → now requires
+  an int). GREEN: unit + theming integration 564 passed (`test_import_theme.py`, import cases in
+  `test_manage_theme.py`, `test_theme_import_api.py`). Full suite not rerun after T2. Commit `9272808`.
+- L10 (2026-10-30, user): "para por el moennto fgfuarda un registro de lo que llevas para que cuando de continudad a
+  las esion sepas que sigue". Stopped here. Next: (1) run the full backend suite; (2) native review of T2 with
+  `--base-ref 1764a03 --committed-only` (`gentle-ai review assess` first); (3) apply migration `699f2f507bc4` to the dev
+  DB (`docker compose exec backend uv run alembic upgrade head`); (4) T3 frontend on `feat/slice-14-history`
+  (already created from `main`, no commits): `api.ts` (`fetchThemeVersions`, `importTheme`), history list with
+  "Restore" (puts the version in the draft), "Reset to defaults" (default colors/typography/layout/cards, brand kept;
+  the backend still needs to expose the default theme, e.g. in `ThemeDraftOut`), export (download the draft JSON) and
+  import (file → `POST /theme/import`, warn about `removed_images`) in `ThemeEditorPanel.tsx`; (5) T4 closing.
+  Nothing pushed yet.
