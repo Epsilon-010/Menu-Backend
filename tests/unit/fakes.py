@@ -1,12 +1,14 @@
 """In-memory fakes for the domain ports, shared by the unit tests."""
 
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
 from app.modules.auth.domain.refresh_token import RefreshToken
 from app.modules.catalog.domain.catalog import Category, Item
-from app.modules.catalog.domain.errors import CategoryNotEmpty
+from app.modules.catalog.domain.errors import CatalogIdTaken, CategoryNotEmpty
+from app.modules.catalog.domain.modifiers import ModifierGroup
 from app.modules.media.domain.uploads import DueImage
 from app.modules.staff.domain.errors import EmailAlreadyInUse, StaffCodeTaken
 from app.modules.staff.domain.user import STAFF_CODE_ALPHABET, STAFF_MEMBER_ROLES, User
@@ -325,6 +327,55 @@ class InMemoryItemRepository:
 
     async def list(self, tenant_id: uuid.UUID) -> list[Item]:
         return sorted((i for i in self.items.values() if i.tenant_id == tenant_id), key=_by_position)
+
+
+class InMemoryModifierGroupRepository:
+    def __init__(self, items: InMemoryItemRepository | None = None) -> None:
+        self.groups: dict[uuid.UUID, ModifierGroup] = {}
+        self._items = items
+        self.locked: list[uuid.UUID] = []
+        self.id_locks: list[uuid.UUID] = []
+
+    def _option_ids(self) -> set[uuid.UUID]:
+        return {option.id for group in self.groups.values() for option in group.options}
+
+    async def add(self, group: ModifierGroup) -> None:
+        if group.id in self.groups or self._option_ids() & {option.id for option in group.options}:
+            raise CatalogIdTaken(group.id)
+        self.groups[group.id] = group
+
+    async def get(self, tenant_id: uuid.UUID, group_id: uuid.UUID) -> ModifierGroup | None:
+        group = self.groups.get(group_id)
+        return group if group is not None and group.tenant_id == tenant_id else None
+
+    async def get_for_update(self, tenant_id: uuid.UUID, group_id: uuid.UUID) -> ModifierGroup | None:
+        self.locked.append(group_id)
+        return await self.get(tenant_id, group_id)
+
+    async def exists_anywhere(self, group_id: uuid.UUID) -> bool:
+        return group_id in self.groups
+
+    async def lock_id(self, group_id: uuid.UUID) -> None:
+        self.id_locks.append(group_id)
+
+    async def lock_existing(self, tenant_id: uuid.UUID, group_ids: Iterable[uuid.UUID]) -> set[uuid.UUID]:
+        return {group_id for group_id in group_ids if await self.get(tenant_id, group_id) is not None}
+
+    async def update(self, group: ModifierGroup) -> None:
+        self.groups[group.id] = group
+
+    async def delete(self, tenant_id: uuid.UUID, group_id: uuid.UUID) -> None:
+        if (await self.get(tenant_id, group_id)) is not None:
+            del self.groups[group_id]
+        # Mimics the cascade of item_modifier_groups.
+        if self._items is not None:
+            for item in list(self._items.items.values()):
+                if group_id in item.modifier_group_ids:
+                    kept = tuple(g for g in item.modifier_group_ids if g != group_id)
+                    self._items.items[item.id] = replace(item, modifier_group_ids=kept)
+
+    async def list(self, tenant_id: uuid.UUID) -> list[ModifierGroup]:
+        return sorted((g for g in self.groups.values() if g.tenant_id == tenant_id), key=lambda g: g.name.lower())
 
 
 class FakeImageStorage:

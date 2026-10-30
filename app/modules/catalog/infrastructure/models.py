@@ -65,3 +65,61 @@ class ItemModel(UUIDPrimaryKey, Base):
     # Badge ids from the domain's fixed list, in its order (validated there).
     badges: Mapped[list[str]] = mapped_column(ARRAY(String(20)), server_default=text("'{}'"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ModifierGroupModel(UUIDPrimaryKey, Base):
+    __tablename__ = "modifier_groups"
+    __table_args__ = (
+        # Target of the composite foreign keys below: options and item links share the group's tenant.
+        UniqueConstraint("id", "tenant_id", name="uq_modifier_groups_id_tenant_id"),
+        CheckConstraint("0 <= min_select AND min_select <= max_select AND max_select >= 1", name="selection_limits"),
+    )
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(80))
+    min_select: Mapped[int] = mapped_column(Integer)
+    max_select: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ModifierOptionModel(UUIDPrimaryKey, Base):
+    __tablename__ = "modifier_options"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["group_id", "tenant_id"],
+            ["modifier_groups.id", "modifier_groups.tenant_id"],
+            ondelete="CASCADE",
+            name="fk_modifier_options_group_id_tenant_id_modifier_groups",
+        ),
+        Index("ix_modifier_options_group_id_tenant_id", "group_id", "tenant_id"),
+        CheckConstraint("price_cents >= 0", name="price_cents_not_negative"),
+    )
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    group_id: Mapped[uuid.UUID] = mapped_column(Uuid)
+    name: Mapped[str] = mapped_column(String(80))
+    # Integer cents added to the item's price, never float.
+    price_cents: Mapped[int] = mapped_column(Integer)
+    is_available: Mapped[bool] = mapped_column(Boolean, server_default=true())
+    position: Mapped[int] = mapped_column(Integer)
+
+
+class ItemModifierGroupModel(UUIDPrimaryKey, Base):
+    """Which groups of the library an item uses, in its order; deleting either side removes the link."""
+
+    __tablename__ = "item_modifier_groups"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["group_id", "tenant_id"],
+            ["modifier_groups.id", "modifier_groups.tenant_id"],
+            ondelete="CASCADE",
+            name="fk_item_modifier_groups_group_id_tenant_id_modifier_groups",
+        ),
+        UniqueConstraint("item_id", "group_id", name="uq_item_modifier_groups_item_id_group_id"),
+        Index("ix_item_modifier_groups_group_id_tenant_id", "group_id", "tenant_id"),
+    )
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    item_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("items.id", ondelete="CASCADE"))
+    group_id: Mapped[uuid.UUID] = mapped_column(Uuid)
+    position: Mapped[int] = mapped_column(Integer)

@@ -36,6 +36,7 @@ from tests.unit.fakes import (
     InMemoryCategoryRepository,
     InMemoryImageRegistry,
     InMemoryItemRepository,
+    InMemoryModifierGroupRepository,
 )
 
 pytestmark = pytest.mark.anyio
@@ -48,6 +49,7 @@ class World:
     def __init__(self) -> None:
         self.categories = InMemoryCategoryRepository()
         self.items = InMemoryItemRepository(self.categories)
+        self.groups = InMemoryModifierGroupRepository(self.items)
         self.images = FakeImageStorage()
         self.registry = InMemoryImageRegistry()
         self.cleanup = FakeCleanupScheduler()
@@ -60,10 +62,10 @@ class World:
         self, category: Category, name: str = "Pastor", price_cents: int = 2500, tenant_id: uuid.UUID = TENANT_A
     ) -> Item:
         draft = ItemDraft(category_id=category.id, name=name, description="", price_cents=price_cents)
-        return await CreateItem(self.categories, self.items, self.uow).execute(tenant_id, draft)
+        return await CreateItem(self.categories, self.items, self.groups, self.uow).execute(tenant_id, draft)
 
     def update_item(self) -> UpdateItem:
-        return UpdateItem(self.categories, self.items, self.uow)
+        return UpdateItem(self.categories, self.items, self.groups, self.uow)
 
     def set_image(self) -> SetItemImage:
         return SetItemImage(self.items, self.images, self.registry, self.uow, self.cleanup)
@@ -211,7 +213,7 @@ async def test_creates_an_available_item_last_in_its_category(world: World) -> N
     tacos = await world.category()
     draft = ItemDraft(category_id=tacos.id, name=" Pastor ", description=" Con piña ", price_cents=2500)
 
-    first = await CreateItem(world.categories, world.items, world.uow).execute(TENANT_A, draft)
+    first = await CreateItem(world.categories, world.items, world.groups, world.uow).execute(TENANT_A, draft)
     second = await world.item(tacos, "Suadero")
 
     assert (first.name, first.description, first.price_cents) == ("Pastor", "Con piña", 2500)
@@ -228,7 +230,7 @@ async def test_rejects_invalid_items(world: World, name: str, description: str, 
     draft = ItemDraft(category_id=tacos.id, name=name, description=description, price_cents=price_cents)
 
     with pytest.raises(InvalidCatalogData):
-        await CreateItem(world.categories, world.items, world.uow).execute(TENANT_A, draft)
+        await CreateItem(world.categories, world.items, world.groups, world.uow).execute(TENANT_A, draft)
 
     assert world.items.items == {}
 
@@ -494,7 +496,7 @@ async def test_repeating_an_item_create_with_its_id_returns_the_same_item(world:
     tacos = await world.category()
     item_id = uuid.uuid4()
     draft = ItemDraft(category_id=tacos.id, name="Pastor", description="Con piña", price_cents=2500, id=item_id)
-    create = CreateItem(world.categories, world.items, world.uow)
+    create = CreateItem(world.categories, world.items, world.groups, world.uow)
 
     first = await create.execute(TENANT_A, draft)
     replay = await create.execute(TENANT_A, draft)
@@ -509,7 +511,7 @@ async def test_an_item_id_reused_for_other_data_or_by_another_tenant_is_refused(
     tacos = await world.category()
     item_id = uuid.uuid4()
     draft = ItemDraft(category_id=tacos.id, name="Pastor", description="", price_cents=2500, id=item_id)
-    await CreateItem(world.categories, world.items, world.uow).execute(TENANT_A, draft)
+    await CreateItem(world.categories, world.items, world.groups, world.uow).execute(TENANT_A, draft)
     tenant = TENANT_A
     if change == "name":
         draft = replace(draft, name="Suadero")
@@ -520,7 +522,7 @@ async def test_an_item_id_reused_for_other_data_or_by_another_tenant_is_refused(
         draft = replace(draft, category_id=(await world.category("Otra", TENANT_B)).id)
 
     with pytest.raises(CatalogIdTaken):
-        await CreateItem(world.categories, world.items, world.uow).execute(tenant, draft)
+        await CreateItem(world.categories, world.items, world.groups, world.uow).execute(tenant, draft)
 
     assert [(i.name, i.price_cents) for i in world.items.items.values()] == [("Pastor", 2500)]
 
@@ -538,7 +540,7 @@ async def test_badges_are_kept_once_each_in_the_fixed_order(world: World) -> Non
     draft = ItemDraft(
         category_id=category.id, name="Pastor", description="", price_cents=2500, badges=("vegan", "new", "vegan")
     )
-    item = await CreateItem(world.categories, world.items, world.uow).execute(TENANT_A, draft)
+    item = await CreateItem(world.categories, world.items, world.groups, world.uow).execute(TENANT_A, draft)
     assert item.badges == ("new", "vegan")
 
     updated = await world.update_item().execute(TENANT_A, item.id, ItemChanges(badges=("gluten_free", "spicy", "popular")))
@@ -561,7 +563,7 @@ async def test_unknown_badges_are_rejected(world: World, badges: tuple[str, ...]
     category = await world.category()
     draft = ItemDraft(category_id=category.id, name="Pastor", description="", price_cents=2500, badges=badges)
     with pytest.raises(InvalidCatalogData):
-        await CreateItem(world.categories, world.items, world.uow).execute(TENANT_A, draft)
+        await CreateItem(world.categories, world.items, world.groups, world.uow).execute(TENANT_A, draft)
     item = await world.item(category, name="Suadero")
     with pytest.raises(InvalidCatalogData):
         await world.update_item().execute(TENANT_A, item.id, ItemChanges(badges=badges))
@@ -571,7 +573,7 @@ async def test_unknown_badges_are_rejected(world: World, badges: tuple[str, ...]
 async def test_repeating_a_create_with_other_badges_is_another_item(world: World) -> None:
     category = await world.category()
     draft = ItemDraft(category_id=category.id, name="Pastor", description="", price_cents=2500, id=uuid.uuid4(), badges=("new",))
-    use_case = CreateItem(world.categories, world.items, world.uow)
+    use_case = CreateItem(world.categories, world.items, world.groups, world.uow)
     first = await use_case.execute(TENANT_A, draft)
     assert await use_case.execute(TENANT_A, replace(draft, badges=("new", "new"))) == first
     with pytest.raises(CatalogIdTaken):

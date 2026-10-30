@@ -15,7 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.modules.catalog.application.item_images import RequestImageUpload, SetItemImage
 from app.modules.catalog.application.manage_categories import CreateCategory, ListCatalog, UpdateCategory
 from app.modules.catalog.application.manage_items import CreateItem, ItemChanges, ItemDraft, UpdateItem
-from app.modules.catalog.infrastructure.repository import SqlAlchemyCategoryRepository, SqlAlchemyItemRepository
+from app.modules.catalog.infrastructure.repository import (
+    SqlAlchemyCategoryRepository,
+    SqlAlchemyItemRepository,
+    SqlAlchemyModifierGroupRepository,
+)
 from app.modules.media.infrastructure.repository import SqlAlchemyImageUploads
 from app.seed import SeedResult
 from app.shared.infrastructure.config import get_settings
@@ -141,7 +145,7 @@ def test_an_edit_racing_an_image_change_never_resurrects_the_old_image(tenant: S
                 tenant.tenant_id, "Tacos"
             )
             draft = ItemDraft(category_id=category.id, name="Pastor", description="", price_cents=2500)
-            item = await CreateItem(SqlAlchemyCategoryRepository(s), SqlAlchemyItemRepository(s), SqlAlchemyUnitOfWork(s)).execute(
+            item = await CreateItem(SqlAlchemyCategoryRepository(s), SqlAlchemyItemRepository(s), SqlAlchemyModifierGroupRepository(s), SqlAlchemyUnitOfWork(s)).execute(
                 tenant.tenant_id, draft
             )
             ids = []
@@ -161,7 +165,7 @@ def test_an_edit_racing_an_image_change_never_resurrects_the_old_image(tenant: S
             ).execute(tenant.tenant_id, item_id, public_id)
 
         await _in_session(factory, set_image(old))
-        rename = lambda s: UpdateItem(SqlAlchemyCategoryRepository(s), SlowItems(s), SqlAlchemyUnitOfWork(s)).execute(  # noqa: E731
+        rename = lambda s: UpdateItem(SqlAlchemyCategoryRepository(s), SlowItems(s), SqlAlchemyModifierGroupRepository(s), SqlAlchemyUnitOfWork(s)).execute(  # noqa: E731
             tenant.tenant_id, item_id, ItemChanges(name="Pastor XL")
         )
         await asyncio.gather(_in_session(factory, rename), _in_session(factory, set_image(new)))

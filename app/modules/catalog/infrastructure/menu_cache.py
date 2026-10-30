@@ -8,8 +8,8 @@ logger = logging.getLogger(__name__)
 
 _TTL_SECONDS = 600
 # Moves on whenever the cached JSON changes shape, so a menu cached before a deploy is never served after it
-# (v2: items carry their badges).
-_FORMAT = "v2"
+# (v2: items carry their badges; v3: and their modifier groups).
+_FORMAT = "v3"
 
 
 class RedisMenuCache:

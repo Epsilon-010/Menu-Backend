@@ -24,6 +24,14 @@ from app.modules.catalog.application.manage_items import (
     ReorderItems,
     UpdateItem,
 )
+from app.modules.catalog.application.manage_modifiers import (
+    CreateModifierGroup,
+    DeleteModifierGroup,
+    ListModifierGroups,
+    ModifierGroupChanges,
+    ModifierGroupDraft,
+    UpdateModifierGroup,
+)
 from app.modules.catalog.domain.catalog import BADGES, MAX_PRICE_CENTS, Category, Item
 from app.modules.catalog.domain.errors import (
     CatalogIdTaken,
@@ -32,9 +40,15 @@ from app.modules.catalog.domain.errors import (
     CategoryNotFound,
     InvalidCatalogData,
     ItemNotFound,
+    ModifierGroupNotFound,
 )
+from app.modules.catalog.domain.modifiers import MAX_OPTIONS_PER_GROUP, ModifierGroup, OptionDraft
 from app.modules.catalog.infrastructure.menu_router import menu_cache
-from app.modules.catalog.infrastructure.repository import SqlAlchemyCategoryRepository, SqlAlchemyItemRepository
+from app.modules.catalog.infrastructure.repository import (
+    SqlAlchemyCategoryRepository,
+    SqlAlchemyItemRepository,
+    SqlAlchemyModifierGroupRepository,
+)
 from app.modules.media.infrastructure.jobs import image_cleanup_scheduler, image_registry
 from app.shared.domain.images import (
     MAX_IMAGE_BYTES,
@@ -98,6 +112,8 @@ class ItemIn(_In):
     description: str = Field(default="", max_length=2000)
     price_cents: int = Field(strict=True, ge=0, le=MAX_PRICE_CENTS)
     badges: list[StrictStr] = Field(default_factory=list, max_length=len(BADGES))
+    # Repeats collapse, so the bound is loose; the domain enforces MAX_GROUPS_PER_ITEM.
+    modifier_group_ids: list[uuid.UUID] = Field(default_factory=list, max_length=100)
 
 
 class ItemUpdate(_In):
@@ -107,6 +123,46 @@ class ItemUpdate(_In):
     price_cents: int | None = Field(default=None, strict=True, ge=0, le=MAX_PRICE_CENTS)
     is_available: bool | None = None
     badges: list[StrictStr] | None = Field(default=None, max_length=len(BADGES))
+    modifier_group_ids: list[uuid.UUID] | None = Field(default=None, max_length=100)
+
+
+class OptionIn(_In):
+    # An existing option's id keeps it (carts keep pointing at it); without one a new option is created.
+    id: uuid.UUID | None = None
+    name: str = Field(max_length=200)
+    price_cents: int = Field(strict=True, ge=0, le=MAX_PRICE_CENTS)
+    is_available: bool = True
+
+
+class ModifierGroupIn(_In):
+    # Optional client-chosen id: sending the same create again returns the same group.
+    id: uuid.UUID | None = None
+    name: str = Field(max_length=200)
+    min_select: int = Field(strict=True, ge=0, le=MAX_OPTIONS_PER_GROUP)
+    max_select: int = Field(strict=True, ge=0, le=MAX_OPTIONS_PER_GROUP)
+    options: list[OptionIn] = Field(max_length=MAX_OPTIONS_PER_GROUP + 1)
+
+
+class ModifierGroupUpdate(_In):
+    name: str | None = Field(default=None, max_length=200)
+    min_select: int | None = Field(default=None, strict=True, ge=0, le=MAX_OPTIONS_PER_GROUP)
+    max_select: int | None = Field(default=None, strict=True, ge=0, le=MAX_OPTIONS_PER_GROUP)
+    options: list[OptionIn] | None = Field(default=None, max_length=MAX_OPTIONS_PER_GROUP + 1)
+
+
+class OptionOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    price_cents: int
+    is_available: bool
+
+
+class ModifierGroupOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    min_select: int
+    max_select: int
+    options: list[OptionOut]
 
 
 class OrderIn(_In):
@@ -133,6 +189,7 @@ class ItemOut(BaseModel):
     is_available: bool
     image: ImageOut | None
     badges: list[str]
+    modifier_group_ids: list[uuid.UUID]
 
 
 class CategoryOut(BaseModel):
@@ -177,6 +234,27 @@ def _item_out(item: Item, images: ImageStorage) -> ItemOut:
         is_available=item.is_available,
         image=image,
         badges=list(item.badges),
+        modifier_group_ids=list(item.modifier_group_ids),
+    )
+
+
+def _group_out(group: ModifierGroup) -> ModifierGroupOut:
+    return ModifierGroupOut(
+        id=group.id,
+        name=group.name,
+        min_select=group.min_select,
+        max_select=group.max_select,
+        options=[
+            OptionOut(id=option.id, name=option.name, price_cents=option.price_cents, is_available=option.is_available)
+            for option in group.options
+        ],
+    )
+
+
+def _option_drafts(options: list[OptionIn]) -> tuple[OptionDraft, ...]:
+    return tuple(
+        OptionDraft(name=option.name, price_cents=option.price_cents, is_available=option.is_available, id=option.id)
+        for option in options
     )
 
 
@@ -200,6 +278,8 @@ async def _run(call: Awaitable[T]) -> T | JSONResponse:
         return problem(status.HTTP_404_NOT_FOUND, "Category not found")
     except ItemNotFound:
         return problem(status.HTTP_404_NOT_FOUND, "Item not found")
+    except ModifierGroupNotFound:
+        return problem(status.HTTP_404_NOT_FOUND, "Modifier group not found")
     except ImageStorageUnavailable as error:
         return problem(status.HTTP_503_SERVICE_UNAVAILABLE, str(error) or "Image storage is not available")
 
@@ -215,8 +295,28 @@ def _items(session: AsyncSession) -> SqlAlchemyItemRepository:
     return SqlAlchemyItemRepository(session)
 
 
+def _groups(session: AsyncSession) -> SqlAlchemyModifierGroupRepository:
+    return SqlAlchemyModifierGroupRepository(session)
+
+
 def get_list_catalog(session: SessionDep) -> ListCatalog:
     return ListCatalog(_categories(session), _items(session))
+
+
+def get_list_groups(session: SessionDep) -> ListModifierGroups:
+    return ListModifierGroups(_groups(session))
+
+
+def get_create_group(session: SessionDep) -> CreateModifierGroup:
+    return CreateModifierGroup(_groups(session), SqlAlchemyUnitOfWork(session))
+
+
+def get_update_group(session: SessionDep) -> UpdateModifierGroup:
+    return UpdateModifierGroup(_groups(session), SqlAlchemyUnitOfWork(session))
+
+
+def get_delete_group(session: SessionDep) -> DeleteModifierGroup:
+    return DeleteModifierGroup(_groups(session), SqlAlchemyUnitOfWork(session))
 
 
 def get_create_category(session: SessionDep) -> CreateCategory:
@@ -236,11 +336,11 @@ def get_reorder_categories(session: SessionDep) -> ReorderCategories:
 
 
 def get_create_item(session: SessionDep) -> CreateItem:
-    return CreateItem(_categories(session), _items(session), SqlAlchemyUnitOfWork(session))
+    return CreateItem(_categories(session), _items(session), _groups(session), SqlAlchemyUnitOfWork(session))
 
 
 def get_update_item(session: SessionDep) -> UpdateItem:
-    return UpdateItem(_categories(session), _items(session), SqlAlchemyUnitOfWork(session))
+    return UpdateItem(_categories(session), _items(session), _groups(session), SqlAlchemyUnitOfWork(session))
 
 
 def get_delete_item(session: SessionDep, cleanup: CleanupDep) -> DeleteItem:
@@ -336,6 +436,7 @@ async def create_item(
         description=body.description,
         price_cents=body.price_cents,
         badges=tuple(body.badges),
+        modifier_group_ids=tuple(body.modifier_group_ids),
         id=body.id,
     )
     result = await _run(use_case.execute(admin.tenant_id, draft))
@@ -357,6 +458,7 @@ async def update_item(
         is_available=body.is_available,
         category_id=body.category_id,
         badges=None if body.badges is None else tuple(body.badges),
+        modifier_group_ids=None if body.modifier_group_ids is None else tuple(body.modifier_group_ids),
     )
     result = await _run(use_case.execute(admin.tenant_id, item_id, changes))
     return result if isinstance(result, JSONResponse) else _item_out(result, images)
@@ -367,6 +469,53 @@ async def delete_item(
     item_id: uuid.UUID, admin: Admin, use_case: Annotated[DeleteItem, Depends(get_delete_item)]
 ) -> Response:
     result = await _run(use_case.execute(admin.tenant_id, item_id))
+    return result if isinstance(result, JSONResponse) else Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/modifier-groups", response_model=list[ModifierGroupOut])
+async def list_modifier_groups(
+    admin: Admin, use_case: Annotated[ListModifierGroups, Depends(get_list_groups)]
+) -> list[ModifierGroupOut]:
+    return [_group_out(group) for group in await use_case.execute(admin.tenant_id)]
+
+
+@router.post("/modifier-groups", response_model=ModifierGroupOut, status_code=status.HTTP_201_CREATED)
+async def create_modifier_group(
+    body: ModifierGroupIn, admin: Admin, use_case: Annotated[CreateModifierGroup, Depends(get_create_group)]
+) -> ModifierGroupOut | JSONResponse:
+    draft = ModifierGroupDraft(
+        name=body.name,
+        min_select=body.min_select,
+        max_select=body.max_select,
+        options=_option_drafts(body.options),
+        id=body.id,
+    )
+    result = await _run(use_case.execute(admin.tenant_id, draft))
+    return result if isinstance(result, JSONResponse) else _group_out(result)
+
+
+@router.patch("/modifier-groups/{group_id}", response_model=ModifierGroupOut)
+async def update_modifier_group(
+    group_id: uuid.UUID,
+    body: ModifierGroupUpdate,
+    admin: Admin,
+    use_case: Annotated[UpdateModifierGroup, Depends(get_update_group)],
+) -> ModifierGroupOut | JSONResponse:
+    changes = ModifierGroupChanges(
+        name=body.name,
+        min_select=body.min_select,
+        max_select=body.max_select,
+        options=None if body.options is None else _option_drafts(body.options),
+    )
+    result = await _run(use_case.execute(admin.tenant_id, group_id, changes))
+    return result if isinstance(result, JSONResponse) else _group_out(result)
+
+
+@router.delete("/modifier-groups/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_modifier_group(
+    group_id: uuid.UUID, admin: Admin, use_case: Annotated[DeleteModifierGroup, Depends(get_delete_group)]
+) -> Response:
+    result = await _run(use_case.execute(admin.tenant_id, group_id))
     return result if isinstance(result, JSONResponse) else Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
