@@ -1,8 +1,8 @@
 """Theme use cases: the admin edits a draft and publishes it; every role of the tenant reads the published one.
 
 Theme images follow the same registry as item images (media module): an image is attached when a draft
-first uses it and discarded once neither the draft nor the published theme uses it, so the tables never
-lose an image they are still showing while the admin tries another one in the draft.
+first uses it and discarded once neither the draft, the published theme nor a version kept in the history uses
+it, so the tables never lose an image they are still showing and a restored version never misses one.
 """
 
 import uuid
@@ -10,7 +10,15 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any
 
-from app.modules.theming.domain.repository import PublishedThemeCache, ThemeRecord, ThemeRepository
+from app.modules.theming.domain.import_theme import ImportedTheme, import_theme
+from app.modules.theming.domain.repository import (
+    HISTORY_LIMIT,
+    PublishedThemeCache,
+    ThemeHistory,
+    ThemeRecord,
+    ThemeRepository,
+    ThemeVersion,
+)
 from app.modules.theming.domain.theme import Theme, default_theme, parse_theme
 from app.shared.domain.images import (
     ALLOWED_FORMATS,
@@ -46,10 +54,15 @@ def _state(record: ThemeRecord | None) -> ThemeState:
     return ThemeState(draft=record.draft, published=record.published, published_at=record.published_at)
 
 
-def _in_use(record: ThemeRecord | None) -> set[str]:
+def _image_ids(*themes: Theme | None) -> set[str]:
+    return {public_id for theme in themes if theme is not None for public_id in theme.image_ids()}
+
+
+def _in_use(record: ThemeRecord | None, history: list[ThemeVersion]) -> set[str]:
+    kept = _image_ids(*(version.theme for version in history))
     if record is None:
-        return set()
-    return record.draft.image_ids() | (record.published.image_ids() if record.published else set())
+        return kept
+    return kept | _image_ids(record.draft, record.published)
 
 
 class GetThemeDraft:
@@ -95,12 +108,14 @@ class SaveThemeDraft:
     def __init__(
         self,
         themes: ThemeRepository,
+        history: ThemeHistory,
         images: ImageStorage,
         registry: ImageRegistry,
         uow: UnitOfWork,
         cleanup: ImageCleanupScheduler,
     ) -> None:
         self._themes = themes
+        self._history = history
         self._images = images
         self._registry = registry
         self._uow = uow
@@ -112,7 +127,7 @@ class SaveThemeDraft:
 
         # Only images the theme does not use yet need the storage. Its calls are slow and may fail, so the
         # short read that tells which ones are new ends (releasing the connection) before calling it.
-        new = slots.keys() - _in_use(await self._themes.get(tenant_id))
+        new = slots.keys() - _in_use(await self._themes.get(tenant_id), await self._history.list(tenant_id))
         await self._uow.commit()
         stored: dict[str, StoredImage] = {}
         for public_id in sorted(new):
@@ -131,17 +146,17 @@ class SaveThemeDraft:
                 raise
 
         record = await self._themes.lock(tenant_id, default_theme())
-        in_use = _in_use(record)
+        history = await self._history.list(tenant_id)
+        in_use = _in_use(record, history)
         for public_id in slots.keys() - in_use:
             # Only an id signed for this tenant and never used can be attached. One that was in use when
             # read above but was dropped since (another save) is not looked up again: it is not available.
             if public_id not in stored or not await self._registry.attach(tenant_id, public_id):
                 raise InvalidImage("Use an image uploaded for this slot; that one is not available")
-        published = record.published.image_ids() if record.published else set()
-        dropped = record.draft.image_ids() - slots.keys() - published
+        updated = replace(record, draft=theme)
+        dropped = record.draft.image_ids() - _in_use(updated, history)
         for public_id in dropped:
             await self._registry.discard(tenant_id, public_id)
-        updated = replace(record, draft=theme)
         await self._themes.update(updated)
         await self._uow.commit()
         if dropped:
@@ -150,9 +165,12 @@ class SaveThemeDraft:
 
 
 class PublishTheme:
+    """The draft becomes what the tables see and a new version of the history, which keeps the last ones."""
+
     def __init__(
         self,
         themes: ThemeRepository,
+        history: ThemeHistory,
         registry: ImageRegistry,
         uow: UnitOfWork,
         cleanup: ImageCleanupScheduler,
@@ -160,6 +178,7 @@ class PublishTheme:
         clock: Clock,
     ) -> None:
         self._themes = themes
+        self._history = history
         self._registry = registry
         self._uow = uow
         self._cleanup = cleanup
@@ -168,14 +187,47 @@ class PublishTheme:
 
     async def execute(self, tenant_id: uuid.UUID) -> ThemeState:
         record = await self._themes.lock(tenant_id, default_theme())
-        previous = record.published.image_ids() if record.published else set()
-        dropped = previous - record.draft.image_ids()
+        versions = await self._history.list(tenant_id)
+        version = ThemeVersion(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            number=versions[0].number + 1 if versions else 1,
+            theme=record.draft,
+            published_at=self._clock.now(),
+        )
+        kept, forgotten = [version, *versions][:HISTORY_LIMIT], versions[HISTORY_LIMIT - 1 :]
+        updated = replace(record, published=record.draft, published_at=version.published_at)
+
+        candidates = _image_ids(record.published, *(old.theme for old in forgotten))
+        dropped = candidates - _in_use(updated, kept)
         for public_id in dropped:
             await self._registry.discard(tenant_id, public_id)
-        updated = replace(record, published=record.draft, published_at=self._clock.now())
         await self._themes.update(updated)
+        await self._history.add(version)
+        if forgotten:
+            await self._history.remove(tenant_id, {old.id for old in forgotten})
         await self._uow.commit()
         await self._cache.invalidate(tenant_id)
         if dropped:
             await self._cleanup.request_cleanup()
         return _state(updated)
+
+
+class ListThemeVersions:
+    def __init__(self, history: ThemeHistory) -> None:
+        self._history = history
+
+    async def execute(self, tenant_id: uuid.UUID) -> list[ThemeVersion]:
+        return await self._history.list(tenant_id)
+
+
+class ImportTheme:
+    """Checks an exported theme for this tenant and returns it ready for the draft; nothing is saved."""
+
+    def __init__(self, themes: ThemeRepository, history: ThemeHistory) -> None:
+        self._themes = themes
+        self._history = history
+
+    async def execute(self, tenant_id: uuid.UUID, document: Any) -> ImportedTheme:
+        available = _in_use(await self._themes.get(tenant_id), await self._history.list(tenant_id))
+        return import_theme(document, tenant_id, available)

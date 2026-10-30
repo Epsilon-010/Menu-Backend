@@ -1,12 +1,12 @@
 import uuid
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.theming.domain.repository import ThemeRecord
+from app.modules.theming.domain.repository import ThemeRecord, ThemeVersion
 from app.modules.theming.domain.theme import Theme, parse_theme
-from app.modules.theming.infrastructure.models import ThemeModel
+from app.modules.theming.infrastructure.models import ThemeModel, ThemeVersionModel
 
 
 def _to_record(model: ThemeModel) -> ThemeRecord:
@@ -52,4 +52,43 @@ class SqlAlchemyThemeRepository:
                 published=record.published.to_dict() if record.published is not None else None,
                 published_at=record.published_at,
             )
+        )
+
+
+class SqlAlchemyThemeHistory:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def list(self, tenant_id: uuid.UUID) -> list[ThemeVersion]:
+        models = await self._session.scalars(
+            select(ThemeVersionModel)
+            .where(ThemeVersionModel.tenant_id == tenant_id)
+            .order_by(ThemeVersionModel.number.desc())
+        )
+        return [
+            ThemeVersion(
+                id=model.id,
+                tenant_id=model.tenant_id,
+                number=model.number,
+                theme=parse_theme(model.theme, model.tenant_id),
+                published_at=model.published_at,
+            )
+            for model in models
+        ]
+
+    async def add(self, version: ThemeVersion) -> None:
+        self._session.add(
+            ThemeVersionModel(
+                id=version.id,
+                tenant_id=version.tenant_id,
+                number=version.number,
+                theme=version.theme.to_dict(),
+                published_at=version.published_at,
+            )
+        )
+        await self._session.flush()
+
+    async def remove(self, tenant_id: uuid.UUID, ids: set[uuid.UUID]) -> None:
+        await self._session.execute(
+            delete(ThemeVersionModel).where(ThemeVersionModel.tenant_id == tenant_id, ThemeVersionModel.id.in_(ids))
         )

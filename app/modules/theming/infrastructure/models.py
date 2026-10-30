@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Uuid, func
+from sqlalchemy import DateTime, ForeignKey, Integer, UniqueConstraint, Uuid, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -20,3 +20,15 @@ class ThemeModel(UUIDPrimaryKey, Base):
     published: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class ThemeVersionModel(UUIDPrimaryKey, Base):
+    """A published theme kept in the tenant's history (its last versions), to restore it into the draft."""
+
+    __tablename__ = "theme_versions"
+    __table_args__ = (UniqueConstraint("tenant_id", "number", name="uq_theme_versions_tenant_number"),)
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    number: Mapped[int] = mapped_column(Integer)
+    theme: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

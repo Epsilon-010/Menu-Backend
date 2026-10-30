@@ -13,7 +13,7 @@ from app.modules.staff.domain.user import STAFF_CODE_ALPHABET, STAFF_MEMBER_ROLE
 from app.modules.tables.domain.table import Table
 from app.modules.tenants.domain.errors import TenantIdTaken
 from app.modules.tenants.domain.tenant import Tenant
-from app.modules.theming.domain.repository import ThemeRecord
+from app.modules.theming.domain.repository import ThemeRecord, ThemeVersion
 from app.modules.theming.domain.theme import Theme
 from app.shared.domain.images import ImageStorageUnavailable, ImageVariant, StoredImage, UploadSignature
 
@@ -533,6 +533,23 @@ class InMemoryThemeRepository:
     async def update(self, record: ThemeRecord) -> None:
         assert self.records[record.tenant_id].id == record.id
         self.records[record.tenant_id] = record
+
+
+class InMemoryThemeHistory:
+    def __init__(self) -> None:
+        self.versions: list[ThemeVersion] = []
+
+    async def list(self, tenant_id: uuid.UUID) -> list[ThemeVersion]:
+        own = [version for version in self.versions if version.tenant_id == tenant_id]
+        return sorted(own, key=lambda version: version.number, reverse=True)
+
+    async def add(self, version: ThemeVersion) -> None:
+        taken = {(v.tenant_id, v.number) for v in self.versions}
+        assert (version.tenant_id, version.number) not in taken
+        self.versions.append(version)
+
+    async def remove(self, tenant_id: uuid.UUID, ids: set[uuid.UUID]) -> None:
+        self.versions = [v for v in self.versions if not (v.tenant_id == tenant_id and v.id in ids)]
 
 
 class FakePublishedThemeCache:

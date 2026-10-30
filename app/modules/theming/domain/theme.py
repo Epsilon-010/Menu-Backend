@@ -685,7 +685,7 @@ def parse_theme(raw: Any, tenant_id: uuid.UUID) -> Theme:
     """Validates a whole theme document (as JSON) for that tenant. Raises InvalidTheme naming the field."""
     doc = _Reader(raw, "")
     version = doc.get("schema_version")
-    if isinstance(version, bool) or version != SCHEMA_VERSION:
+    if isinstance(version, bool) or not isinstance(version, int) or version != SCHEMA_VERSION:
         raise InvalidTheme("schema_version")
     theme = Theme(
         schema_version=SCHEMA_VERSION,
