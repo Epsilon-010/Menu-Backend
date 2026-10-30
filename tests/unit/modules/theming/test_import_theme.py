@@ -130,3 +130,14 @@ def test_an_image_id_that_is_not_text_is_rejected_not_removed() -> None:
     with pytest.raises(InvalidTheme) as error:
         import_theme(doc, TENANT, set())
     assert error.value.field == "brand.logo.image_id"
+
+
+def test_a_document_nested_too_deep_is_rejected_not_a_crash() -> None:
+    nested: Any = []
+    for _ in range(5000):
+        nested = [nested]
+    doc = current()
+    doc["evil"] = nested
+    with pytest.raises(InvalidTheme) as error:
+        import_theme(doc, TENANT, set())
+    assert error.value.field == "theme"

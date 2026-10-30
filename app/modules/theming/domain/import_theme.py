@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from app.modules.theming.domain.theme import SCHEMA_VERSION, Theme, parse_theme
+from app.modules.theming.domain.theme import SCHEMA_VERSION, InvalidTheme, Theme, parse_theme
 
 IMAGE_SLOTS = ("logo", "banner", "background")
 
@@ -128,7 +128,10 @@ def import_theme(raw: Any, tenant_id: uuid.UUID, available_images: set[str]) -> 
     the tenant's themes (draft, published, history) still use: the only ones an imported theme may keep."""
     if not isinstance(raw, Mapping):
         return ImportedTheme(parse_theme(raw, tenant_id), ())  # raises, naming the document
-    doc = copy.deepcopy(dict(raw))
+    try:
+        doc = copy.deepcopy(dict(raw))
+    except RecursionError as error:  # nested far deeper than any theme: not a theme
+        raise InvalidTheme("theme") from error
     _upgrade(doc)
     removed = _remove_unavailable_images(doc, available_images)
     return ImportedTheme(parse_theme(doc, tenant_id), removed)
