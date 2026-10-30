@@ -523,3 +523,56 @@ async def test_an_item_id_reused_for_other_data_or_by_another_tenant_is_refused(
         await CreateItem(world.categories, world.items, world.uow).execute(tenant, draft)
 
     assert [(i.name, i.price_cents) for i in world.items.items.values()] == [("Pastor", 2500)]
+
+
+# --- Badges (Slice 13): "Nuevo / Popular, Sin gluten, Vegano / Vegetariano, Picante"
+
+
+async def test_an_item_has_no_badges_until_the_admin_sets_them(world: World) -> None:
+    item = await world.item(await world.category())
+    assert item.badges == ()
+
+
+async def test_badges_are_kept_once_each_in_the_fixed_order(world: World) -> None:
+    category = await world.category()
+    draft = ItemDraft(
+        category_id=category.id, name="Pastor", description="", price_cents=2500, badges=("vegan", "new", "vegan")
+    )
+    item = await CreateItem(world.categories, world.items, world.uow).execute(TENANT_A, draft)
+    assert item.badges == ("new", "vegan")
+
+    updated = await world.update_item().execute(TENANT_A, item.id, ItemChanges(badges=("gluten_free", "spicy", "popular")))
+    assert updated.badges == ("popular", "spicy", "gluten_free")
+    assert (await world.items.get(TENANT_A, item.id)).badges == updated.badges  # type: ignore[union-attr]
+
+    cleared = await world.update_item().execute(TENANT_A, item.id, ItemChanges(badges=()))
+    assert cleared.badges == ()
+
+
+async def test_other_changes_keep_the_badges(world: World) -> None:
+    item = await world.item(await world.category())
+    with_badges = await world.update_item().execute(TENANT_A, item.id, ItemChanges(badges=("vegetarian",)))
+    renamed = await world.update_item().execute(TENANT_A, with_badges.id, ItemChanges(name="Pastor especial"))
+    assert renamed.badges == ("vegetarian",)
+
+
+@pytest.mark.parametrize("badges", [("organic",), ("New",), ("",), ("new", "<b>")])
+async def test_unknown_badges_are_rejected(world: World, badges: tuple[str, ...]) -> None:
+    category = await world.category()
+    draft = ItemDraft(category_id=category.id, name="Pastor", description="", price_cents=2500, badges=badges)
+    with pytest.raises(InvalidCatalogData):
+        await CreateItem(world.categories, world.items, world.uow).execute(TENANT_A, draft)
+    item = await world.item(category, name="Suadero")
+    with pytest.raises(InvalidCatalogData):
+        await world.update_item().execute(TENANT_A, item.id, ItemChanges(badges=badges))
+    assert (await world.items.get(TENANT_A, item.id)).badges == ()  # type: ignore[union-attr]
+
+
+async def test_repeating_a_create_with_other_badges_is_another_item(world: World) -> None:
+    category = await world.category()
+    draft = ItemDraft(category_id=category.id, name="Pastor", description="", price_cents=2500, id=uuid.uuid4(), badges=("new",))
+    use_case = CreateItem(world.categories, world.items, world.uow)
+    first = await use_case.execute(TENANT_A, draft)
+    assert await use_case.execute(TENANT_A, replace(draft, badges=("new", "new"))) == first
+    with pytest.raises(CatalogIdTaken):
+        await use_case.execute(TENANT_A, replace(draft, badges=("spicy",)))

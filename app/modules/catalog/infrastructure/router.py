@@ -4,7 +4,7 @@ from typing import Annotated, TypeVar
 
 from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.catalog.application.item_images import RemoveItemImage, RequestImageUpload, SetItemImage
@@ -24,7 +24,7 @@ from app.modules.catalog.application.manage_items import (
     ReorderItems,
     UpdateItem,
 )
-from app.modules.catalog.domain.catalog import MAX_PRICE_CENTS, Category, Item
+from app.modules.catalog.domain.catalog import BADGES, MAX_PRICE_CENTS, Category, Item
 from app.modules.catalog.domain.errors import (
     CatalogIdTaken,
     CategoryNameNotAvailable,
@@ -97,6 +97,7 @@ class ItemIn(_In):
     name: str = Field(max_length=200)
     description: str = Field(default="", max_length=2000)
     price_cents: int = Field(strict=True, ge=0, le=MAX_PRICE_CENTS)
+    badges: list[StrictStr] = Field(default_factory=list, max_length=len(BADGES))
 
 
 class ItemUpdate(_In):
@@ -105,6 +106,7 @@ class ItemUpdate(_In):
     description: str | None = Field(default=None, max_length=2000)
     price_cents: int | None = Field(default=None, strict=True, ge=0, le=MAX_PRICE_CENTS)
     is_available: bool | None = None
+    badges: list[StrictStr] | None = Field(default=None, max_length=len(BADGES))
 
 
 class OrderIn(_In):
@@ -130,6 +132,7 @@ class ItemOut(BaseModel):
     position: int
     is_available: bool
     image: ImageOut | None
+    badges: list[str]
 
 
 class CategoryOut(BaseModel):
@@ -173,6 +176,7 @@ def _item_out(item: Item, images: ImageStorage) -> ItemOut:
         position=item.position,
         is_available=item.is_available,
         image=image,
+        badges=list(item.badges),
     )
 
 
@@ -331,6 +335,7 @@ async def create_item(
         name=body.name,
         description=body.description,
         price_cents=body.price_cents,
+        badges=tuple(body.badges),
         id=body.id,
     )
     result = await _run(use_case.execute(admin.tenant_id, draft))
@@ -351,6 +356,7 @@ async def update_item(
         price_cents=body.price_cents,
         is_available=body.is_available,
         category_id=body.category_id,
+        badges=None if body.badges is None else tuple(body.badges),
     )
     result = await _run(use_case.execute(admin.tenant_id, item_id, changes))
     return result if isinstance(result, JSONResponse) else _item_out(result, images)

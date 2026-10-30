@@ -28,6 +28,7 @@ class MenuItemOut(BaseModel):
     description: str
     price_cents: int
     image: MenuImageOut | None
+    badges: list[str]
 
 
 class MenuCategoryOut(BaseModel):
@@ -64,6 +65,7 @@ async def _read_menu(tenant_id: uuid.UUID, use_case: GetMenu, images: ImageStora
                     )
                     if item.image_public_id is not None
                     else None,
+                    badges=list(item.badges),
                 )
                 for item in entry.items
             ],

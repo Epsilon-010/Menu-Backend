@@ -20,6 +20,7 @@ class ItemDraft:
     name: str
     description: str
     price_cents: int
+    badges: tuple[str, ...] = ()
     # Sent by the client to make the create idempotent; None generates one.
     id: uuid.UUID | None = None
 
@@ -33,6 +34,7 @@ class ItemChanges:
     price_cents: int | None = None
     is_available: bool | None = None
     category_id: uuid.UUID | None = None
+    badges: tuple[str, ...] | None = None
 
 
 async def get_item(items: ItemRepository, tenant_id: uuid.UUID, item_id: uuid.UUID, for_update: bool = False) -> Item:
@@ -80,7 +82,7 @@ class CreateItem:
         if draft.id is not None:
             existing = await self._items.get(tenant_id, draft.id)
             if existing is not None:
-                if not existing.same_draft(draft.category_id, draft.name, draft.description, draft.price_cents):
+                if not existing.same_draft(draft.category_id, draft.name, draft.description, draft.price_cents, draft.badges):
                     raise CatalogIdTaken(draft.id)
                 return existing
             if await self._items.exists_anywhere(draft.id):
@@ -93,6 +95,7 @@ class CreateItem:
             draft.price_cents,
             await self._items.next_position(tenant_id, draft.category_id),
             draft.id,
+            draft.badges,
         )
         await self._items.add(item)
         await self._uow.commit()
@@ -118,6 +121,7 @@ class UpdateItem:
             description=changes.description,
             price_cents=changes.price_cents,
             is_available=changes.is_available,
+            badges=changes.badges,
         )
         if changes.category_id is not None and changes.category_id != item.category_id:
             await get_category(self._categories, tenant_id, changes.category_id)

@@ -71,6 +71,7 @@ def test_the_table_sees_only_visible_categories_with_available_items(
                         "thumbnail_url": f"https://images.test/thumbnail/{public_id}",
                         "card_url": f"https://images.test/card/{public_id}",
                     },
+                    "badges": [],
                 }
             ],
         }
@@ -131,3 +132,30 @@ def test_a_tenant_never_sees_another_tenant_menu(
     assert menu(other_tablet) == []
     ok(create_category(other, "Hamburguesas"), 201)
     assert [category["name"] for category in menu(admin_of(new_client))] == ["Tacos"]
+
+
+def test_the_table_sees_each_item_badges_right_after_they_change(new_client: ClientFactory, tenant_a: SeedResult) -> None:
+    admin = admin_of(new_client)
+    ids = build_menu(admin)
+    tablet = tablet_of(new_client, created(create_table(admin)))
+    assert menu(tablet)[0]["items"][0]["badges"] == []  # now cached
+
+    ok(admin.patch(f"{ITEMS_URL}/{ids['pastor']}", json={"badges": ["gluten_free", "spicy"]}))
+    assert menu(tablet)[0]["items"][0]["badges"] == ["spicy", "gluten_free"]
+
+
+def test_a_menu_cached_before_badges_existed_is_never_served(new_client: ClientFactory, tenant_a: SeedResult) -> None:
+    admin = admin_of(new_client)
+    build_menu(admin)
+
+    async def cache_stale_menu() -> None:
+        redis = Redis.from_url(get_settings().redis_url, decode_responses=True)
+        try:
+            generation = await redis.get(f"menu:{tenant_a.tenant_id}:generation") or "0"
+            # Where the menu was cached before items had badges.
+            await redis.set(f"menu:{tenant_a.tenant_id}:{generation}", '[{"id": "x", "name": "Old", "items": []}]')
+        finally:
+            await redis.aclose()
+
+    asyncio.run(cache_stale_menu())
+    assert [category["name"] for category in menu(admin)] == ["Tacos"]

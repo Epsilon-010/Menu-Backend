@@ -7,6 +7,9 @@ from redis.exceptions import RedisError
 logger = logging.getLogger(__name__)
 
 _TTL_SECONDS = 600
+# Moves on whenever the cached JSON changes shape, so a menu cached before a deploy is never served after it
+# (v2: items carry their badges).
+_FORMAT = "v2"
 
 
 class RedisMenuCache:
@@ -26,7 +29,7 @@ class RedisMenuCache:
 
     @staticmethod
     def _menu_key(tenant_id: uuid.UUID, generation: str) -> str:
-        return f"menu:{tenant_id}:{generation}"
+        return f"menu:{tenant_id}:{_FORMAT}:{generation}"
 
     async def get(self, tenant_id: uuid.UUID) -> tuple[str | None, str | None]:
         """(generation, cached menu); the generation is None when Redis cannot be read."""

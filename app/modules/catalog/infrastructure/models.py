@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    ARRAY,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -61,4 +62,6 @@ class ItemModel(UUIDPrimaryKey, Base):
     is_available: Mapped[bool] = mapped_column(Boolean, server_default=true())
     # Storage public id (tenants/{tenant_id}/items/...), never a URL.
     image_public_id: Mapped[str | None] = mapped_column(String(255))
+    # Badge ids from the domain's fixed list, in its order (validated there).
+    badges: Mapped[list[str]] = mapped_column(ARRAY(String(20)), server_default=text("'{}'"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
