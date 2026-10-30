@@ -10,6 +10,8 @@ MAX_ITEM_NAME_LENGTH = 80
 MAX_DESCRIPTION_LENGTH = 500
 # Prices are integer cents (never float): 0 to 100,000.00.
 MAX_PRICE_CENTS = 10_000_000
+# The badges a product can show, in the order the menu shows them.
+BADGES = ("new", "popular", "spicy", "vegan", "vegetarian", "gluten_free")
 
 
 def validate_category_name(name: str) -> str:
@@ -37,6 +39,14 @@ def validate_price(price_cents: int) -> int:
     if isinstance(price_cents, bool) or not isinstance(price_cents, int) or not 0 <= price_cents <= MAX_PRICE_CENTS:
         raise InvalidCatalogData(f"Price must be a whole number of cents from 0 to {MAX_PRICE_CENTS}")
     return price_cents
+
+
+def validate_badges(badges: Iterable[str]) -> tuple[str, ...]:
+    """Each badge once, in the fixed order; anything outside the list is rejected."""
+    chosen = set(badges)
+    if not chosen <= set(BADGES):
+        raise InvalidCatalogData(f"Badges must be some of: {', '.join(BADGES)}")
+    return tuple(badge for badge in BADGES if badge in chosen)
 
 
 def ensure_complete_order(current_ids: Iterable[uuid.UUID], requested_ids: list[uuid.UUID]) -> None:
@@ -90,6 +100,7 @@ class Item:
     position: int
     is_available: bool = True
     image_public_id: str | None = None
+    badges: tuple[str, ...] = ()
     id: uuid.UUID = field(default_factory=uuid.uuid4)
 
     @classmethod
@@ -102,6 +113,7 @@ class Item:
         price_cents: int,
         position: int,
         item_id: uuid.UUID | None = None,
+        badges: Iterable[str] = (),
     ) -> "Item":
         """`item_id` comes from the client to make the create idempotent; None generates one."""
         return cls(
@@ -111,16 +123,20 @@ class Item:
             description=validate_description(description),
             price_cents=validate_price(price_cents),
             position=position,
+            badges=validate_badges(badges),
             id=item_id or uuid.uuid4(),
         )
 
-    def same_draft(self, category_id: uuid.UUID, name: str, description: str, price_cents: int) -> bool:
+    def same_draft(
+        self, category_id: uuid.UUID, name: str, description: str, price_cents: int, badges: Iterable[str] = ()
+    ) -> bool:
         """Whether a repeated create asks for exactly this item (after the same normalization)."""
-        return (self.category_id, self.name, self.description, self.price_cents) == (
+        return (self.category_id, self.name, self.description, self.price_cents, self.badges) == (
             category_id,
             validate_item_name(name),
             validate_description(description),
             validate_price(price_cents),
+            validate_badges(badges),
         )
 
     def with_changes(
@@ -129,6 +145,7 @@ class Item:
         description: str | None = None,
         price_cents: int | None = None,
         is_available: bool | None = None,
+        badges: Iterable[str] | None = None,
     ) -> "Item":
         return replace(
             self,
@@ -136,6 +153,7 @@ class Item:
             description=self.description if description is None else validate_description(description),
             price_cents=self.price_cents if price_cents is None else validate_price(price_cents),
             is_available=self.is_available if is_available is None else is_available,
+            badges=self.badges if badges is None else validate_badges(badges),
         )
 
 

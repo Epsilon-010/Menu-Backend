@@ -167,12 +167,45 @@ class LayoutDoc(_Strict):
     cart: StrictStr
 
 
+class CardImageDoc(_Strict):
+    aspect: StrictStr
+    fit: StrictStr
+    position: StrictStr
+
+
+class CardBorderDoc(_Strict):
+    width: StrictStr
+    color: StrictStr
+
+
+class AddButtonDoc(_Strict):
+    style: StrictStr
+    shape: StrictStr
+
+
+class CardsDoc(_Strict):
+    template: StrictStr
+    image: CardImageDoc
+    radius: StrictStr
+    shadow: StrictStr
+    border: CardBorderDoc
+    padding: StrictStr
+    description_lines: StrictInt
+    price_position: StrictStr
+    add_button: AddButtonDoc
+    hover: StrictStr
+    animation: StrictStr
+    overlay_opacity: StrictInt
+    badge_shape: StrictStr
+
+
 class ThemeDoc(_Strict):
     schema_version: StrictInt
     colors: ColorsDoc
     brand: BrandDoc
     typography: TypographyDoc
     layout: LayoutDoc
+    cards: CardsDoc
 
 
 class ContrastWarningOut(BaseModel):
@@ -193,6 +226,7 @@ class ThemePresetOut(BaseModel):
     colors: ColorsDoc
     typography: TypographyDoc
     layout: LayoutDoc
+    cards: CardsDoc
 
 
 class ThemeDraftOut(BaseModel):
@@ -202,7 +236,7 @@ class ThemeDraftOut(BaseModel):
     has_unpublished_changes: bool
     contrast_warnings: list[ContrastWarningOut]
     defaults: DefaultPalettesOut
-    # Complete designs (colors, typography and layout) the editor applies to the draft; the brand is never part of one.
+    # Complete designs (colors, typography, layout and cards) the editor applies to the draft; the brand is never part of one.
     presets: list[ThemePresetOut]
     # Delivery URL of every image the draft or the published theme uses, by public id.
     image_urls: dict[str, str]

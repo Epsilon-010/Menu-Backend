@@ -1,4 +1,4 @@
-"""Presets: complete designs (palette, mode, typography and layout) an admin starts from instead of designing from scratch.
+"""Presets: complete designs (palette, mode, typography, layout and cards) an admin starts from instead of designing from scratch.
 
 A preset never carries brand content (name, texts, images): applying one keeps the tenant's brand. Every preset is
 a valid theme and readable (WCAG AA); the tests check it, so a new preset cannot ship inconsistent.
@@ -8,7 +8,12 @@ from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 from app.modules.theming.domain.theme import (
+    DEFAULT_CARDS,
     DEFAULT_LAYOUT,
+    AddButton,
+    CardBorder,
+    CardImage,
+    Cards,
     Colors,
     Gradient,
     Layout,
@@ -30,9 +35,10 @@ class ThemePreset:
     colors: Colors
     typography: Typography
     layout: Layout
+    cards: Cards
 
     def apply(self, theme: Theme) -> Theme:
-        return replace(theme, colors=self.colors, typography=self.typography, layout=self.layout)
+        return replace(theme, colors=self.colors, typography=self.typography, layout=self.layout, cards=self.cards)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -42,6 +48,7 @@ class ThemePreset:
             "colors": colors_to_dict(self.colors),
             "typography": asdict(self.typography),
             "layout": asdict(self.layout),
+            "cards": asdict(self.cards),
         }
 
 
@@ -78,6 +85,38 @@ def _layout(
     )
 
 
+def _cards(
+    template: str,
+    image: tuple[str, str, str],
+    radius: str,
+    shadow: str,
+    border: tuple[str, str],
+    padding: str,
+    description_lines: int,
+    price_position: str,
+    add_button: tuple[str, str],
+    hover: str,
+    animation: str,
+    badge_shape: str,
+    overlay_opacity: int = DEFAULT_CARDS.overlay_opacity,
+) -> Cards:
+    return Cards(
+        template=template,
+        image=CardImage(*image),
+        radius=radius,
+        shadow=shadow,
+        border=CardBorder(*border),
+        padding=padding,
+        description_lines=description_lines,
+        price_position=price_position,
+        add_button=AddButton(*add_button),
+        hover=hover,
+        animation=animation,
+        overlay_opacity=overlay_opacity,
+        badge_shape=badge_shape,
+    )
+
+
 def _flat(color: str, to: str) -> Gradient:
     return Gradient(enabled=False, from_color=color, to_color=to, angle=135)
 
@@ -91,6 +130,7 @@ CLASSIC = ThemePreset(
     colors=_DEFAULT.colors,
     typography=_DEFAULT.typography,
     layout=_DEFAULT.layout,
+    cards=_DEFAULT.cards,
 )
 
 BISTRO = ThemePreset(
@@ -130,6 +170,7 @@ BISTRO = ThemePreset(
         ),
     ),
     layout=_layout("sidebar", "list", 1, "spacious", "underline", "panel"),
+    cards=_cards("horizontal", ("square", "cover", "right"), "md", "none", ("thin", "border"), "spacious", 2, "top", ("text", "square"), "none", "fade", "rounded"),
 )
 
 FIESTA = ThemePreset(
@@ -169,6 +210,7 @@ FIESTA = ThemePreset(
         ),
     ),
     layout=_layout("chips", "carousel", 2, "comfortable", "band", "floating"),
+    cards=_cards("overlay", ("landscape", "cover", "left"), "xl", "lg", ("none", "border"), "comfortable", 2, "bottom", ("both", "pill"), "grow", "rise", "pill", overlay_opacity=70),
 )
 
 CAFE = ThemePreset(
@@ -208,6 +250,7 @@ CAFE = ThemePreset(
         ),
     ),
     layout=_layout("sections", "grid", 3, "comfortable", "underline", "bar"),
+    cards=_cards("vertical", ("square", "cover", "left"), "lg", "sm", ("thin", "border"), "comfortable", 3, "bottom", ("text", "rounded"), "lift", "fade", "pill"),
 )
 
 GARDEN = ThemePreset(
@@ -247,6 +290,7 @@ GARDEN = ThemePreset(
         ),
     ),
     layout=_layout("tabs", "grid", 2, "spacious", "plain", "panel"),
+    cards=_cards("vertical", ("wide", "cover", "left"), "xl", "md", ("none", "border"), "spacious", 3, "top", ("both", "pill"), "lift", "rise", "pill"),
 )
 
 STREET = ThemePreset(
@@ -286,6 +330,7 @@ STREET = ThemePreset(
         ),
     ),
     layout=_layout("tabs", "list", 1, "compact", "band", "floating"),
+    cards=_cards("horizontal", ("landscape", "cover", "left"), "none", "none", ("thick", "accent"), "compact", 2, "top", ("icon", "square"), "grow", "none", "rounded", overlay_opacity=80),
 )
 
 # The order the gallery shows them; the default design comes first.

@@ -119,6 +119,7 @@ def test_admin_builds_the_catalog_with_images(
         "position": 0,
         "is_available": True,
         "image": None,
+        "badges": [],
     }
     suadero = ok(create_item(admin, tacos["id"], "Suadero", 2200), 201)
 
@@ -439,3 +440,39 @@ def test_an_id_reused_for_other_data_or_by_another_tenant_answers_409(
     # The same generic answer either way: nothing says the id lives in another tenant.
     assert {r.json()["detail"] for r in clashes} == {"That id is already used by something else"}
     assert catalog(other) == []
+
+
+# --- Badges (Slice 13): each product has zero or more from a fixed list
+
+
+def test_admin_sets_badges_on_items_and_unknown_ones_are_rejected(new_client: ClientFactory, tenant_a: SeedResult) -> None:
+    admin = admin_of(new_client)
+    tacos = ok(create_category(admin), 201)["id"]
+    plain = ok(create_item(admin, tacos), 201)
+    assert plain["badges"] == []
+
+    created_item = ok(
+        admin.post(ITEMS_URL, json={"category_id": tacos, "name": "Vegano", "price_cents": 3000, "badges": ["vegan", "new"]}),
+        201,
+    )
+    assert created_item["badges"] == ["new", "vegan"]
+    changed = ok(admin.patch(f"{ITEMS_URL}/{plain['id']}", json={"badges": ["spicy", "popular", "spicy"]}))
+    assert changed["badges"] == ["popular", "spicy"]
+    assert ok(admin.patch(f"{ITEMS_URL}/{plain['id']}", json={"price_cents": 2600}))["badges"] == ["popular", "spicy"]
+    listed = {item["name"]: item["badges"] for item in catalog(admin)[0]["items"]}
+    assert listed == {"Pastor": ["popular", "spicy"], "Vegano": ["new", "vegan"]}
+
+    for badges in (["organic"], ["Vegan"], "vegan", [1]):
+        response = admin.patch(f"{ITEMS_URL}/{plain['id']}", json={"badges": badges})
+        assert response.status_code == 422
+    assert ok(admin.patch(f"{ITEMS_URL}/{plain['id']}", json={}))["badges"] == ["popular", "spicy"]
+
+
+def test_another_tenant_cannot_change_the_badges(new_client: ClientFactory, tenant_a: SeedResult, tenant_b: SeedResult) -> None:
+    owner_a = admin_of(new_client)
+    owner_b = admin_of(new_client, "boss@example.com")
+    item = ok(create_item(owner_a, ok(create_category(owner_a), 201)["id"]), 201)
+    assert owner_b.patch(f"{ITEMS_URL}/{item['id']}", json={"badges": ["new"]}).status_code == 404
+    tablet = tablet_of(new_client, created(create_table(owner_a)))
+    assert tablet.patch(f"{ITEMS_URL}/{item['id']}", json={"badges": ["new"]}).status_code == 403
+    assert catalog(owner_a)[0]["items"][0]["badges"] == []

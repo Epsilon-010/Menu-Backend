@@ -8,7 +8,7 @@ from typing import Any
 from alembic.config import Config
 from alembic import command
 
-from app.modules.theming.domain.theme import default_theme, parse_theme
+from app.modules.theming.domain.theme import default_theme
 from app.seed import SeedResult
 from tests.integration.modules.auth.test_auth_api import _seed
 from tests.integration.modules.theming.test_typography_migration import (
@@ -18,6 +18,8 @@ from tests.integration.modules.theming.test_typography_migration import (
     stored,
 )
 
+WITH_LAYOUT = "9c2e41b7d5a3"
+
 Json = dict[str, Any]
 
 
@@ -25,6 +27,7 @@ def v2_document(primary: str, heading_font: str) -> Json:
     """A theme as Slice 11 stored it."""
     doc = default_theme().to_dict()
     del doc["layout"]
+    del doc["cards"]
     doc["schema_version"] = 2
     doc["colors"]["primary"] = primary
     doc["typography"]["fonts"]["heading"] = heading_font
@@ -49,7 +52,7 @@ def test_stored_v2_themes_get_the_default_layout_and_downgrade_removes_it(at_hea
     )
     run(insert.format("NULL"), id=uuid.uuid4(), tenant=draft_only.tenant_id, draft=json.dumps(lone_draft))
 
-    command.upgrade(at_head_afterwards, "head")
+    command.upgrade(at_head_afterwards, WITH_LAYOUT)
 
     default_layout = default_theme().to_dict()["layout"]
     upgraded_draft, upgraded_published = stored(published_tenant.tenant_id)
@@ -61,8 +64,8 @@ def test_stored_v2_themes_get_the_default_layout_and_downgrade_removes_it(at_hea
         assert {key: value for key, value in doc.items() if key not in ("layout", "schema_version")} == {
             key: value for key, value in original.items() if key != "schema_version"
         }
-    assert parse_theme(upgraded_draft, published_tenant.tenant_id).typography.fonts.heading == "lora"
-    assert parse_theme(upgraded_published, published_tenant.tenant_id).colors.primary == "#222222"
+    assert upgraded_draft["typography"]["fonts"]["heading"] == "lora"
+    assert upgraded_published["colors"]["primary"] == "#222222"
     assert stored(draft_only.tenant_id)[1] is None
 
     command.downgrade(at_head_afterwards, WITH_TYPOGRAPHY)
@@ -74,6 +77,8 @@ def test_the_upgrade_leaves_documents_already_at_version_3_untouched(at_head_aft
     tenant: SeedResult = asyncio.run(_seed("La Taquería", "owner@example.com"))
     command.downgrade(at_head_afterwards, WITH_TYPOGRAPHY)
     current = default_theme().to_dict()
+    del current["cards"]
+    current["schema_version"] = 3
     current["layout"]["navigation"] = "tabs"
     run(
         "INSERT INTO themes (id, tenant_id, draft, published) VALUES (:id, :tenant, CAST(:draft AS jsonb), NULL)",
@@ -81,5 +86,5 @@ def test_the_upgrade_leaves_documents_already_at_version_3_untouched(at_head_aft
         tenant=tenant.tenant_id,
         draft=json.dumps(current),
     )
-    command.upgrade(at_head_afterwards, "head")
+    command.upgrade(at_head_afterwards, WITH_LAYOUT)
     assert stored(tenant.tenant_id) == (current, None)

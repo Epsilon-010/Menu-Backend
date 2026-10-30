@@ -44,6 +44,7 @@ def _item(model: ItemModel) -> Item:
         position=model.position,
         is_available=model.is_available,
         image_public_id=model.image_public_id,
+        badges=tuple(model.badges),
     )
 
 
@@ -190,6 +191,7 @@ class SqlAlchemyItemRepository:
                 position=item.position,
                 is_available=item.is_available,
                 image_public_id=item.image_public_id,
+                badges=list(item.badges),
             )
         )
         try:
@@ -248,6 +250,7 @@ class SqlAlchemyItemRepository:
                     position=item.position,
                     is_available=item.is_available,
                     image_public_id=item.image_public_id,
+                    badges=list(item.badges),
                 )
             )
         except IntegrityError as error:
