@@ -13,7 +13,7 @@ from typing import Any
 
 from app.shared.domain.images import ImageKind, InvalidImage, ensure_owned_image
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 MODES = ("light", "dark")
 LOGO_SIZES = ("sm", "md", "lg")
@@ -35,6 +35,24 @@ DENSITIES = ("compact", "comfortable", "spacious")
 CATEGORY_HEADERS = ("plain", "underline", "band")
 CART_STYLES = ("bar", "panel", "floating")
 MIN_COLUMNS, MAX_COLUMNS = 1, 4  # the grid on wide screens; narrow screens show fewer
+
+CARD_TEMPLATES = ("vertical", "horizontal", "overlay")
+IMAGE_ASPECTS = ("square", "landscape", "wide")  # 1:1, 4:3, 16:9
+IMAGE_FITS = ("cover", "contain")
+IMAGE_POSITIONS = ("left", "right")  # beside the text, in the horizontal template
+CARD_RADII = ("none", "sm", "md", "lg", "xl")
+CARD_SHADOWS = ("none", "sm", "md", "lg")
+BORDER_WIDTHS = ("none", "thin", "thick")
+BORDER_COLORS = ("border", "primary", "accent")  # colors of the palette, never a free color
+CARD_PADDINGS = ("compact", "comfortable", "spacious")
+PRICE_POSITIONS = ("top", "bottom")
+ADD_BUTTON_STYLES = ("text", "icon", "both")
+ADD_BUTTON_SHAPES = ("square", "rounded", "pill")
+CARD_HOVERS = ("none", "lift", "grow")
+CARD_ANIMATIONS = ("none", "fade", "rise")
+BADGE_SHAPES = ("pill", "rounded")
+MIN_DESCRIPTION_LINES, MAX_DESCRIPTION_LINES = 0, 6  # 0 hides the description
+MIN_OVERLAY_OPACITY, MAX_OVERLAY_OPACITY = 30, 90  # % of the scrim under the text of the overlay template
 
 MIN_SCALE, MAX_SCALE = 80, 130  # % of every size
 MIN_SIZE, MAX_SIZE = 10, 72  # px, before the scale
@@ -215,12 +233,51 @@ class Layout:
 
 
 @dataclass(frozen=True)
+class CardImage:
+    aspect: str
+    fit: str
+    position: str
+
+
+@dataclass(frozen=True)
+class CardBorder:
+    width: str
+    color: str
+
+
+@dataclass(frozen=True)
+class AddButton:
+    style: str
+    shape: str
+
+
+@dataclass(frozen=True)
+class Cards:
+    """How each product card looks: its template, image, shape, add button, motion and badges."""
+
+    template: str
+    image: CardImage
+    radius: str
+    shadow: str
+    border: CardBorder
+    padding: str
+    description_lines: int
+    price_position: str
+    add_button: AddButton
+    hover: str
+    animation: str
+    overlay_opacity: int
+    badge_shape: str
+
+
+@dataclass(frozen=True)
 class Theme:
     schema_version: int
     colors: Colors
     brand: Brand
     typography: Typography
     layout: Layout
+    cards: Cards
 
     def images(self) -> dict[str, ImageKind]:
         """Every image the theme uses, with the slot (folder) it belongs to."""
@@ -340,6 +397,24 @@ DEFAULT_LAYOUT = Layout(
 )
 
 
+# The card the menu had before the cards could be customized.
+DEFAULT_CARDS = Cards(
+    template="vertical",
+    image=CardImage(aspect="landscape", fit="cover", position="left"),
+    radius="xl",
+    shadow="none",
+    border=CardBorder(width="thin", color="border"),
+    padding="comfortable",
+    description_lines=3,
+    price_position="top",
+    add_button=AddButton(style="both", shape="rounded"),
+    hover="none",
+    animation="none",
+    overlay_opacity=60,
+    badge_shape="pill",
+)
+
+
 def default_theme() -> Theme:
     return Theme(
         schema_version=SCHEMA_VERSION,
@@ -354,6 +429,7 @@ def default_theme() -> Theme:
         ),
         typography=_DEFAULT_TYPOGRAPHY,
         layout=DEFAULT_LAYOUT,
+        cards=DEFAULT_CARDS,
     )
 
 
@@ -570,6 +646,41 @@ def _parse_layout(doc: _Reader) -> Layout:
     return layout
 
 
+def _parse_cards(doc: _Reader) -> Cards:
+    image_doc = doc.child("image")
+    image = CardImage(
+        aspect=image_doc.choice("aspect", IMAGE_ASPECTS),
+        fit=image_doc.choice("fit", IMAGE_FITS),
+        position=image_doc.choice("position", IMAGE_POSITIONS),
+    )
+    image_doc.done()
+    border_doc = doc.child("border")
+    border = CardBorder(width=border_doc.choice("width", BORDER_WIDTHS), color=border_doc.choice("color", BORDER_COLORS))
+    border_doc.done()
+    button_doc = doc.child("add_button")
+    add_button = AddButton(
+        style=button_doc.choice("style", ADD_BUTTON_STYLES), shape=button_doc.choice("shape", ADD_BUTTON_SHAPES)
+    )
+    button_doc.done()
+    cards = Cards(
+        template=doc.choice("template", CARD_TEMPLATES),
+        image=image,
+        radius=doc.choice("radius", CARD_RADII),
+        shadow=doc.choice("shadow", CARD_SHADOWS),
+        border=border,
+        padding=doc.choice("padding", CARD_PADDINGS),
+        description_lines=doc.number("description_lines", MIN_DESCRIPTION_LINES, MAX_DESCRIPTION_LINES),
+        price_position=doc.choice("price_position", PRICE_POSITIONS),
+        add_button=add_button,
+        hover=doc.choice("hover", CARD_HOVERS),
+        animation=doc.choice("animation", CARD_ANIMATIONS),
+        overlay_opacity=doc.number("overlay_opacity", MIN_OVERLAY_OPACITY, MAX_OVERLAY_OPACITY),
+        badge_shape=doc.choice("badge_shape", BADGE_SHAPES),
+    )
+    doc.done()
+    return cards
+
+
 def parse_theme(raw: Any, tenant_id: uuid.UUID) -> Theme:
     """Validates a whole theme document (as JSON) for that tenant. Raises InvalidTheme naming the field."""
     doc = _Reader(raw, "")
@@ -582,6 +693,7 @@ def parse_theme(raw: Any, tenant_id: uuid.UUID) -> Theme:
         brand=_parse_brand(doc.child("brand"), tenant_id),
         typography=_parse_typography(doc.child("typography")),
         layout=_parse_layout(doc.child("layout")),
+        cards=_parse_cards(doc.child("cards")),
     )
     doc.done()
     return theme

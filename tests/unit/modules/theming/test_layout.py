@@ -9,7 +9,6 @@ from app.modules.theming.domain.theme import (
     DENSITIES,
     NAVIGATIONS,
     PRODUCT_VIEWS,
-    SCHEMA_VERSION,
     InvalidTheme,
     default_theme,
     parse_theme,
@@ -30,10 +29,8 @@ def rejected_field(doc: dict[str, Any]) -> str:
     return error.value.field
 
 
-def test_the_theme_is_version_3_and_the_default_layout_is_the_current_menu() -> None:
-    assert SCHEMA_VERSION == 3
+def test_the_default_layout_is_the_current_menu() -> None:
     doc = default_theme().to_dict()
-    assert doc["schema_version"] == 3
     assert doc["layout"] == {
         "navigation": "chips",
         "product_view": "grid",
@@ -119,5 +116,6 @@ def test_missing_or_unknown_layout_fields_are_rejected() -> None:
 def test_a_version_2_document_is_no_longer_accepted() -> None:
     doc = default_theme().to_dict()
     del doc["layout"]
+    del doc["cards"]
     doc["schema_version"] = 2
     assert rejected_field(doc) == "schema_version"

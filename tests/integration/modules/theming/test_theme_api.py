@@ -267,7 +267,7 @@ def test_each_element_gets_its_own_font_and_size_and_tables_see_it_only_after_pu
     admin = admin_of(new_client)
     tablet = tablet_of(new_client, created(create_table(admin)))
     doc = draft_of(admin)["draft"]
-    assert doc["schema_version"] == 3
+    assert doc["schema_version"] == 4
     doc["typography"]["fonts"]["heading"] = "playfair_display"
     doc["typography"]["fonts"]["price"] = "oswald"
     doc["typography"]["elements"]["business_name"].update(size=48, weight=800, style="italic", transform="uppercase")
@@ -371,7 +371,9 @@ def test_a_theme_cached_before_the_schema_change_is_never_served(
         redis.set(f"theme:{tenant_a.tenant_id}:0", stale)
         # Where Slice 11 stored it (schema_version 2).
         redis.set(f"theme:{tenant_a.tenant_id}:v2:0", stale)
-    assert ok(admin.get(THEME_URL))["theme"]["schema_version"] == 3
+        # Where Slice 12 stored it (schema_version 3).
+        redis.set(f"theme:{tenant_a.tenant_id}:v3:0", stale)
+    assert ok(admin.get(THEME_URL))["theme"]["schema_version"] == 4
 
 
 # --- Presets (templates): "si no quiere personalizar el menú o quieren algo rápido las seleccione"
@@ -392,12 +394,12 @@ def test_admin_applies_a_preset_keeping_the_brand_and_tables_see_it_only_after_p
     presets = draft_of(admin)["presets"]
     assert [preset["id"] for preset in presets][:1] == ["classic"]
     assert presets[0]["colors"] == mine["colors"] and presets[0]["typography"] == mine["typography"]
-    assert presets[0]["layout"] == mine["layout"]
-    assert set(presets[0]) == {"id", "name", "description", "colors", "typography", "layout"}
+    assert presets[0]["layout"] == mine["layout"] and presets[0]["cards"] == mine["cards"]
+    assert set(presets[0]) == {"id", "name", "description", "colors", "typography", "layout", "cards"}
     street = next(preset for preset in presets if preset["id"] == "street")
 
     # The editor applies it to the draft: colors and typography change, the brand stays.
-    applied = {**mine, "colors": street["colors"], "typography": street["typography"], "layout": street["layout"]}
+    applied = {**mine, "colors": street["colors"], "typography": street["typography"], "layout": street["layout"], "cards": street["cards"]}
     saved = ok(save(admin, applied))
     assert saved["draft"] == applied
     assert saved["draft"]["brand"] == mine["brand"]
@@ -471,3 +473,76 @@ def test_tables_and_staff_cannot_change_the_layout_and_tenants_never_see_each_ot
     assert ok(tablet_a.get(THEME_URL))["theme"]["layout"]["navigation"] == "tabs"
     assert draft_of(owner_b)["draft"]["layout"]["navigation"] == "chips"
     assert ok(tablet_b.get(THEME_URL))["theme"]["layout"]["navigation"] == "chips"
+
+
+# --- Cards (Slice 13): "Vertical, Horizontal, Imagen completa" and every option group
+
+
+def test_admin_designs_the_cards_and_tables_see_them_only_after_publishing(
+    new_client: ClientFactory, tenant_a: SeedResult
+) -> None:
+    admin = admin_of(new_client)
+    tablet = tablet_of(new_client, created(create_table(admin)))
+    doc = draft_of(admin)["draft"]
+    assert doc["cards"]["template"] == "vertical"
+    doc["cards"] = {
+        "template": "overlay",
+        "image": {"aspect": "square", "fit": "contain", "position": "right"},
+        "radius": "sm",
+        "shadow": "md",
+        "border": {"width": "thick", "color": "primary"},
+        "padding": "compact",
+        "description_lines": 5,
+        "price_position": "bottom",
+        "add_button": {"style": "text", "shape": "pill"},
+        "hover": "grow",
+        "animation": "fade",
+        "overlay_opacity": 75,
+        "badge_shape": "rounded",
+    }
+    assert ok(save(admin, doc))["draft"]["cards"] == doc["cards"]
+
+    assert ok(tablet.get(THEME_URL))["theme"]["cards"]["template"] == "vertical"
+    ok(admin.post(PUBLISH_URL))
+    assert ok(tablet.get(THEME_URL))["theme"]["cards"] == doc["cards"]
+
+
+@pytest.mark.parametrize(
+    ("change", "field"),
+    [
+        ({"template": "minimal"}, "template"),
+        ({"description_lines": 9}, "description_lines"),
+        ({"hover": "spin"}, "hover"),
+        ({"image": {"aspect": "3:2", "fit": "cover", "position": "left"}}, "image.aspect"),
+    ],
+)
+def test_an_invalid_card_value_is_rejected_naming_the_field(
+    new_client: ClientFactory, tenant_a: SeedResult, change: dict[str, object], field: str
+) -> None:
+    admin = admin_of(new_client)
+    doc = draft_of(admin)["draft"]
+    before = copy.deepcopy(doc)
+    doc["cards"].update(change)
+    response = save(admin, doc)
+    assert response.status_code == 422
+    assert response.json()["detail"] == f"Invalid theme value: cards.{field}"
+    assert draft_of(admin)["draft"] == before
+
+
+def test_tables_cannot_change_the_cards_and_tenants_never_see_each_other(
+    new_client: ClientFactory, tenant_a: SeedResult, tenant_b: SeedResult
+) -> None:
+    owner_a = admin_of(new_client)
+    owner_b = admin_of(new_client, "boss@example.com")
+    tablet_a = tablet_of(new_client, created(create_table(owner_a)))
+    tablet_b = tablet_of(new_client, created(create_table(owner_b)))
+    doc = draft_of(owner_a)["draft"]
+    doc["cards"]["template"] = "horizontal"
+    assert save(tablet_a, doc).status_code == 403
+    assert draft_of(owner_a)["draft"]["cards"]["template"] == "vertical"
+
+    ok(save(owner_a, doc))
+    ok(owner_a.post(PUBLISH_URL))
+    assert ok(tablet_a.get(THEME_URL))["theme"]["cards"]["template"] == "horizontal"
+    assert draft_of(owner_b)["draft"]["cards"]["template"] == "vertical"
+    assert ok(tablet_b.get(THEME_URL))["theme"]["cards"]["template"] == "vertical"

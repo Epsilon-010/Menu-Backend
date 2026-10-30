@@ -92,6 +92,7 @@ def test_applying_a_preset_changes_colors_typography_and_layout_but_keeps_the_br
     assert applied.colors == preset.colors
     assert applied.typography == preset.typography
     assert applied.layout == preset.layout
+    assert applied.cards == preset.cards
     assert applied.schema_version == mine.schema_version
     assert applied.images() == {logo: ImageKind.LOGO}
 
@@ -106,6 +107,7 @@ def test_a_preset_as_json_names_colors_like_the_theme_document() -> None:
         "colors": theme["colors"],
         "typography": theme["typography"],
         "layout": theme["layout"],
+        "cards": theme["cards"],
     }
 
 
@@ -113,3 +115,9 @@ def test_the_presets_do_not_all_share_one_layout() -> None:
     assert len({preset.layout for preset in PRESETS}) >= 4
     assert {preset.layout.navigation for preset in PRESETS} == {"chips", "tabs", "sidebar", "sections"}
     assert {preset.layout.product_view for preset in PRESETS} == {"grid", "list", "carousel"}
+
+
+def test_the_presets_do_not_all_share_one_card_design() -> None:
+    assert PRESETS[0].cards == default_theme().cards
+    assert len({preset.cards for preset in PRESETS}) == len(PRESETS)
+    assert {preset.cards.template for preset in PRESETS} == {"vertical", "horizontal", "overlay"}

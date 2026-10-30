@@ -29,6 +29,7 @@ def v1_document(logo_position: str, primary: str) -> Json:
     doc = default_theme().to_dict()
     del doc["typography"]
     del doc["layout"]
+    del doc["cards"]
     doc["schema_version"] = 1
     doc["brand"]["logo"]["position"] = logo_position
     doc["colors"]["primary"] = primary
