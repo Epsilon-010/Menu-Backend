@@ -39,14 +39,16 @@ Branch `feat/slice-13-cards` in Backend and Menu-Frontend. Delivery: ask-on-risk
 
 ## Tasks
 - T1 (S1, S3, S4) backend: `cards` in theme v4 (domain, HTTP schema, presets) + data migration v3→v4, with tests —
-  inline (frontend depends on this contract) — Risk item 1 (stored format) — pending
+  inline (frontend depends on this contract) — Risk item 1 (stored format) — done Backend `a7102ca`; migration tested on
+  a copy of the dev data (upgrade, downgrade byte-identical, upgrade); native review approved (`review-0a7ddf58f2128b62`,
+  risk + reliability, no findings)
 - T2 (S2) backend: item badges (column + migration, domain, use cases, catalog and menu API), with tests — inline —
-  pending
+  done Backend `94a8b85` (native review: under budget, pending in the slice)
 - T3 (S1-S3) frontend: menu cards render the template, options and badges; types and `normalizeCards`; render tests —
-  inline — pending
+  inline — done Frontend `de50028`, fix `59c23da`
 - T4 (S2, S3) frontend: card controls in `/admin/design` (preview) and badges in the product form, with tests — inline
-  — pending
-- T5 (S5) closing: Chrome headless phone/tablet/desktop, independent verifier (item 1), native review, docs — pending
+  — done Frontend `dcfe9ac`
+- T5 (S5) closing: Chrome headless phone/tablet/desktop, independent verifier (item 1), native review, docs — browser check done (L8); verifier, review and docs pending
 
 ## Log
 - L1 2026-10-29 (user): "Arrancamos el Slice 13 — Diseño de tarjetas de producto (ROADMAP.md). El Slice 12 (layout) ya
@@ -70,3 +72,12 @@ Branch `feat/slice-13-cards` in Backend and Menu-Frontend. Delivery: ask-on-risk
 - L6 2026-10-29 (user, option groups): "Imagen, Forma de la tarjeta, Botón "agregar", Hover y animaciones".
 - L7 2026-10-29: environment up, `alembic current` = `9c2e41b7d5a3 (head)`; branches cut from `main` (Backend
   `cf58197`, Frontend `c36f050`). Next: T1.
+- L8 2026-10-30: T1-T4 done. Backend 809 tests, frontend 226 tests, lint and build clean. Chrome headless
+  (`cards_e2e.py`, demo tenant, two real images uploaded through the signed flow, a long and a short description,
+  badges): 5 designs (default; horizontal + right image + icon pill + price bottom; overlay in a 3-column grid; overlay
+  template in the list view; carousel + 16:9 contain + thick accent border + no description + square text button) x
+  phone 390 / tablet 820 / desktop 1280. First run found a blocker: overlay text and price spilled out of the card in a
+  3-column grid (the grid column followed the text width); fixed in `59c23da` with a `minmax(0,1fr)` column and pinned
+  in a render test. Second run: no page or card overflow, text and button inside every card, images loaded, overlay add
+  form opens, the editor shows Product cards and the preview follows. Demo items and theme restored; the test images
+  were discarded and deleted by the worker.
