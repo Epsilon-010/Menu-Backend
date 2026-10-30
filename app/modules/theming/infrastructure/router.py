@@ -1,7 +1,7 @@
 import uuid
 from collections.abc import Awaitable
 from datetime import datetime
-from typing import Annotated, Literal, TypeVar
+from typing import Annotated, Any, Literal, TypeVar
 
 from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.responses import JSONResponse
@@ -12,6 +12,7 @@ from app.modules.media.infrastructure.jobs import image_cleanup_scheduler, image
 from app.modules.theming.application.manage_theme import (
     GetPublishedTheme,
     GetThemeDraft,
+    ImportTheme,
     ListThemeVersions,
     PublishTheme,
     RequestThemeImageUpload,
@@ -263,6 +264,15 @@ class ThemeVersionsOut(BaseModel):
     image_urls: dict[str, str]
 
 
+class ThemeImportOut(BaseModel):
+    """An exported theme checked for this tenant, for the editor to put in the draft (it is not saved)."""
+
+    theme: ThemeDoc
+    # Image slots emptied: the image was another business's, or no theme of this one uses it anymore.
+    removed_images: list[Literal["logo", "banner", "background"]]
+    image_urls: dict[str, str]
+
+
 class ImageSlotIn(_Strict):
     kind: Literal["logo", "banner", "background"]
 
@@ -368,6 +378,10 @@ def get_list_theme_versions(session: SessionDep) -> ListThemeVersions:
     return ListThemeVersions(SqlAlchemyThemeHistory(session))
 
 
+def get_import_theme(session: SessionDep) -> ImportTheme:
+    return ImportTheme(SqlAlchemyThemeRepository(session), SqlAlchemyThemeHistory(session))
+
+
 def get_request_theme_image_upload(session: SessionDep, images: ImagesDep) -> RequestThemeImageUpload:
     return RequestThemeImageUpload(images, image_registry(session), SqlAlchemyUnitOfWork(session))
 
@@ -430,6 +444,24 @@ async def list_theme_versions(
             ThemeVersionOut(id=v.id, number=v.number, published_at=v.published_at, theme=_doc(v.theme)) for v in versions
         ],
         image_urls=_image_urls(images, *(version.theme for version in versions)),
+    )
+
+
+@router.post("/import", response_model=ThemeImportOut)
+async def import_theme(
+    body: dict[str, Any],
+    admin: Admin,
+    images: ImagesDep,
+    use_case: Annotated[ImportTheme, Depends(get_import_theme)],
+) -> ThemeImportOut | JSONResponse:
+    """Any exported version is accepted (older ones are upgraded); the domain checks every value."""
+    result = await _run(use_case.execute(admin.tenant_id, body))
+    if isinstance(result, JSONResponse):
+        return result
+    return ThemeImportOut(
+        theme=_doc(result.theme),
+        removed_images=list(result.removed_images),
+        image_urls=_image_urls(images, result.theme),
     )
 
 

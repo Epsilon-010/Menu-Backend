@@ -7,6 +7,7 @@ import pytest
 from app.modules.theming.application.manage_theme import (
     GetPublishedTheme,
     GetThemeDraft,
+    ImportTheme,
     ListThemeVersions,
     PublishTheme,
     RequestThemeImageUpload,
@@ -53,6 +54,9 @@ class World:
 
     def versions(self, tenant: uuid.UUID = TENANT) -> Any:
         return ListThemeVersions(self.history).execute(tenant)
+
+    def import_(self, doc: Any, tenant: uuid.UUID = TENANT) -> Any:
+        return ImportTheme(self.themes, self.history).execute(tenant, doc)
 
     def draft(self, tenant: uuid.UUID = TENANT) -> Any:
         return GetThemeDraft(self.themes).execute(tenant)
@@ -299,3 +303,42 @@ async def test_tenants_never_see_nor_change_each_others_theme(world: World) -> N
     with pytest.raises(InvalidTheme):
         await world.save(with_logo(others_logo))
     assert world.registry.status(others_logo) == "pending"
+
+
+# --- Import
+
+
+async def test_an_import_keeps_images_any_theme_of_the_tenant_still_uses(world: World) -> None:
+    in_history = await world.upload(ImageKind.LOGO)
+    await world.save(with_logo(in_history))
+    await world.publish()
+    in_draft = await world.upload(ImageKind.BANNER)
+    doc = with_logo(None)
+    doc["brand"]["banner"]["image_id"] = in_draft
+    await world.save(doc)  # the logo is now only in the published theme and the history
+    unused = await world.upload(ImageKind.BACKGROUND)  # signed, never saved
+
+    exported = with_logo(in_history)
+    exported["brand"]["banner"]["image_id"] = in_draft
+    exported["brand"]["background"].update(kind="image", image_id=unused)
+    imported = await world.import_(exported)
+
+    assert imported.theme.brand.logo.image_id == in_history
+    assert imported.theme.brand.banner.image_id == in_draft
+    assert imported.theme.brand.background.image_id is None
+    assert imported.removed_images == ("background",)
+
+
+async def test_an_import_changes_nothing_until_the_admin_saves_it(world: World) -> None:
+    await world.import_(with_colors(primary="#123456"))
+    assert (await world.draft()).draft == default_theme()
+    assert world.uow.commits == 0
+
+
+async def test_an_import_never_keeps_another_tenants_image_even_if_that_tenant_uses_it(world: World) -> None:
+    others = await world.upload(ImageKind.LOGO, tenant=OTHER)
+    await world.save(with_logo(others), tenant=OTHER)
+
+    imported = await world.import_(with_logo(others))
+    assert imported.theme.brand.logo.image_id is None
+    assert imported.removed_images == ("logo",)

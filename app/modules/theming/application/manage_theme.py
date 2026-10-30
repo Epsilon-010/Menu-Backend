@@ -10,6 +10,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any
 
+from app.modules.theming.domain.import_theme import ImportedTheme, import_theme
 from app.modules.theming.domain.repository import (
     HISTORY_LIMIT,
     PublishedThemeCache,
@@ -218,3 +219,15 @@ class ListThemeVersions:
 
     async def execute(self, tenant_id: uuid.UUID) -> list[ThemeVersion]:
         return await self._history.list(tenant_id)
+
+
+class ImportTheme:
+    """Checks an exported theme for this tenant and returns it ready for the draft; nothing is saved."""
+
+    def __init__(self, themes: ThemeRepository, history: ThemeHistory) -> None:
+        self._themes = themes
+        self._history = history
+
+    async def execute(self, tenant_id: uuid.UUID, document: Any) -> ImportedTheme:
+        available = _in_use(await self._themes.get(tenant_id), await self._history.list(tenant_id))
+        return import_theme(document, tenant_id, available)
