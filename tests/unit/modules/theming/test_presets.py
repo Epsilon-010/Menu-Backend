@@ -77,7 +77,7 @@ def test_both_modes_are_offered() -> None:
     assert {preset.colors.mode for preset in PRESETS} == {"light", "dark"}
 
 
-def test_applying_a_preset_changes_colors_and_typography_but_keeps_the_brand() -> None:
+def test_applying_a_preset_changes_colors_typography_and_layout_but_keeps_the_brand() -> None:
     logo = new_image_public_id(TENANT, ImageKind.LOGO)
     default = default_theme()
     mine = replace(
@@ -91,6 +91,7 @@ def test_applying_a_preset_changes_colors_and_typography_but_keeps_the_brand() -
     assert applied.brand == mine.brand
     assert applied.colors == preset.colors
     assert applied.typography == preset.typography
+    assert applied.layout == preset.layout
     assert applied.schema_version == mine.schema_version
     assert applied.images() == {logo: ImageKind.LOGO}
 
@@ -104,4 +105,11 @@ def test_a_preset_as_json_names_colors_like_the_theme_document() -> None:
         "description": PRESETS[0].description,
         "colors": theme["colors"],
         "typography": theme["typography"],
+        "layout": theme["layout"],
     }
+
+
+def test_the_presets_do_not_all_share_one_layout() -> None:
+    assert len({preset.layout for preset in PRESETS}) >= 4
+    assert {preset.layout.navigation for preset in PRESETS} == {"chips", "tabs", "sidebar", "sections"}
+    assert {preset.layout.product_view for preset in PRESETS} == {"grid", "list", "carousel"}

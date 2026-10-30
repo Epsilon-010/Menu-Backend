@@ -13,12 +13,13 @@ from alembic.config import Config
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from app.modules.theming.domain.theme import default_theme, parse_theme
+from app.modules.theming.domain.theme import default_theme
 from app.seed import SeedResult
 from tests.integration.conftest import TEST_DATABASE_URL
 from tests.integration.modules.auth.test_auth_api import _seed
 
 BEFORE_TYPOGRAPHY = "744ab3c2ac86"
+WITH_TYPOGRAPHY = "3f7686d2fe3f"
 
 Json = dict[str, Any]
 
@@ -27,6 +28,7 @@ def v1_document(logo_position: str, primary: str) -> Json:
     """A theme as Slice 10 stored it."""
     doc = default_theme().to_dict()
     del doc["typography"]
+    del doc["layout"]
     doc["schema_version"] = 1
     doc["brand"]["logo"]["position"] = logo_position
     doc["colors"]["primary"] = primary
@@ -79,7 +81,7 @@ def test_stored_v1_themes_get_the_default_typography_and_downgrade_removes_it(at
     )
     run(insert.format("NULL"), id=uuid.uuid4(), tenant=left.tenant_id, draft=json.dumps(draft_left))
 
-    command.upgrade(at_head_afterwards, "head")
+    command.upgrade(at_head_afterwards, WITH_TYPOGRAPHY)
 
     draft, published = stored(centered.tenant_id)
     assert published is not None
@@ -90,14 +92,12 @@ def test_stored_v1_themes_get_the_default_typography_and_downgrade_removes_it(at
         assert {key: value for key, value in doc.items() if key not in ("typography", "schema_version")} == {
             key: value for key, value in original.items() if key != "schema_version"
         }
-        parse_theme(doc, centered.tenant_id)
 
     draft, published = stored(left.tenant_id)
     assert published is None
     expected = copy.deepcopy(defaults)
     expected["elements"]["business_name"]["align"] = "left"  # the name kept following the logo
     assert draft["typography"] == expected
-    assert parse_theme(draft, left.tenant_id).typography.elements.business_name.align == "left"
 
     command.downgrade(at_head_afterwards, BEFORE_TYPOGRAPHY)
     assert stored(centered.tenant_id) == (draft_centered, published_centered)
