@@ -4,3 +4,7 @@ class InvalidTenantData(ValueError):
 
 class TenantIdTaken(Exception):
     """A client-supplied tenant id already belongs to another tenant."""
+
+
+class TenantNotFound(Exception):
+    pass

@@ -49,7 +49,13 @@ class RegisterBusiness:
         self._uow = uow
 
     async def execute(
-        self, email: str, password: str, business_name: str, client: str, tenant_id: uuid.UUID | None = None
+        self,
+        email: str,
+        password: str,
+        business_name: str,
+        client: str,
+        tenant_id: uuid.UUID | None = None,
+        timezone: str | None = None,
     ) -> AuthSession:
         """`client` is the caller's IP: every attempt counts against it (sign-ups are never "successful
         logins" that reset the counter), so one device cannot create businesses in bulk."""
@@ -60,7 +66,7 @@ class RegisterBusiness:
 
         # Validate everything before locking, hashing or writing.
         validate_password(password)
-        business = Tenant.create(business_name)
+        business = Tenant.create(business_name, timezone=timezone)
         User.create(uuid.uuid4(), email, ADMIN_NAME, Role.ADMIN, password_hash="")
 
         # Taken before the checks, so a concurrent replay waits for the first sign-up and then finds it.
@@ -73,7 +79,7 @@ class RegisterBusiness:
         if await self._find_user.execute(email) is not None:
             raise EmailAlreadyInUse(email)
 
-        tenant = await self._create_tenant.execute(business_name, tenant_id)
+        tenant = await self._create_tenant.execute(business_name, tenant_id, timezone)
         admin = await self._create_user.execute(tenant.id, email, ADMIN_NAME, Role.ADMIN, password)
         session = await self._sessions.issue(admin)
         await self._uow.commit()

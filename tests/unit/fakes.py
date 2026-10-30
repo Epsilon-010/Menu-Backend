@@ -69,6 +69,9 @@ class InMemoryTenantRepository:
     async def get(self, tenant_id: uuid.UUID) -> Tenant | None:
         return self.tenants.get(tenant_id)
 
+    async def set_timezone(self, tenant_id: uuid.UUID, timezone: str) -> None:
+        self.tenants[tenant_id] = replace(self.tenants[tenant_id], timezone=timezone)
+
 
 class InMemoryUserRepository:
     def __init__(self) -> None:
