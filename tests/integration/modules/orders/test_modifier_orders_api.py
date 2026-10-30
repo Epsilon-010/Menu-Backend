@@ -157,6 +157,9 @@ def test_repeating_an_add_with_its_id_compares_the_options(new_client: ClientFac
 
     assert again == first
     assert clash.status_code == 409
+    # A repeated option is refused even when the rest matches the stored line (verifier advisory 1).
+    doubled = add(tablet, menu.taco, id=line_id, modifier_option_ids=menu.options("Large", "Cheese", "Cheese"))
+    assert (doubled.status_code, doubled.json()["detail"]) == (422, "Each option can be chosen once")
 
 
 # --- S5, S8: the menu changes after a line was added ---------------------------------------------
@@ -173,6 +176,8 @@ def test_a_line_whose_options_changed_becomes_unavailable_and_blocks_the_send(
 
     stale = cart(tablet)
     assert [(line["available"], line["unit_price_cents"]) for line in stale["lines"]] == [(True, 1000), (False, None)]
+    # The unavailable line still shows the options that exist, so the table can fix it (verifier advisory 2).
+    assert modifiers(stale["lines"][1]) == [("Size", "Large", 1500)]
     assert stale["total_cents"] == 1000
 
     refused = submit(tablet, stale["version"])

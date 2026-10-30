@@ -30,7 +30,13 @@ from app.modules.orders.domain.model import (
     validate_note,
     validate_quantity,
 )
-from app.modules.orders.domain.modifiers import ChosenModifier, choose_modifiers, unit_price
+from app.modules.orders.domain.modifiers import (
+    ChosenModifier,
+    choose_modifiers,
+    known_modifiers,
+    unit_price,
+    validate_option_ids,
+)
 from app.modules.orders.domain.ports import (
     BillRepository,
     CartRepository,
@@ -135,7 +141,8 @@ def still_valid(item: MenuItem | None, option_ids: tuple[uuid.UUID, ...]) -> tup
 def _line_view(line: CartLine, item: MenuItem | None) -> CartLineView:
     chosen = still_valid(item, line.modifier_option_ids)
     if item is None or chosen is None:
-        return CartLineView(line=line, available=False, unit_price_cents=None)
+        shown = known_modifiers(item, line.modifier_option_ids) if item is not None else ()
+        return CartLineView(line=line, available=False, unit_price_cents=None, modifiers=shown)
     return CartLineView(line=line, available=True, unit_price_cents=unit_price(item, chosen), modifiers=chosen)
 
 
@@ -187,6 +194,7 @@ class AddCartLine:
         """`line_id` makes the add idempotent: a repeat (even after the cart was sent) adds nothing."""
         ctx = self._ctx
         quantity, note = validate_quantity(quantity), validate_note(note)
+        modifier_option_ids = validate_option_ids(modifier_option_ids)
         visit = await authorize(ctx, diner, lock=True)
         if line_id is not None:
             existing = await ctx.carts.get_line(diner.tenant_id, line_id)

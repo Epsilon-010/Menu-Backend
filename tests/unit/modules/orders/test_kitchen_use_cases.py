@@ -394,6 +394,10 @@ async def test_staff_add_a_dish_with_its_options_priced_by_the_menu() -> None:
         await add.execute(TENANT_A, order.id, taco, 2, dish_id=dish_id, modifier_option_ids=(small.option_id,))
     with pytest.raises(InvalidOrderData, match="Choose 1 option for Size"):
         await add.execute(TENANT_A, order.id, taco, 1)
+    with pytest.raises(InvalidOrderData, match="Each option can be chosen once"):
+        await add.execute(
+            TENANT_A, order.id, taco, 2, dish_id=dish_id, modifier_option_ids=(large.option_id, large.option_id)
+        )
     assert world.uow.commits == 1
 
 

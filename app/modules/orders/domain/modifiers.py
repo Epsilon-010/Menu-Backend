@@ -62,15 +62,33 @@ def _rule(group: MenuModifierGroup) -> str:
     return f"Choose between {group.min_select} and {group.max_select} options for {group.name}"
 
 
+def validate_option_ids(option_ids: Iterable[uuid.UUID]) -> tuple[uuid.UUID, ...]:
+    """Checked before anything else (a repeated add included): each option at most once."""
+    requested = tuple(option_ids)
+    if len(requested) != len(set(requested)):
+        raise InvalidOrderData("Each option can be chosen once")
+    return requested
+
+
+def known_modifiers(item: Orderable, option_ids: Iterable[uuid.UUID]) -> tuple[ChosenModifier, ...]:
+    """The options of the selection that still exist on the item, without checking any rule: what a line
+    that can no longer be ordered as it is still shows, so the table can fix it."""
+    wanted = set(option_ids)
+    return tuple(
+        ChosenModifier(option_id=option.option_id, group=group.name, name=option.name, price_cents=option.price_cents)
+        for group in item.modifier_groups
+        for option in group.options
+        if option.option_id in wanted
+    )
+
+
 def choose_modifiers(item: Orderable, option_ids: Iterable[uuid.UUID]) -> tuple[ChosenModifier, ...]:
     """The selection in the item's group order, then option order.
 
     Raises InvalidOrderData when it breaks a rule (422) and ItemsUnavailable when it picks a sold-out
     option (409, like an item that left the menu).
     """
-    requested = list(option_ids)
-    if len(requested) != len(set(requested)):
-        raise InvalidOrderData("Each option can be chosen once")
+    requested = validate_option_ids(option_ids)
     known = {option.option_id for group in item.modifier_groups for option in group.options}
     if not set(requested) <= known:
         raise InvalidOrderData("Unknown option")

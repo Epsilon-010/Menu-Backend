@@ -58,7 +58,7 @@ Branch `feat/slice-15-modifiers` in Backend and Menu-Frontend. Delivery: ask-on-
 - [x] T2 S3-S5, S7-S9 — Backend orders: cart selection, pricing, submit snapshot + migration, outputs, staff dish. Route: inline.
 - [x] T3 S10 — Frontend admin: modifiers page, item form group picker. Route: delegated writer (parallel with T4 and backend; disjoint surfaces). Frontend commit `7fe74fd`.
 - [x] T4 S10 — Frontend ordering: menu options picker, cart line edit, send confirmation, order/kitchen/delivery/bill cards, waiter add dish. Route: delegated writer (parallel with T3). Frontend commit `f54f9c0`.
-- [ ] T5 S11 — Closing: e2e, independent verifier (item 1: migrations and order snapshot), native review, docs, ROADMAP. Route: verifier delegated.
+- [x] T5 S11 — Closing: e2e, independent verifier (item 1: migrations and order snapshot), native review, docs, ROADMAP. Route: verifier delegated. Backend commit `8efb188` (T2), advisory fixes + docs in the closing commit.
 
 ## Log
 - L1 (2026-10-30, user): "continua con la sigueotne slice, checa la memoria y los md para saber en dodn vamos"
@@ -84,3 +84,13 @@ Branch `feat/slice-15-modifiers` in Backend and Menu-Frontend. Delivery: ask-on-
   Cart lines re-price on every read; a selection that no longer fits is `available: false` and sending answers the
   existing 409. API 8/8 (`test_modifier_orders_api.py`); exact-shape tests updated for the new `modifiers` /
   `modifier_group_ids` / `modifier_groups` keys.
+- L13 (T5, verifier): S1-S11 ok, no blockers; 915 backend + 308 frontend tests; migrations up/down/up on `menu_verify15`
+  with an identical schema dump; HTTP probes 112/113 (the miss is advisory 1). Advisories: (1) a repeated add with a
+  duplicated option id passed as the same line; (2) an unavailable line showed no options, so "Edit options" opened
+  empty; (3) the item form saves groups in library order; (4) over-limit values get the generic "Invalid field"; (5)
+  `item_modifier_groups.item_id` FK without tenant; (6) int4 unit price overflow only out of domain; (7) downgrading
+  `4d9e8d3a002d` drops the option copies; (8) baseline: `line_sent_on_bill` replay compares nothing.
+- L14: native review of the backend range `b10218c..8efb188` granted by the user, one lens (reliability), approved with
+  no findings and acknowledged (`review-9fd6321fd371dfe6`, burned). Advisories 1 and 2 fixed with RED/GREEN
+  (`validate_option_ids` before the replay check in the cart and staff add; unavailable lines list the options that
+  still exist via `known_modifiers`); the frontend already preloads `line.modifiers`, so it needed no change.

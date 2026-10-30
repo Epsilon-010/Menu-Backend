@@ -32,7 +32,7 @@ from app.modules.orders.domain.model import (
     validate_note,
     validate_quantity,
 )
-from app.modules.orders.domain.modifiers import choose_modifiers, unit_price
+from app.modules.orders.domain.modifiers import choose_modifiers, unit_price, validate_option_ids
 from app.modules.orders.domain.ports import (
     BillRepository,
     DishChange,
@@ -192,6 +192,7 @@ class AddDishToOrder:
     ) -> AddedDish:
         ctx = self._ctx
         quantity, note = validate_quantity(quantity), validate_note(note)
+        modifier_option_ids = validate_option_ids(modifier_option_ids)
         order = await ctx.orders.get(tenant_id, order_id)
         if order is None:
             raise OrderNotFound(order_id)
