@@ -48,7 +48,7 @@ Branch `feat/slice-13-cards` in Backend and Menu-Frontend. Delivery: ask-on-risk
   inline — done Frontend `de50028`, fix `59c23da`
 - T4 (S2, S3) frontend: card controls in `/admin/design` (preview) and badges in the product form, with tests — inline
   — done Frontend `dcfe9ac`
-- T5 (S5) closing: Chrome headless phone/tablet/desktop, independent verifier (item 1), native review, docs — browser check done (L8); verifier, review and docs pending
+- T5 (S5) closing: Chrome headless phone/tablet/desktop, independent verifier (item 1), native review, docs — done: browser check (L8), independent verifier (L9), native review (L10), docs (ROADMAP, CLAUDE.md)
 
 ## Log
 - L1 2026-10-29 (user): "Arrancamos el Slice 13 — Diseño de tarjetas de producto (ROADMAP.md). El Slice 12 (layout) ya
@@ -81,3 +81,12 @@ Branch `feat/slice-13-cards` in Backend and Menu-Frontend. Delivery: ask-on-risk
   in a render test. Second run: no page or card overflow, text and button inside every card, images loaded, overlay add
   form opens, the editor shows Product cards and the preview follows. Demo items and theme restored; the test images
   were discarded and deleted by the worker.
+- L9 2026-10-30: independent verifier: S1-S5 ok, no blockers; 809 backend and 226 frontend tests, typecheck, lint,
+  build; HTTP probes with two tenants of its own (rejected writes leave data unchanged, unknown badge 422, tenant
+  isolation, idempotent create with badges); migration down/up/down on a scratch copy (`menu_verify_v13`, dropped).
+  Advisories: more than 6 repeated badges get 422 before collapsing (out of domain); the overlay darkening showed in the
+  list view (fixed, Frontend `c9c4d6d`); the overlay scrim and text are fixed black/white; downgrade loses card choices.
+- L10 2026-10-30: native review, Sonnet lenses: backend badges slice `review-4afd5908c92b96a7` (risk + reliability, no
+  findings); frontend `review-0617288e3fea4bc7` (reliability + readability) approved with 4 warnings, all fixed in
+  Frontend `3d794a4` (badge corners map of its own, clamp table pinned by a test, price stays visible while adding,
+  `fetchMenu` badge fallback test; assessed under budget). Frontend 227 tests. Next: user opens the PRs.
