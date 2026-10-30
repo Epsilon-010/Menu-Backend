@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
+from app.modules.orders.domain.modifiers import MenuModifierGroup
 from app.modules.orders.domain.model import Bill, Cart, CartLine, Guest, Order, OrderItem, OrderItemStatus
 
 
@@ -121,6 +122,8 @@ class MenuItem:
     item_id: uuid.UUID
     name: str
     price_cents: int
+    # In the item's order; sold-out options are listed with `available` False.
+    modifier_groups: tuple[MenuModifierGroup, ...] = ()
 
 
 class Menu(Protocol):

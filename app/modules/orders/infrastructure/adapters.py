@@ -13,6 +13,7 @@ from app.modules.catalog.infrastructure.repository import (
     SqlAlchemyItemRepository,
     SqlAlchemyModifierGroupRepository,
 )
+from app.modules.orders.domain.modifiers import MenuModifierGroup, MenuModifierOption
 from app.modules.orders.domain.ports import MenuItem, TableInfo
 from app.modules.tables.application.find_table import GetTable
 from app.modules.tables.application.manage_tables import ListTables
@@ -38,7 +39,29 @@ class CatalogMenu:
 
     async def orderable(self, tenant_id: uuid.UUID, item_ids: set[uuid.UUID]) -> dict[uuid.UUID, MenuItem]:
         return {
-            item_id: MenuItem(item_id=item_id, name=entry.item.name, price_cents=entry.item.price_cents)
+            item_id: MenuItem(
+                item_id=item_id,
+                name=entry.item.name,
+                price_cents=entry.item.price_cents,
+                modifier_groups=tuple(
+                    MenuModifierGroup(
+                        group_id=group.id,
+                        name=group.name,
+                        min_select=group.min_select,
+                        max_select=group.max_select,
+                        options=tuple(
+                            MenuModifierOption(
+                                option_id=option.id,
+                                name=option.name,
+                                price_cents=option.price_cents,
+                                available=option.is_available,
+                            )
+                            for option in group.options
+                        ),
+                    )
+                    for group in entry.modifier_groups
+                ),
+            )
             for item_id, entry in (await self._items.execute(tenant_id, item_ids)).items()
         }
 

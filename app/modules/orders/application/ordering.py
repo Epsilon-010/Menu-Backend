@@ -15,6 +15,7 @@ from app.modules.orders.domain.errors import (
     CartFull,
     CartLineNotFound,
     DinerNotAllowed,
+    InvalidOrderData,
     ItemsUnavailable,
     NothingToPay,
     OrderIdTaken,
@@ -29,12 +30,14 @@ from app.modules.orders.domain.model import (
     validate_note,
     validate_quantity,
 )
+from app.modules.orders.domain.modifiers import ChosenModifier, choose_modifiers, unit_price
 from app.modules.orders.domain.ports import (
     BillRepository,
     CartRepository,
     GuestAccess,
     GuestRepository,
     Menu,
+    MenuItem,
     OrderRepository,
     TableEvents,
     TableLocks,
@@ -67,6 +70,7 @@ class CartLineView:
     line: CartLine
     available: bool
     unit_price_cents: int | None
+    modifiers: tuple[ChosenModifier, ...] = ()
 
     @property
     def subtotal_cents(self) -> int:
@@ -117,20 +121,38 @@ async def authorize(ctx: Ordering, diner: Diner, *, lock: bool) -> Visit:
     return Visit(actor=guest.name, bill=bill)
 
 
+def still_valid(item: MenuItem | None, option_ids: tuple[uuid.UUID, ...]) -> tuple[ChosenModifier, ...] | None:
+    """The options as the menu has them now, or None when the dish can no longer be ordered like that
+    (the item left the menu, an option was removed or sold out, or the group rules changed)."""
+    if item is None:
+        return None
+    try:
+        return choose_modifiers(item, option_ids)
+    except (InvalidOrderData, ItemsUnavailable):
+        return None
+
+
+def _line_view(line: CartLine, item: MenuItem | None) -> CartLineView:
+    chosen = still_valid(item, line.modifier_option_ids)
+    if item is None or chosen is None:
+        return CartLineView(line=line, available=False, unit_price_cents=None)
+    return CartLineView(line=line, available=True, unit_price_cents=unit_price(item, chosen), modifiers=chosen)
+
+
 async def _cart_view(ctx: Ordering, diner: Diner) -> CartView:
     cart = await ctx.carts.get(diner.tenant_id, diner.table_id)
     prices = await ctx.menu.orderable(diner.tenant_id, {line.item_id for line in cart.lines})
-    return CartView(
-        version=cart.version,
-        lines=[
-            CartLineView(
-                line=line,
-                available=line.item_id in prices,
-                unit_price_cents=prices[line.item_id].price_cents if line.item_id in prices else None,
-            )
-            for line in cart.lines
-        ],
-    )
+    return CartView(version=cart.version, lines=[_line_view(line, prices.get(line.item_id)) for line in cart.lines])
+
+
+async def _choose(
+    ctx: Ordering, diner: Diner, item_id: uuid.UUID, option_ids: tuple[uuid.UUID, ...]
+) -> tuple[MenuItem, tuple[uuid.UUID, ...]]:
+    """The orderable item and the selection in its canonical order; raises ItemsUnavailable or InvalidOrderData."""
+    item = (await ctx.menu.orderable(diner.tenant_id, {item_id})).get(item_id)
+    if item is None:
+        raise ItemsUnavailable([item_id])
+    return item, tuple(modifier.option_id for modifier in choose_modifiers(item, option_ids))
 
 
 async def _cart_changed(ctx: Ordering, diner: Diner) -> CartView:
@@ -154,7 +176,13 @@ class AddCartLine:
         self._ctx = ctx
 
     async def execute(
-        self, diner: Diner, item_id: uuid.UUID, quantity: int, note: str = "", line_id: uuid.UUID | None = None
+        self,
+        diner: Diner,
+        item_id: uuid.UUID,
+        quantity: int,
+        note: str = "",
+        line_id: uuid.UUID | None = None,
+        modifier_option_ids: tuple[uuid.UUID, ...] = (),
     ) -> CartView:
         """`line_id` makes the add idempotent: a repeat (even after the cart was sent) adds nothing."""
         ctx = self._ctx
@@ -163,7 +191,7 @@ class AddCartLine:
         if line_id is not None:
             existing = await ctx.carts.get_line(diner.tenant_id, line_id)
             if existing is not None and existing.table_id == diner.table_id and existing.same_request(
-                item_id, quantity, note
+                item_id, quantity, note, modifier_option_ids
             ):
                 return await _cart_view(ctx, diner)
             if (
@@ -177,9 +205,7 @@ class AddCartLine:
             if existing is not None or await ctx.carts.line_exists_anywhere(line_id):
                 raise OrderIdTaken(line_id)
 
-        item = (await ctx.menu.orderable(diner.tenant_id, {item_id})).get(item_id)
-        if item is None:
-            raise ItemsUnavailable([item_id])
+        item, option_ids = await _choose(ctx, diner, item_id, modifier_option_ids)
         cart = await ctx.carts.get(diner.tenant_id, diner.table_id)
         if len(cart.lines) >= MAX_CART_LINES:
             raise CartFull()
@@ -193,6 +219,7 @@ class AddCartLine:
                 note=note,
                 added_by=visit.actor,
                 created_at=ctx.clock.now(),
+                modifier_option_ids=option_ids,
                 id=line_id or uuid.uuid4(),
             )
         )
@@ -213,11 +240,20 @@ class UpdateCartLine:
         self._ctx = ctx
 
     async def execute(
-        self, diner: Diner, line_id: uuid.UUID, quantity: int | None = None, note: str | None = None
+        self,
+        diner: Diner,
+        line_id: uuid.UUID,
+        quantity: int | None = None,
+        note: str | None = None,
+        modifier_option_ids: tuple[uuid.UUID, ...] | None = None,
     ) -> CartView:
+        """`modifier_option_ids` replaces the line's whole selection, checked against the menu now."""
         await authorize(self._ctx, diner, lock=True)
         line = await _own_line(self._ctx, diner, line_id)
-        await self._ctx.carts.update_line(line.with_changes(quantity=quantity, note=note))
+        if modifier_option_ids is not None:
+            _, modifier_option_ids = await _choose(self._ctx, diner, line.item_id, modifier_option_ids)
+        changed = line.with_changes(quantity=quantity, note=note, modifier_option_ids=modifier_option_ids)
+        await self._ctx.carts.update_line(changed)
         return await _cart_changed(self._ctx, diner)
 
 
@@ -259,7 +295,9 @@ class SubmitCart:
         if not cart.lines:
             raise CartEmpty()
         prices = await ctx.menu.orderable(diner.tenant_id, {line.item_id for line in cart.lines})
-        missing = [line.item_id for line in cart.lines if line.item_id not in prices]
+        # Every selection is checked again: the menu may have changed since each line was added.
+        chosen = {line.id: still_valid(prices.get(line.item_id), line.modifier_option_ids) for line in cart.lines}
+        missing = list(dict.fromkeys(line.item_id for line in cart.lines if chosen[line.id] is None))
         if missing:
             raise ItemsUnavailable(missing)
 
@@ -279,10 +317,11 @@ class SubmitCart:
                 OrderItem(
                     item_id=line.item_id,
                     name=prices[line.item_id].name,
-                    unit_price_cents=prices[line.item_id].price_cents,
+                    unit_price_cents=unit_price(prices[line.item_id], chosen[line.id] or ()),
                     quantity=line.quantity,
                     note=line.note,
                     added_by=line.added_by,
+                    modifiers=chosen[line.id] or (),
                     id=line.id,
                 )
                 for line in cart.lines

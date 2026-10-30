@@ -54,10 +54,10 @@ Branch `feat/slice-15-modifiers` in Backend and Menu-Frontend. Delivery: ask-on-
   Tenant isolation and `table`/`guest`/`waiter`/`kitchen` role tests on every new endpoint.
 
 ## Tasks
-- [ ] T1 S1-S3, S5, S6 — Backend catalog: tables + migration, domain, use cases, admin routes, item attach, menu output. Route: inline.
-- [ ] T2 S3-S5, S7-S9 — Backend orders: cart selection, pricing, submit snapshot + migration, outputs, staff dish. Route: inline.
-- [ ] T3 S10 — Frontend admin: modifiers page, item form group picker. Route: delegated writer (parallel with T4 and backend; disjoint surfaces).
-- [ ] T4 S10 — Frontend ordering: menu options picker, cart line edit, send confirmation, order/kitchen/delivery/bill cards, waiter add dish. Route: delegated writer (parallel with T3).
+- [x] T1 S1-S3, S5, S6 — Backend catalog: tables + migration, domain, use cases, admin routes, item attach, menu output. Route: inline. Commit `7578f65` (assess: medium, under_budget).
+- [x] T2 S3-S5, S7-S9 — Backend orders: cart selection, pricing, submit snapshot + migration, outputs, staff dish. Route: inline.
+- [x] T3 S10 — Frontend admin: modifiers page, item form group picker. Route: delegated writer (parallel with T4 and backend; disjoint surfaces). Frontend commit `7fe74fd`.
+- [x] T4 S10 — Frontend ordering: menu options picker, cart line edit, send confirmation, order/kitchen/delivery/bill cards, waiter add dish. Route: delegated writer (parallel with T3). Frontend commit `f54f9c0`.
 - [ ] T5 S11 — Closing: e2e, independent verifier (item 1: migrations and order snapshot), native review, docs, ROADMAP. Route: verifier delegated.
 
 ## Log
@@ -71,3 +71,16 @@ Branch `feat/slice-15-modifiers` in Backend and Menu-Frontend. Delivery: ask-on-
 - L8 (user, on the two assumptions: revalidate on send with 409; orders snapshot names and prices): "si estan bien tus supiesto haz le codigo"
 - L9: Delivery forecast ~2,500 authored lines across both repos (> 400) → ask-on-risk: one PR per repo per slice as in
   previous slices unless the user asks for a chain. Frontend writers run in parallel against the S1-S9 contract.
+- L10 (T1): RED import error -> GREEN 76 catalog unit tests; API 7/7 and race tests 3/3 (`test_modifiers_concurrency.py`).
+  Migration `dd10627658a8` (modifier_groups, modifier_options, item_modifier_groups; composite FKs keep the tenant;
+  ON DELETE CASCADE detaches). Item edits take KEY SHARE on the groups (row lock first) so a concurrent group delete
+  either waits or wins and the item answers 422 "Unknown modifier group". Probe: removing that pre-lock still passes
+  the race test (the FK translation covers it), so the pre-lock is defense against a deadlock this timing does not
+  reproduce. Assumption: items list groups in library order (the item form sends them by name).
+- L11 (T3/T4 writers): frontend 308/308, typecheck, lint, build clean. Rule wording is mirrored on the frontend; the
+  server's 422/409 detail is still shown. The waiter picker uses the default theme tokens (staff look).
+- L12 (T2): selection rules in `orders/domain/modifiers.py` (9 unit tests; one test case had 3 extras for a max of 3,
+  fixed to 4). Migration `4d9e8d3a002d` (cart_lines.modifier_option_ids UUID[], order_items.modifiers JSONB copy).
+  Cart lines re-price on every read; a selection that no longer fits is `available: false` and sending answers the
+  existing 409. API 8/8 (`test_modifier_orders_api.py`); exact-shape tests updated for the new `modifiers` /
+  `modifier_group_ids` / `modifier_groups` keys.

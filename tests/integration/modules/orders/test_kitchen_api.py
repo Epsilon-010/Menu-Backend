@@ -290,7 +290,7 @@ def test_the_kitchen_never_sees_prices(kitchen: Kitchen) -> None:
         assert not {key for key in keys(document) if "cents" in key or "price" in key or "total" in key}
     assert set(changed) == {"id", "number", "table_id", "table_name", "sent_by", "created_at", "status", "items"}
     assert set(changed["items"][0]) == {
-        "id", "name", "quantity", "note", "added_by", "status", "cancel_reason", "ready_at", "updated_at",
+        "id", "name", "quantity", "note", "added_by", "modifiers", "status", "cancel_reason", "ready_at", "updated_at",
     }
 
 
