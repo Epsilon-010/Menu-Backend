@@ -1,0 +1,2 @@
+class InvalidStatsRange(ValueError):
+    pass

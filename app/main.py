@@ -11,6 +11,7 @@ from app.modules.catalog.infrastructure import router as catalog_router
 from app.modules.media.infrastructure.jobs import CeleryImageCleanupScheduler
 from app.modules.orders.infrastructure import router as orders_router
 from app.modules.staff.infrastructure import router as staff_router
+from app.modules.stats.infrastructure import router as stats_router
 from app.modules.tables.infrastructure import router as tables_router
 from app.modules.tenants.infrastructure import router as tenants_router
 from app.modules.theming.infrastructure import router as theming_router
@@ -60,6 +61,7 @@ def create_app() -> FastAPI:
     api.include_router(orders_router.staff_router)
     api.include_router(theming_router.router)
     api.include_router(tenants_router.router)
+    api.include_router(stats_router.router)
     app.include_router(api)
     return app
 
