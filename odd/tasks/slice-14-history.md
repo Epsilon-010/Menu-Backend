@@ -32,7 +32,7 @@ Branch `feat/slice-14-history` in Backend and Menu-Frontend. Delivery: ask-on-ri
 - [x] T1 S1, S2 — Backend history: table + data migration, repository, publish/save keep images, `GET /theme/versions`. Route: inline. Commit `2c695a9`.
 - [x] T2 S5, S6 — Backend import: domain upgrade v1-v3 → v4, image stripping, `POST /theme/import`. Route: inline. Commit `9272808`.
 - [x] T3 S2, S3, S4, S5, S6 — Frontend: history list with restore, reset, export and import in `/admin/design`. Route: inline. Frontend commit `70cfdb4`.
-- [ ] T4 S7 — Closing: e2e between two tenants, independent verifier (item 1), native review, docs, ROADMAP. Route: verifier delegated.
+- [x] T4 S7 — Closing: e2e between two tenants, independent verifier (item 1), native review, docs, ROADMAP. Route: verifier delegated. Fixes Backend `2972cd2`, Frontend `3465acb`.
 
 Route evidence: no Writer trigger (units depend on each other: the frontend needs both endpoints); parent writes inline.
 Forecast: ~1.000 authored lines (backend ~650, frontend ~350). Delivery as in Slices 10-13: one PR per repo for the
@@ -86,3 +86,7 @@ slice, made of work-unit commits, each reviewed natively by range (`--base-ref <
   takes the editor state (unsaved edits included). Verifier data: DB `menu_verify14`; dev tenants
   `verify14-A-d932ba@example.com` (31 publishes, staff/tables "Verify14 ...") and `verify14-B-1ebbc9@example.com`;
   E2E tenants `e2e14-a/b-*@example.com`.
+- L14 (2026-10-30, closing): Backend range `1764a03..ba19032` (T2 + fix + docs) escalated to item 2 (import validates
+  untrusted JSON) and reviewed natively: `review-a1ed52be2e4c0009` (risk + reliability, Sonnet) approved, no findings,
+  acknowledged. Frontend `main..3465acb` assessed `medium`, `under_budget`, no high-risk item: no review (recorded).
+  ROADMAP Slice 14 marked done. Branches pushed; PRs to be opened by the user.
