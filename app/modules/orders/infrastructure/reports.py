@@ -19,6 +19,8 @@ class SqlAlchemySalesReports:
             select(BillModel.closed_at, BillModel.payment_method, BillModel.paid_cents).where(
                 BillModel.tenant_id == tenant_id,
                 BillModel.payment_method.is_not(None),
+                # A $0 "payment" (every dish cancelled) from before such bills were closed instead is no sale.
+                BillModel.paid_cents > 0,
                 BillModel.closed_at >= start,
                 BillModel.closed_at < end,
             )

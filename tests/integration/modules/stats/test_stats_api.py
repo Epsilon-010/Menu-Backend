@@ -230,3 +230,14 @@ def test_another_business_never_sees_these_figures(
     assert other["totals"]["collected_cents"] == 0
     assert other["products"] == [] and other["tables"] == []
     assert other["times"]["order"]["count"] == 0
+
+
+def test_a_bill_paid_for_zero_before_that_was_refused_is_not_a_sale(business: Business) -> None:
+    served = serve_and_pay(business)
+    # Older data: a bill "paid" for $0 (all its dishes cancelled) before such payments were refused.
+    run_sql(("UPDATE bills SET paid_cents = 0, payment_method = 'other' WHERE id = :id", {"id": served["bill_id"]}))
+
+    result = stats(business.admin)
+
+    assert (result["totals"]["paid_bills"], result["totals"]["average_ticket_cents"]) == (0, 0)
+    assert [m["bills"] for m in result["payment_methods"]] == [0, 0, 0]

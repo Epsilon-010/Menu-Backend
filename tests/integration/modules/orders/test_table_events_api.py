@@ -14,7 +14,7 @@ from app.modules.orders.infrastructure.adapters import RedisTableEvents
 from app.seed import SeedResult
 from app.shared.infrastructure.config import get_settings
 from tests.integration.modules.catalog.test_catalog_api import ok
-from tests.integration.modules.orders.test_guest_qr_api import guest_of, open_table, pay
+from tests.integration.modules.orders.test_guest_qr_api import close, guest_of, open_table
 from tests.integration.modules.orders.test_ordering_api import add, cart, menu_items, staff_of, submit
 from tests.integration.modules.tables.test_tables_api import (  # noqa: F401  (fixtures)
     ClientFactory,
@@ -103,11 +103,11 @@ def test_a_guest_stream_ends_with_the_visit_and_cannot_be_opened_again(
     bill_id = open_table(admin, table)
     guest = guest_of(new_client, table["qr_token"])
 
-    def pay_soon() -> None:
+    def close_soon() -> None:
         time.sleep(0.3)
-        pay(admin, bill_id)
+        close(admin, bill_id)  # nothing was ordered: the visit ends by closing the table
 
-    payer = threading.Thread(target=pay_soon)
+    payer = threading.Thread(target=close_soon)
     payer.start()
     started = time.monotonic()
     messages = received(guest, last_event_id=None)

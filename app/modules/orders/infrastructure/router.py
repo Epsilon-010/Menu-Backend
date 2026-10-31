@@ -47,6 +47,7 @@ from app.modules.orders.application.ordering import (
 from app.modules.orders.domain.errors import (
     BillClosed,
     BillHasOrders,
+    NothingToCharge,
     BillNotFound,
     CartChanged,
     CartEmpty,
@@ -469,6 +470,8 @@ async def _run(call: Awaitable[T]) -> T | JSONResponse:
         return problem(status.HTTP_409_CONFLICT, "That id is already used by something else")
     except NothingToPay:
         return problem(status.HTTP_409_CONFLICT, "There is nothing to pay yet")
+    except NothingToCharge:
+        return problem(status.HTTP_409_CONFLICT, "This bill has nothing to charge; close the table instead")
     except BillHasOrders:
         return problem(status.HTTP_409_CONFLICT, "A bill with orders is closed by registering its payment")
     except CartLineNotFound:
