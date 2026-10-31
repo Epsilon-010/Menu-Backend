@@ -1,5 +1,6 @@
 import asyncio
 import os
+import time
 from datetime import UTC, datetime
 from functools import cache
 from weakref import WeakKeyDictionary
@@ -12,6 +13,8 @@ from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatc
 # Each Argon2 hash takes ~64 MiB and a CPU core for tens of milliseconds: past this many at once, a
 # burst of logins waits in line instead of exhausting the memory of the API.
 MAX_CONCURRENT_HASHES = max(2, os.cpu_count() or 2)
+# How long the last check of an unknown account took, for `wait_like_verify`.
+_check_seconds: float | None = None
 _hashing_slots: "WeakKeyDictionary[asyncio.AbstractEventLoop, CapacityLimiter]" = WeakKeyDictionary()
 
 
@@ -41,7 +44,17 @@ class Argon2PasswordHasher:
         return await to_thread.run_sync(self._verify_sync, password_hash, password, limiter=_slots())
 
     async def verify_dummy(self, password: str) -> None:
+        global _check_seconds
+        started = time.perf_counter()
         await to_thread.run_sync(self._verify_sync, _dummy_hash(), password, limiter=_slots())
+        _check_seconds = time.perf_counter() - started
+
+    async def wait_like_verify(self) -> None:
+        if _check_seconds is None:
+            # Nothing measured yet in this process: one real check learns how long they take.
+            await self.verify_dummy("")
+            return
+        await asyncio.sleep(_check_seconds)
 
     def _verify_sync(self, password_hash: str, password: str) -> bool:
         try:

@@ -125,5 +125,6 @@ class LoginAttemptLimiter(Protocol):
         """Counts an attempt on a login that matches no account, from this client (IP), before its
         password is hashed. A new made-up login each time never repeats an account, so only this caps
         such a flood; real accounts never count here, so nobody can lock staff or tablets out by
-        failing from their shared address. Returns the seconds to wait when over the cap, else None."""
+        failing from their shared address. Returns the seconds left when over the cap, else None; the
+        caller answers like any failure, so the cap never tells which logins exist."""
         ...

@@ -303,15 +303,17 @@ async def test_only_logins_to_unknown_accounts_count_per_address(world: World, a
     assert world.limiter.unknown_from == [CLIENT, CLIENT]
 
 
-async def test_logins_to_unknown_accounts_over_the_address_cap_spend_no_hash(world: World) -> None:
+async def test_logins_to_unknown_accounts_over_the_address_cap_spend_no_hash_and_look_the_same(world: World) -> None:
+    # Answering 429 here (and 401 for real accounts) would tell which logins exist: same generic
+    # failure, after waiting as long as a hash takes, but without computing one.
     world.limiter.unknown_blocked_for = 300
 
     for login in (world.login().execute("nobody@example.com", PASSWORD, CLIENT), world.table_login().execute("ZZZZZZ", PIN, CLIENT)):
-        with pytest.raises(TooManyLoginAttempts) as refused:
+        with pytest.raises(InvalidCredentials):
             await login
-        assert refused.value.retry_after == 300
 
     assert world.hasher.verified == []
+    assert world.hasher.waited == 2
 
 
 async def test_login_of_an_inactive_user_fails_generically(world: World) -> None:

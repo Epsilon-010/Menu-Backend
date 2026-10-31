@@ -35,3 +35,28 @@ def test_concurrent_password_checks_are_bounded(monkeypatch: pytest.MonkeyPatch)
     asyncio.run(flood())
 
     assert most == 3
+
+
+def test_waiting_like_a_check_takes_as_long_as_one_but_never_hashes(monkeypatch: pytest.MonkeyPatch) -> None:
+    checks: list[str] = []
+
+    def slow_check(self: Argon2PasswordHasher, password_hash: str, password: str) -> bool:
+        checks.append(password)
+        time.sleep(0.05)
+        return False
+
+    monkeypatch.setattr(Argon2PasswordHasher, "_verify_sync", slow_check)
+    monkeypatch.setattr(security, "_check_seconds", None)
+
+    async def run() -> float:
+        hasher = Argon2PasswordHasher()
+        await hasher.verify_dummy("guess")  # a real check: the wait learns how long one takes
+        before = time.perf_counter()
+        for _ in range(3):
+            await hasher.wait_like_verify()
+        return (time.perf_counter() - before) / 3
+
+    waited = asyncio.run(run())
+
+    assert checks == ["guess"]
+    assert 0.04 <= waited <= 0.2

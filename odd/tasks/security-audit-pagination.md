@@ -38,8 +38,8 @@ Backend white-box (W*), frontend white-box (FE*), live black-box (B*). Status: f
   (redis-py default 100, then `MaxConnectionsError`); ~100 streams make every login 500 and revocation fail open.
   Fix: SSE gets its own bounded pool and a per-subject + global cap of open streams (503 beyond it).
 - W2 HIGH: login/table-login keep the DB connection while Argon2 (64 MiB) runs, and random usernames are never limited:
-  a flood exhausts the 5+10 pool. Fix: release the connection before hashing, bound concurrent hashes, per-IP cap on
-  failures across accounts.
+  a flood exhausts the 5+10 pool. Fix: release the connection before hashing, bound concurrent hashes, and cap per IP
+  only the logins to accounts that do not exist (see L6/L7; real accounts never count there).
 - W3 MEDIUM: `/auth/register` replay (known tenant id + business name) checks the admin password counting only
   `signup:<ip>`, skipping the `staff:<email>` backstop. Fix: count it under `staff:<email>` too.
 - W4 MEDIUM: 6-digit PINs vs 5/device + 50/account: a distributed attacker gets 4,800 guesses/day per account, and
@@ -94,3 +94,13 @@ Backend white-box (W*), frontend white-box (FE*), live black-box (B*). Status: f
   and per-account limits as before; (c) 429/503 on a stream cap: the frontend already polls and reconnects with a
   growing delay on any stream error (`useLiveEvents.ts`), no change; (d) unlimited guests could fill the global stream
   cap: tied to the open W7 decision.
+- L7 (2026-10-31): native review `review-bd3d31dd087bb061` (4 lenses, whole branch b3e2b00..db821ff) approved and
+  acknowledged. Fixed from its advisories: once an address spent its unknown-login budget, unknown logins answered 429
+  and real ones 401 (an account-enumeration oracle) → now the same 401 after waiting as long as a hash takes
+  (`wait_like_verify`, no hash computed); the 512-character cursor cap rejected cursors the server itself makes for
+  long non-ASCII names → derived from the key cap; config grouping; this Findings text. Left as is: two list-use-case
+  shapes (tables and groups keep their full list for orders, stats and the menu), the fake helper name, the nested-JSON
+  walk (already iterative, per the verifier).
+  Independent verifier (whole document, baseline b3e2b00): S4 and every "Fix" finding ok; its one blocker (tampered
+  cursor → 500) is `bb76f4a`; its per-IP lockout advisory is `db821ff`. Backend suite at `656da56`: 1100 passed;
+  frontend typecheck, lint, 377 tests.

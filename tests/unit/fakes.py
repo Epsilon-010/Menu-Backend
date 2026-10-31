@@ -50,6 +50,7 @@ class FakePasswordHasher:
 
     def __init__(self) -> None:
         self.verified: list[str] = []
+        self.waited = 0
 
     async def hash(self, password: str) -> str:
         return f"hashed:{password}"
@@ -60,6 +61,9 @@ class FakePasswordHasher:
 
     async def verify_dummy(self, password: str) -> None:
         self.verified.append("dummy")
+
+    async def wait_like_verify(self) -> None:
+        self.waited += 1
 
 
 class InMemoryTenantRepository:

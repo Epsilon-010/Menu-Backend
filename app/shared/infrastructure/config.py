@@ -29,9 +29,9 @@ class Settings(BaseSettings):
     # Live-update streams (SSE) open at once per API process, and per account, table or guest. Each
     # holds a connection of a Redis pool of its own, so they never starve logins or revocations.
     sse_max_streams: int = Field(default=500, gt=0)
+    sse_max_streams_per_session: int = Field(default=4, gt=0)
     # Request bodies are small JSON (images go straight to Cloudinary): anything bigger is a 413.
     max_request_body_bytes: int = Field(default=1024 * 1024, gt=0)
-    sse_max_streams_per_session: int = Field(default=4, gt=0)
 
     # Image storage. Without all three the API still runs, but image uploads answer 503.
     cloudinary_cloud_name: str | None = None

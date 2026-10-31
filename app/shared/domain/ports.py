@@ -29,3 +29,7 @@ class PasswordHasher(Protocol):
     async def verify_dummy(self, password: str) -> None:
         """Spends the same time as `verify`, so unknown accounts cannot be detected by timing."""
         ...
+
+    async def wait_like_verify(self) -> None:
+        """Waits about as long as `verify` takes without hashing: answers look alike, at no cost."""
+        ...

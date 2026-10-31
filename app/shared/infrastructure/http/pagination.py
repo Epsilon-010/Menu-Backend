@@ -27,8 +27,9 @@ T = TypeVar("T")
 Out = TypeVar("Out", bound=BaseModel)
 
 INVALID_CURSOR = "Invalid cursor"
-# base64 of the longest valid key plus a uuid and the JSON punctuation, with room to spare.
-_MAX_CURSOR_LENGTH = 512
+# base64 of the longest key the server makes: each character takes at most 6 bytes in the JSON (a
+# control character escaped as a six-character JSON escape), plus the uuid (36) and the punctuation.
+_MAX_CURSOR_LENGTH = 4 * -(-(MAX_CURSOR_KEY_LENGTH * 6 + 36 + 8) // 3)
 
 
 class PageOut(BaseModel, Generic[Out]):

@@ -40,9 +40,11 @@ class Login:
         await self._uow.release()
         if user is None:
             # A made-up login never repeats an account: only this per-address cap limits such a flood.
-            retry_after = await self._limiter.unknown_account(client)
-            if retry_after is not None:
-                raise TooManyLoginAttempts(retry_after)
+            if await self._limiter.unknown_account(client) is not None:
+                # The same answer and about the same time as any failure (a 429 here would tell which
+                # logins exist), without the hash.
+                await self._hasher.wait_like_verify()
+                raise InvalidCredentials()
             await self._hasher.verify_dummy(password)
         if user is None or not await self._hasher.verify(user.password_hash, password) or not user.is_active:
             raise InvalidCredentials()
