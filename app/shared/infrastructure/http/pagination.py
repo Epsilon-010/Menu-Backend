@@ -51,8 +51,12 @@ def decode_cursor(value: str) -> Cursor:
         key, cursor_id = decoded
         if not isinstance(key, str) or not isinstance(cursor_id, str) or len(key) > MAX_CURSOR_KEY_LENGTH:
             raise ValueError("bad cursor fields")
+        # JSON escapes can smuggle text Postgres refuses (a NUL, a lone surrogate): never send it a query.
+        if "\x00" in key:
+            raise ValueError("NUL in cursor key")
+        key.encode("utf-8")
         return Cursor(key=key, id=uuid.UUID(cursor_id))
-    except (binascii.Error, UnicodeDecodeError, ValueError, TypeError) as error:
+    except (binascii.Error, UnicodeError, ValueError, TypeError) as error:
         raise invalid from error
 
 

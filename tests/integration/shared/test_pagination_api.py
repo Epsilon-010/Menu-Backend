@@ -138,6 +138,9 @@ def _forged(payload: object) -> str:
         _forged({"k": "name"}),
         _forged([1, "00000000-0000-0000-0000-000000000000"]),
         _forged(["x" * 300, "00000000-0000-0000-0000-000000000000"]),
+        # Text Postgres cannot take: a NUL and a lone surrogate (JSON escapes decode to both).
+        _forged(["a\x00b", "00000000-0000-0000-0000-000000000000"]),
+        _forged(["a\ud800b", "00000000-0000-0000-0000-000000000000"]),
         "A" * 600,
     ],
 )
