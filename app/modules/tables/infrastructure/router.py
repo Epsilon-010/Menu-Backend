@@ -29,6 +29,7 @@ from app.modules.tables.infrastructure.repository import RandomTableCredentials,
 from app.shared.domain.principal import Principal
 from app.shared.infrastructure.database import SqlAlchemyUnitOfWork, get_session
 from app.shared.infrastructure.http.auth import require_role
+from app.shared.infrastructure.http.pagination import PageOut, PageQuery, page_out
 from app.shared.infrastructure.http.problems import problem
 from app.shared.infrastructure.security import Argon2PasswordHasher
 
@@ -153,9 +154,11 @@ def get_regenerate_table_pin(request: Request, session: SessionDep) -> Regenerat
 # --- Routes (admin only; the tenant always comes from the token) -------------------------------
 
 
-@router.get("", response_model=list[TableOut])
-async def list_tables(admin: Admin, use_case: Annotated[ListTables, Depends(get_list_tables)]) -> list[TableOut]:
-    return [_out(table) for table in await use_case.execute(admin.tenant_id)]
+@router.get("", response_model=PageOut[TableOut])
+async def list_tables(
+    admin: Admin, page: PageQuery, use_case: Annotated[ListTables, Depends(get_list_tables)]
+) -> PageOut[TableOut]:
+    return page_out(await use_case.page(admin.tenant_id, page), _out)
 
 
 @router.post("", response_model=TableWithPinOut, status_code=status.HTTP_201_CREATED)

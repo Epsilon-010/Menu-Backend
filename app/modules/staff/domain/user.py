@@ -4,6 +4,7 @@ from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from app.modules.staff.domain.errors import InvalidUserData
+from app.shared.domain.pagination import Page, PageRequest
 from app.shared.domain.principal import STAFF_ROLES, Role
 
 MIN_PASSWORD_LENGTH = 8
@@ -220,12 +221,12 @@ class UserRepository(Protocol):
         concurrent replay waits for the first one and then finds it."""
         ...
 
-    async def list_staff(self, tenant_id: uuid.UUID) -> list[User]:
-        """Waiters and cooks of the tenant, ordered by name."""
+    async def list_staff(self, tenant_id: uuid.UUID, page: PageRequest) -> Page[User]:
+        """One page of the tenant's waiters and cooks, ordered by name."""
         ...
 
-    async def list_admins(self, tenant_id: uuid.UUID) -> list[User]:
-        """Admins of the tenant, ordered by name."""
+    async def list_admins(self, tenant_id: uuid.UUID, page: PageRequest) -> Page[User]:
+        """One page of the tenant's admins, ordered by name."""
         ...
 
     async def lock_admin_changes(self, tenant_id: uuid.UUID) -> None:

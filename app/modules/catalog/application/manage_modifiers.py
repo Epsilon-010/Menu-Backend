@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from app.modules.catalog.domain.errors import CatalogIdTaken, InvalidCatalogData, ModifierGroupNotFound
 from app.modules.catalog.domain.modifiers import ModifierGroup, ModifierGroupRepository, OptionDraft
+from app.shared.domain.pagination import Page, PageRequest
 from app.shared.domain.ports import UnitOfWork
 
 
@@ -55,6 +56,9 @@ class ListModifierGroups:
 
     async def execute(self, tenant_id: uuid.UUID) -> list[ModifierGroup]:
         return await self._groups.list(tenant_id)
+
+    async def page(self, tenant_id: uuid.UUID, page: PageRequest) -> Page[ModifierGroup]:
+        return await self._groups.list_page(tenant_id, page)
 
 
 class CreateModifierGroup:

@@ -17,6 +17,7 @@ from app.modules.staff.domain.user import (
     normalize_username,
     validate_staff_member,
 )
+from app.shared.domain.pagination import Page, PageRequest
 from app.shared.domain.ports import PasswordHasher, UnitOfWork
 from app.shared.domain.principal import Role
 
@@ -89,8 +90,8 @@ class ListStaff:
     def __init__(self, users: UserRepository) -> None:
         self._users = users
 
-    async def execute(self, tenant_id: uuid.UUID) -> list[User]:
-        return await self._users.list_staff(tenant_id)
+    async def execute(self, tenant_id: uuid.UUID, page: PageRequest) -> Page[User]:
+        return await self._users.list_staff(tenant_id, page)
 
 
 class UpdateStaffMember:

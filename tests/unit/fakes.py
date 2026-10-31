@@ -1,7 +1,7 @@
 """In-memory fakes for the domain ports, shared by the unit tests."""
 
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
@@ -18,6 +18,7 @@ from app.modules.tenants.domain.tenant import Tenant
 from app.modules.theming.domain.repository import ThemeRecord, ThemeVersion
 from app.modules.theming.domain.theme import Theme
 from app.shared.domain.images import ImageStorageUnavailable, ImageVariant, StoredImage, UploadSignature
+from app.shared.domain.pagination import Cursor, Page, PageRequest
 from app.shared.domain.principal import Role
 
 
@@ -119,13 +120,13 @@ class InMemoryUserRepository:
     async def lock_email(self, email: str) -> None:
         self.email_locks.append(email)
 
-    async def list_staff(self, tenant_id: uuid.UUID) -> list[User]:
+    async def list_staff(self, tenant_id: uuid.UUID, page: PageRequest = PageRequest()) -> Page[User]:
         staff = [user for user in self.users.values() if user.tenant_id == tenant_id and user.role in STAFF_MEMBER_ROLES]
-        return sorted(staff, key=lambda user: user.full_name.lower())
+        return keyset_page(staff, lambda user: user.full_name.lower(), page)
 
-    async def list_admins(self, tenant_id: uuid.UUID) -> list[User]:
+    async def list_admins(self, tenant_id: uuid.UUID, page: PageRequest = PageRequest()) -> Page[User]:
         admins = [user for user in self.users.values() if user.tenant_id == tenant_id and user.role is Role.ADMIN]
-        return sorted(admins, key=lambda user: user.full_name.lower())
+        return keyset_page(admins, lambda user: user.full_name.lower(), page)
 
     async def lock_admin_changes(self, tenant_id: uuid.UUID) -> None:
         self.admin_locks.append(tenant_id)
@@ -172,6 +173,9 @@ class InMemoryTableRepository:
             ),
             None,
         )
+
+    async def list_page(self, tenant_id: uuid.UUID, page: PageRequest) -> Page[Table]:
+        return keyset_page(await self.list(tenant_id), lambda table: table.name.lower(), page)
 
     async def list(self, tenant_id: uuid.UUID) -> list[Table]:
         tables = [table for table in self.tables.values() if table.tenant_id == tenant_id]
@@ -230,6 +234,19 @@ class FakeStaffCredentials:
     def new_temporary_password(self) -> str:
         self.issued_passwords += 1
         return f"TEMPPASS{self.issued_passwords:04d}"
+
+
+def keyset_page[Row: (User, Table, ModifierGroup)](
+    rows: Iterable[Row], key: Callable[[Row], str], page: PageRequest
+) -> Page[Row]:
+    """In-memory twin of the SQL keyset page: ordered by (key, id), starting after the cursor."""
+    ordered = sorted(rows, key=lambda row: (key(row), row.id))
+    if page.after is not None:
+        after = (page.after.key, page.after.id)
+        ordered = [row for row in ordered if (key(row), row.id) > after]
+    items = ordered[: page.limit]
+    has_more = len(ordered) > page.limit
+    return Page(items, Cursor(key(items[-1]), items[-1].id) if has_more else None)
 
 
 def _by_position(entity: Category | Item) -> tuple[int, str]:
@@ -390,6 +407,9 @@ class InMemoryModifierGroupRepository:
                 if group_id in item.modifier_group_ids:
                     kept = tuple(g for g in item.modifier_group_ids if g != group_id)
                     self._items.items[item.id] = replace(item, modifier_group_ids=kept)
+
+    async def list_page(self, tenant_id: uuid.UUID, page: PageRequest) -> Page[ModifierGroup]:
+        return keyset_page(await self.list(tenant_id), lambda group: group.name.lower(), page)
 
     async def list(self, tenant_id: uuid.UUID) -> list[ModifierGroup]:
         return sorted((g for g in self.groups.values() if g.tenant_id == tenant_id), key=lambda g: g.name.lower())

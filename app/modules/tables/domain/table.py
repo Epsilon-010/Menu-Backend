@@ -3,6 +3,7 @@ from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from app.modules.tables.domain.errors import InvalidTableData
+from app.shared.domain.pagination import Page, PageRequest
 
 MAX_TABLE_NAME_LENGTH = 60
 # Uppercase letters and digits without the look-alikes 0/O, 1/I/L: the code is typed on a tablet.
@@ -102,6 +103,10 @@ class TableRepository(Protocol):
 
     async def get_by_name(self, tenant_id: uuid.UUID, name: str) -> Table | None:
         """Case-insensitive match inside the tenant."""
+        ...
+
+    async def list_page(self, tenant_id: uuid.UUID, page: PageRequest) -> Page[Table]:
+        """One page of the tenant's tables, ordered by name."""
         ...
 
     async def list(self, tenant_id: uuid.UUID) -> list[Table]:

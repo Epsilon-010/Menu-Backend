@@ -8,7 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.tables.domain.errors import TableCodeTaken, TableIdTaken, TableNameNotAvailable, TableNotFound
 from app.modules.tables.domain.table import PIN_LENGTH, TABLE_CODE_ALPHABET, TABLE_CODE_LENGTH, Table
 from app.modules.tables.infrastructure.models import TableModel
+from app.shared.domain.pagination import Page, PageRequest
 from app.shared.infrastructure.database import affected_rows, advisory_xact_lock, violated_unique_constraint
+from app.shared.infrastructure.pagination import keyset_page
 
 _NAME_INDEX = "uq_tables_tenant_id_lower_name"
 _CODE_INDEX = "uq_tables_code"
@@ -110,6 +112,16 @@ class SqlAlchemyTableRepository:
             select(TableModel).where(TableModel.tenant_id == tenant_id, func.lower(TableModel.name) == name.lower())
         )
         return _to_entity(model) if model is not None else None
+
+    async def list_page(self, tenant_id: uuid.UUID, page: PageRequest) -> Page[Table]:
+        models, following = await keyset_page(
+            self._session,
+            select(TableModel).where(TableModel.tenant_id == tenant_id),
+            func.lower(TableModel.name),
+            TableModel.id,
+            page,
+        )
+        return Page([_to_entity(model) for model in models], following)
 
     async def list(self, tenant_id: uuid.UUID) -> list[Table]:
         models = await self._session.scalars(

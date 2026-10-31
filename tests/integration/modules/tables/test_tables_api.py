@@ -102,7 +102,7 @@ def test_admin_creates_a_table_and_its_tablet_signs_in_as_that_table(
     assert len(table["qr_token"]) >= 32
     assert re.fullmatch(r"\d{6}", table["pin"])
     # The PIN is shown only once: the list never returns it.
-    assert admin.get(TABLES_URL).json() == [
+    assert admin.get(TABLES_URL).json()["items"] == [
         {"id": table["id"], "name": "Mesa 4", "code": table["code"], "is_active": True, "qr_token": table["qr_token"]}
     ]
 
@@ -188,7 +188,7 @@ def test_a_table_token_gets_403_on_every_admin_endpoint(new_client: ClientFactor
     ]
 
     assert [response.status_code for response in responses] == [403] * 8
-    assert [t["name"] for t in admin.get(TABLES_URL).json()] == ["Mesa 4"]
+    assert [t["name"] for t in admin.get(TABLES_URL).json()["items"]] == ["Mesa 4"]
     assert tablet.get("/api/v1/auth/me").status_code == 200
 
 
@@ -297,10 +297,10 @@ def test_a_tenant_never_sees_nor_changes_another_tenant_tables(
     tablet = tablet_of(new_client, table)
     other = admin_of(new_client, "boss@example.com")
 
-    assert other.get(TABLES_URL).json() == []
+    assert other.get(TABLES_URL).json()["items"] == []
     assert other.patch(f"{TABLES_URL}/{table['id']}", json={"is_active": False}).status_code == 404
     assert other.post(f"{TABLES_URL}/{table['id']}/pin").status_code == 404
-    assert owner.get(TABLES_URL).json()[0]["is_active"] is True
+    assert owner.get(TABLES_URL).json()["items"][0]["is_active"] is True
     assert tablet.get("/api/v1/auth/me").json()["tenant"]["id"] == str(tenant_a.tenant_id)
 
 
@@ -316,7 +316,7 @@ def test_repeating_a_table_create_never_makes_a_second_table(new_client: ClientF
     assert first.status_code == 201 and first.json()["id"] == body["id"]
     assert replay.status_code == 409
     assert replay.json()["detail"] == "This table was already created; generate a new PIN to see its credentials"
-    assert [t["name"] for t in admin.get(TABLES_URL).json()] == ["Mesa 7"]
+    assert [t["name"] for t in admin.get(TABLES_URL).json()["items"]] == ["Mesa 7"]
     # Unknown fields are rejected, not silently ignored.
     assert admin.post(TABLES_URL, json={"name": "Mesa 8", "tenant_id": "x"}).status_code == 422
     assert admin.patch(f"{TABLES_URL}/{body['id']}", json={"code": "HACKED"}).status_code == 422

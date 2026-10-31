@@ -1,7 +1,7 @@
 import secrets
 import uuid
 
-from sqlalchemy import func, select, update
+from sqlalchemy import Select, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,8 +15,10 @@ from app.modules.staff.domain.user import (
     User,
 )
 from app.modules.staff.infrastructure.models import UserModel
+from app.shared.domain.pagination import Page, PageRequest
 from app.shared.domain.principal import Role
 from app.shared.infrastructure.database import affected_rows, advisory_xact_lock, violated_unique_constraint
+from app.shared.infrastructure.pagination import keyset_page
 
 
 class RandomStaffCredentials:
@@ -114,21 +116,24 @@ class SqlAlchemyUserRepository:
         model = await self._session.scalar(select(UserModel).where(UserModel.username == username))
         return _to_entity(model) if model is not None else None
 
-    async def list_staff(self, tenant_id: uuid.UUID) -> list[User]:
-        models = await self._session.scalars(
-            select(UserModel)
-            .where(UserModel.tenant_id == tenant_id, UserModel.role.in_([role.value for role in STAFF_MEMBER_ROLES]))
-            .order_by(func.lower(UserModel.full_name), UserModel.username)
+    async def list_staff(self, tenant_id: uuid.UUID, page: PageRequest) -> Page[User]:
+        return await self._page(
+            select(UserModel).where(
+                UserModel.tenant_id == tenant_id, UserModel.role.in_([role.value for role in STAFF_MEMBER_ROLES])
+            ),
+            page,
         )
-        return [_to_entity(model) for model in models]
 
-    async def list_admins(self, tenant_id: uuid.UUID) -> list[User]:
-        models = await self._session.scalars(
-            select(UserModel)
-            .where(UserModel.tenant_id == tenant_id, UserModel.role == Role.ADMIN.value)
-            .order_by(func.lower(UserModel.full_name), UserModel.email)
+    async def list_admins(self, tenant_id: uuid.UUID, page: PageRequest) -> Page[User]:
+        return await self._page(
+            select(UserModel).where(UserModel.tenant_id == tenant_id, UserModel.role == Role.ADMIN.value), page
         )
-        return [_to_entity(model) for model in models]
+
+    async def _page(self, statement: Select[tuple[UserModel]], page: PageRequest) -> Page[User]:
+        models, following = await keyset_page(
+            self._session, statement, func.lower(UserModel.full_name), UserModel.id, page
+        )
+        return Page([_to_entity(model) for model in models], following)
 
     async def update(self, user: User) -> None:
         # Tenant-scoped like every other query; email and username never change.
