@@ -71,4 +71,8 @@ class BillClosed(Exception):
 
 
 class NothingToPay(Exception):
-    """The table asked for the bill before ordering anything on this visit."""
+    """The table asked for the bill with nothing to pay: no orders yet, or every dish cancelled."""
+
+
+class NothingToCharge(Exception):
+    """A bill of $0 (every dish cancelled) is closed without payment, never paid."""

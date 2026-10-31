@@ -76,6 +76,11 @@ def pay(staff: TestClient, bill_id: str) -> None:
     ok(staff.post(f"{BILLS_URL}/{bill_id}/payment", json={"method": "cash"}))
 
 
+def close(staff: TestClient, bill_id: str) -> None:
+    """Ends a visit that has nothing to charge (a bill of $0 is closed, never paid)."""
+    assert staff.post(f"{BILLS_URL}/{bill_id}/close").status_code == 204
+
+
 def locked_out(guest: TestClient, item_id: str) -> None:
     """Nothing the guest can do at the table anymore: read, add, change, send, refresh, or ask who they are."""
     assert guest.get(CART_URL).status_code == 401
@@ -194,7 +199,7 @@ def test_ending_the_visit_holds_even_if_redis_forgot_the_revocations(
     guest = guest_of(new_client, table["qr_token"])
     ok(add(guest, items["pastor"]))
 
-    pay(admin, bill_id)
+    close(admin, bill_id)
     forget_access_revocations()
 
     # The access token is still unexpired, but every table action re-checks the visit in Postgres.
@@ -209,7 +214,7 @@ def test_old_guests_stay_out_when_the_table_opens_again_for_the_next_people(
     table = created(create_table(admin))
     first_visit = open_table(admin, table)
     old_guest = guest_of(new_client, table["qr_token"])
-    pay(admin, first_visit)
+    close(admin, first_visit)
     forget_access_revocations()
 
     open_table(admin, table)  # the next customers sit down

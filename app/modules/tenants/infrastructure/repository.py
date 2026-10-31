@@ -1,5 +1,6 @@
 import uuid
 
+from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,7 +15,7 @@ class SqlAlchemyTenantRepository:
         self._session = session
 
     async def add(self, tenant: Tenant) -> None:
-        self._session.add(TenantModel(id=tenant.id, name=tenant.name))
+        self._session.add(TenantModel(id=tenant.id, name=tenant.name, timezone=tenant.timezone))
         try:
             await self._session.flush()
         except IntegrityError as error:
@@ -25,4 +26,7 @@ class SqlAlchemyTenantRepository:
 
     async def get(self, tenant_id: uuid.UUID) -> Tenant | None:
         model = await self._session.get(TenantModel, tenant_id)
-        return Tenant(id=model.id, name=model.name) if model is not None else None
+        return Tenant(id=model.id, name=model.name, timezone=model.timezone) if model is not None else None
+
+    async def set_timezone(self, tenant_id: uuid.UUID, timezone: str) -> None:
+        await self._session.execute(update(TenantModel).where(TenantModel.id == tenant_id).values(timezone=timezone))

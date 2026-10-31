@@ -95,6 +95,8 @@ class OrderItemModel(UUIDPrimaryKey, Base):
     status: Mapped[str] = mapped_column(String(12))
     position: Mapped[int] = mapped_column(Integer)
     ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # When it entered the kitchen queue: the order's send time, or when staff added it later.
+    queued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     cancel_reason: Mapped[str | None] = mapped_column(String(200))
     # Copy of the chosen options when ordered: [{"option_id", "group", "name", "price_cents"}].

@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass
 
 from app.modules.orders.application.ordering import Ordering, clear_bill_request
-from app.modules.orders.domain.errors import BillHasOrders, BillNotFound, TableNotFound
+from app.modules.orders.domain.errors import BillHasOrders, BillNotFound, NothingToCharge, TableNotFound
 from app.modules.orders.domain.model import Bill, Order, PaymentMethod
 
 
@@ -129,14 +129,17 @@ class PayBill:
         ctx = self._ctx
         bill = await _locked_open_bill(ctx, tenant_id, bill_id)
         orders = await ctx.orders.list_for_bill(tenant_id, bill.id)
-        paid = bill.paid(ctx.clock.now(), method, sum(order.total_cents for order in orders))
+        total = sum(order.total_cents for order in orders)
+        if total == 0:
+            raise NothingToCharge(bill_id)
+        paid = bill.paid(ctx.clock.now(), method, total)
         await _end_visit(ctx, paid)
         table = await ctx.tables.get(tenant_id, bill.table_id)
         return BillDetail(bill=paid, table_name=table.name if table is not None else "", orders=orders)
 
 
 class CloseTable:
-    """Closes a bill that never got an order (the guests left without ordering)."""
+    """Closes a bill with nothing to charge: no orders (the guests left) or every dish cancelled."""
 
     def __init__(self, ctx: Ordering) -> None:
         self._ctx = ctx
@@ -144,7 +147,7 @@ class CloseTable:
     async def execute(self, tenant_id: uuid.UUID, bill_id: uuid.UUID) -> None:
         ctx = self._ctx
         bill = await _locked_open_bill(ctx, tenant_id, bill_id)
-        if await ctx.orders.list_for_bill(tenant_id, bill.id):
+        if sum(order.total_cents for order in await ctx.orders.list_for_bill(tenant_id, bill.id)) > 0:
             raise BillHasOrders(bill_id)
         await _end_visit(ctx, bill.closed_without_payment(ctx.clock.now()))
 

@@ -378,7 +378,9 @@ class RequestBill:
     async def execute(self, diner: Diner) -> datetime:
         ctx = self._ctx
         visit = await authorize(ctx, diner, lock=True)
-        if visit.bill is None or not await ctx.orders.list_for_bill(diner.tenant_id, visit.bill.id):
+        if visit.bill is None or not any(
+            order.total_cents > 0 for order in await ctx.orders.list_for_bill(diner.tenant_id, visit.bill.id)
+        ):
             raise NothingToPay()
         if visit.bill.bill_requested_at is not None:
             return visit.bill.bill_requested_at

@@ -318,6 +318,7 @@ class SqlAlchemyOrderRepository:
                 added_by=item.added_by,
                 status=item.status.value,
                 position=position,
+                queued_at=order.created_at,
                 updated_at=item.updated_at or order.created_at,
                 modifiers=_modifiers_json(item.modifiers),
             )
@@ -433,6 +434,7 @@ class SqlAlchemyOrderRepository:
                 added_by=dish.added_by,
                 status=dish.status.value,
                 position=(last if last is not None else -1) + 1,
+                queued_at=dish.updated_at,
                 updated_at=dish.updated_at,
                 modifiers=_modifiers_json(dish.modifiers),
             )

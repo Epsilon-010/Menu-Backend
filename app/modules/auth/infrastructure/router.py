@@ -44,6 +44,7 @@ from app.modules.tables.infrastructure.repository import SqlAlchemyTableReposito
 from app.modules.tenants.application.create_tenant import CreateTenant
 from app.modules.tenants.application.get_tenant import GetTenant
 from app.modules.tenants.domain.errors import InvalidTenantData, TenantIdTaken
+from app.modules.tenants.domain.tenant import MAX_TIMEZONE_LENGTH
 from app.modules.tenants.infrastructure.repository import SqlAlchemyTenantRepository
 from app.shared.domain.principal import Role
 from app.shared.infrastructure.config import get_settings
@@ -93,6 +94,8 @@ class RegisterRequest(BaseModel):
     email: str = Field(max_length=254)
     password: str = Field(max_length=200)
     business_name: str = Field(max_length=200)
+    # The browser's IANA time zone; the statistics cut days in it.
+    timezone: str | None = Field(default=None, max_length=MAX_TIMEZONE_LENGTH)
 
 
 class SessionResponse(BaseModel):
@@ -336,7 +339,7 @@ async def register(
     """Self sign-up: creates the business and its admin in one transaction and signs the admin in."""
     try:
         auth = await use_case.execute(
-            body.email, body.password, body.business_name, _client_address(request), body.id
+            body.email, body.password, body.business_name, _client_address(request), body.id, body.timezone
         )
     except (InvalidUserData, InvalidTenantData) as error:
         return problem(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error))
