@@ -169,7 +169,7 @@ def _login_limiter(request: Request) -> RedisLoginAttemptLimiter:
         window_seconds=settings.login_failure_window_seconds,
         max_per_client=settings.login_max_failures_per_client,
         max_per_account=settings.login_max_failures_backstop,
-        max_per_address=settings.login_max_failures_per_address,
+        max_unknown_per_address=settings.login_max_unknown_per_address,
     )
 
 

@@ -23,8 +23,9 @@ class Settings(BaseSettings):
     # Per client IP + account; the per-account backstop caps all addresses together.
     login_max_failures_per_client: int = Field(default=5, gt=0)
     login_max_failures_backstop: int = Field(default=50, gt=0)
-    # Per client IP over every account (each failure costs an Argon2 hash); a venue's devices share one.
-    login_max_failures_per_address: int = Field(default=100, gt=0)
+    # Logins to accounts that do not exist, per client IP (each costs an Argon2 hash). Real accounts never
+    # count here, so a venue's devices sharing one IP cannot lock each other out.
+    login_max_unknown_per_address: int = Field(default=100, gt=0)
     # Live-update streams (SSE) open at once per API process, and per account, table or guest. Each
     # holds a connection of a Redis pool of its own, so they never starve logins or revocations.
     sse_max_streams: int = Field(default=500, gt=0)

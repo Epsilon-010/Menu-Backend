@@ -36,6 +36,10 @@ class TableLogin:
         # The hash below is slow: never hold a pooled connection while it runs.
         await self._uow.release()
         if table is None:
+            # A made-up code never repeats a table: only this per-address cap limits such a flood.
+            retry_after = await self._limiter.unknown_account(client)
+            if retry_after is not None:
+                raise TooManyLoginAttempts(retry_after)
             await self._hasher.verify_dummy(pin)
         if table is None or not await self._hasher.verify(table.pin_hash, pin) or not table.is_active:
             raise InvalidCredentials()

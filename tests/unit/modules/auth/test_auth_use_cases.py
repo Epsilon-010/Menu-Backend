@@ -287,6 +287,33 @@ async def test_table_login_frees_the_database_connection_before_hashing(world: W
     assert seen == [1, 2]
 
 
+async def test_only_logins_to_unknown_accounts_count_per_address(world: World, admin: User) -> None:
+    # A venue's devices share one address: failing on real accounts must never lock the others out.
+    with pytest.raises(InvalidCredentials):
+        await world.login().execute("owner@example.com", "wrong-pass", CLIENT)
+    await world.add_table(Tenant.create("La Taqueria"))
+    with pytest.raises(InvalidCredentials):
+        await world.table_login().execute("K7M2QX", "000000", CLIENT)
+    assert world.limiter.unknown_from == []
+
+    for login in (world.login().execute("nobody@example.com", PASSWORD, CLIENT), world.table_login().execute("ZZZZZZ", PIN, CLIENT)):
+        with pytest.raises(InvalidCredentials):
+            await login
+
+    assert world.limiter.unknown_from == [CLIENT, CLIENT]
+
+
+async def test_logins_to_unknown_accounts_over_the_address_cap_spend_no_hash(world: World) -> None:
+    world.limiter.unknown_blocked_for = 300
+
+    for login in (world.login().execute("nobody@example.com", PASSWORD, CLIENT), world.table_login().execute("ZZZZZZ", PIN, CLIENT)):
+        with pytest.raises(TooManyLoginAttempts) as refused:
+            await login
+        assert refused.value.retry_after == 300
+
+    assert world.hasher.verified == []
+
+
 async def test_login_of_an_inactive_user_fails_generically(world: World) -> None:
     await world.add_user(Tenant(name="Closed"), "gone@example.com", active=False)
 

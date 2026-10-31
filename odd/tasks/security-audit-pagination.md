@@ -85,3 +85,12 @@ Backend white-box (W*), frontend white-box (FE*), live black-box (B*). Status: f
   the shared Redis pool, reproducing W1. Backend `uv run pytest`: 1100 passed. Frontend: typecheck, lint, 377 tests,
   build, `nginx -t` on the runtime image.
 - L5: open decisions for the user: W4 (PIN length / lockout), W7 (guest cap), W9 (kitchen prices on `/menu`), B1.
+- L6 (2026-10-31): native review `review-62f25ec3e3fb7150` (risk, resilience, reliability; range b3e2b00..656da56)
+  approved and acknowledged, with advisories: (a) a forged cursor with a NUL or lone surrogate in its key answered 500
+  (also reported by a parallel session and reproduced live) → fixed in `bb76f4a` (422 "Invalid cursor");
+  (b) the per-IP failure cap counted every account, so a diner on the venue's Wi-Fi could lock staff and tablet
+  logins sharing that IP → redesigned: only logins to accounts that do not exist count per address
+  (`LOGIN_MAX_UNKNOWN_PER_ADDRESS`), checked after the lookup and before the hash; real accounts keep the per-device
+  and per-account limits as before; (c) 429/503 on a stream cap: the frontend already polls and reconnects with a
+  growing delay on any stream error (`useLiveEvents.ts`), no change; (d) unlimited guests could fill the global stream
+  cap: tied to the open W7 decision.

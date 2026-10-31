@@ -573,10 +573,12 @@ class FakeAccessRevocations:
 
 
 class FakeLoginAttemptLimiter:
-    def __init__(self, blocked_for: int | None = None) -> None:
+    def __init__(self, blocked_for: int | None = None, unknown_blocked_for: int | None = None) -> None:
         self.blocked_for = blocked_for
+        self.unknown_blocked_for = unknown_blocked_for
         self.acquired: list[tuple[str, str]] = []
         self.succeeded_logins: list[tuple[str, str]] = []
+        self.unknown_from: list[str] = []
 
     async def acquire(self, account: str, client: str) -> int | None:
         self.acquired.append((account, client))
@@ -584,6 +586,10 @@ class FakeLoginAttemptLimiter:
 
     async def succeeded(self, account: str, client: str) -> None:
         self.succeeded_logins.append((account, client))
+
+    async def unknown_account(self, client: str) -> int | None:
+        self.unknown_from.append(client)
+        return self.unknown_blocked_for
 
 class FakeTableGuests:
     """Records which tables had their QR guests ended, and when their access was revoked."""
