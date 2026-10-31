@@ -9,7 +9,13 @@ import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
 
+from sqlalchemy import update
+
+from app.modules.tables.infrastructure.models import TableModel
 from app.seed import SeedResult
+from app.shared.infrastructure.config import get_settings
+from app.shared.infrastructure.database import create_engine, create_session_factory
+from app.shared.infrastructure.security import Argon2PasswordHasher
 from tests.integration.modules.auth.test_auth_api import (
     _seed,
     claims_for,
@@ -100,7 +106,7 @@ def test_admin_creates_a_table_and_its_tablet_signs_in_as_that_table(
     }
     assert CODE_PATTERN.match(table["code"])
     assert len(table["qr_token"]) >= 32
-    assert re.fullmatch(r"\d{6}", table["pin"])
+    assert re.fullmatch(r"\d{8}", table["pin"])
     # The PIN is shown only once: the list never returns it.
     assert admin.get(TABLES_URL).json()["items"] == [
         {"id": table["id"], "name": "Mesa 4", "code": table["code"], "is_active": True, "qr_token": table["qr_token"]}
@@ -249,7 +255,7 @@ def test_regenerating_the_pin_ends_the_device_session_and_only_the_new_pin_works
     assert response.status_code == 200
     regenerated = response.json()
     assert regenerated["code"] == table["code"]
-    assert re.fullmatch(r"\d{6}", regenerated["pin"])
+    assert re.fullmatch(r"\d{8}", regenerated["pin"])
     assert tablet.get("/api/v1/auth/me").status_code == 401
     assert refresh_with(new_client(), refresh_token).status_code == 401
     if regenerated["pin"] != table["pin"]:
@@ -320,3 +326,42 @@ def test_repeating_a_table_create_never_makes_a_second_table(new_client: ClientF
     # Unknown fields are rejected, not silently ignored.
     assert admin.post(TABLES_URL, json={"name": "Mesa 8", "tenant_id": "x"}).status_code == 422
     assert admin.patch(f"{TABLES_URL}/{body['id']}", json={"code": "HACKED"}).status_code == 422
+
+
+# --- PINs of 8 digits; the 6-digit ones made before keep working ----------------------------------
+
+
+def _set_pin_hash(table_id: str, pin: str) -> None:
+    async def run() -> None:
+        engine = create_engine(get_settings().database_url)
+        try:
+            async with create_session_factory(engine)() as session:
+                hashed = await Argon2PasswordHasher().hash(pin)
+                await session.execute(
+                    update(TableModel).where(TableModel.id == uuid.UUID(table_id)).values(pin_hash=hashed)
+                )
+                await session.commit()
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_new_table_pins_have_8_digits_and_an_old_6_digit_pin_still_signs_in(
+    new_client: ClientFactory, tenant_a: SeedResult
+) -> None:
+    admin = admin_of(new_client)
+    table = created(create_table(admin))
+    renewed = ok_json(admin.post(f"{TABLES_URL}/{table['id']}/pin"))
+
+    for pin in (table["pin"], renewed["pin"]):
+        assert len(pin) == 8 and pin.isdigit()
+    _set_pin_hash(table["id"], "123456")  # a PIN given before the change
+
+    assert table_login(new_client(), table["code"], "123456").status_code == 200
+
+
+def ok_json(response: Response) -> dict[str, str]:
+    assert response.status_code == 200, response.text
+    body: dict[str, str] = response.json()
+    return body

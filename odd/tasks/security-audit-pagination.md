@@ -115,3 +115,7 @@ Backend white-box (W*), frontend white-box (FE*), live black-box (B*). Status: f
   that lost its cookie and scans again takes another of the 30); the logout denylist fails open like the session
   version floor; no test pins that a full table spends no login attempt. Not applicable: a token without `jti` is
   already refused by the required-claims check before it is read.
+- L11 (2026-10-31, user, verbatim): "hazlo" (answering: 8-digit PINs for new ones, old 6-digit PINs keep working).
+- L12: W4 fixed. New staff and table PINs have 8 digits (`STAFF_PIN_LENGTH`, `PIN_LENGTH`): 10^8 PINs, so 4,800
+  guesses a day per account take ~57 years for even odds instead of ~104 days. Sign-in never checked the length, so
+  6-digit PINs already given keep working; the table login form accepts 6 or 8 digits and both hints say so.

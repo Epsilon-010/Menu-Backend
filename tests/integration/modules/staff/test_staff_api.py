@@ -124,7 +124,7 @@ def test_admin_creates_a_waiter_and_a_cook_with_only_a_name_and_each_signs_in_wi
     }
     for member in (waiter, cook):
         assert len(member["code"]) == 6 and set(member["code"]) <= set(STAFF_CODE_ALPHABET)
-        assert len(member["pin"]) == 6 and member["pin"].isdigit()
+        assert len(member["pin"]) == 8 and member["pin"].isdigit()
     assert waiter["code"] != cook["code"]
     # The PIN is shown once: the list never carries it.
     listed = admin.get(STAFF_URL)
@@ -304,7 +304,7 @@ def test_regenerating_the_pin_keeps_the_code_ends_the_sessions_and_only_the_new_
     assert response.status_code == 200
     renewed = response.json()
     assert {k: v for k, v in renewed.items() if k != "pin"} == {k: v for k, v in target.items() if k != "pin"}
-    assert len(renewed["pin"]) == 6 and renewed["pin"].isdigit()
+    assert len(renewed["pin"]) == 8 and renewed["pin"].isdigit()
     assert waiter.get("/api/v1/auth/me").status_code == 401
     assert waiter.post("/api/v1/auth/refresh").status_code == 401
     if renewed["pin"] != target["pin"]:

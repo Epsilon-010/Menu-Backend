@@ -9,7 +9,9 @@ MAX_TABLE_NAME_LENGTH = 60
 # Uppercase letters and digits without the look-alikes 0/O, 1/I/L: the code is typed on a tablet.
 TABLE_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 TABLE_CODE_LENGTH = 6
-PIN_LENGTH = 6
+# 8 digits: 100 million PINs, so guessing one within the login limits takes decades, not weeks.
+# PINs given before (6 digits) keep working until the admin generates a new one.
+PIN_LENGTH = 8
 
 
 def normalize_table_code(code: str) -> str:

@@ -16,7 +16,9 @@ _EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 # modules do not share domain code). Uppercase letters and digits without the look-alikes 0/O, 1/I/L.
 STAFF_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 STAFF_CODE_LENGTH = 6
-STAFF_PIN_LENGTH = 6
+# 8 digits: 100 million PINs, so guessing one within the login limits takes decades, not weeks.
+# PINs given before (6 digits) keep working until the admin generates a new one.
+STAFF_PIN_LENGTH = 8
 # Generated for a new admin, who must replace it on first sign-in.
 TEMPORARY_PASSWORD_LENGTH = 12
 
