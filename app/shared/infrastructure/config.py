@@ -23,6 +23,14 @@ class Settings(BaseSettings):
     # Per client IP + account; the per-account backstop caps all addresses together.
     login_max_failures_per_client: int = Field(default=5, gt=0)
     login_max_failures_backstop: int = Field(default=50, gt=0)
+    # Per client IP over every account (each failure costs an Argon2 hash); a venue's devices share one.
+    login_max_failures_per_address: int = Field(default=100, gt=0)
+    # Live-update streams (SSE) open at once per API process, and per account, table or guest. Each
+    # holds a connection of a Redis pool of its own, so they never starve logins or revocations.
+    sse_max_streams: int = Field(default=500, gt=0)
+    # Request bodies are small JSON (images go straight to Cloudinary): anything bigger is a 413.
+    max_request_body_bytes: int = Field(default=1024 * 1024, gt=0)
+    sse_max_streams_per_session: int = Field(default=4, gt=0)
 
     # Image storage. Without all three the API still runs, but image uploads answer 503.
     cloudinary_cloud_name: str | None = None

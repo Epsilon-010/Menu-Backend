@@ -197,6 +197,9 @@ def test_an_open_bill_is_pending_without_cancelled_dishes_and_with_dishes_added_
     [
         ({"from": "2026-10-21", "to": "2026-10-20"}, "The end date must be on or after the start date"),
         ({"from": "2026-01-01", "to": "2027-01-02"}, "The range can be at most 366 days"),
+        # Days whose local midnights overflow a datetime (or that no business can have sold on).
+        ({"from": "9999-12-31", "to": "9999-12-31"}, "Dates must be between 2000-01-01 and 2100-12-31"),
+        ({"from": "0001-01-01", "to": "0001-01-02"}, "Dates must be between 2000-01-01 and 2100-12-31"),
     ],
 )
 def test_an_invalid_range_is_422(business: Business, params: dict[str, str], detail: str) -> None:

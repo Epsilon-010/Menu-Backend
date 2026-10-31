@@ -6,7 +6,7 @@ from app.modules.auth.domain.refresh_token import LoginAttemptLimiter
 from app.modules.staff.application.create_user import CreateUser, LockEmail
 from app.modules.staff.application.find_user import FindUserByLogin
 from app.modules.staff.domain.errors import EmailAlreadyInUse
-from app.modules.staff.domain.user import User, validate_password
+from app.modules.staff.domain.user import User, normalize_username, validate_password
 from app.modules.tenants.application.create_tenant import CreateTenant
 from app.modules.tenants.application.get_tenant import GetTenant
 from app.modules.tenants.domain.tenant import Tenant
@@ -75,7 +75,7 @@ class RegisterBusiness:
             # A different name is another sign-up, never one to drop silently.
             if existing.name != business.name:
                 raise BusinessIdTaken(tenant_id)
-            return await self._sign_in_again(tenant_id, email, password)
+            return await self._sign_in_again(tenant_id, email, password, client)
         if await self._find_user.execute(email) is not None:
             raise EmailAlreadyInUse(email)
 
@@ -85,8 +85,15 @@ class RegisterBusiness:
         await self._uow.commit()
         return session
 
-    async def _sign_in_again(self, tenant_id: uuid.UUID, email: str, password: str) -> AuthSession:
-        """A replay of a sign-up that already went through: the same admin signs in again."""
+    async def _sign_in_again(self, tenant_id: uuid.UUID, email: str, password: str, client: str) -> AuthSession:
+        """A replay of a sign-up that already went through: the same admin signs in again.
+
+        It checks the admin's password, so it counts like a login of that account (same key as
+        `Login`): a known business id and name never become a way around the login limits."""
+        login_key = f"staff:{normalize_username(email)}"
+        retry_after = await self._limiter.acquire(login_key, client)
+        if retry_after is not None:
+            raise TooManyLoginAttempts(retry_after)
         admin = await self._find_user.execute(email)
         if admin is None:
             await self._hasher.verify_dummy(password)
@@ -98,6 +105,7 @@ class RegisterBusiness:
             or not admin.is_active
         ):
             raise BusinessIdTaken(tenant_id)
+        await self._limiter.succeeded(login_key, client)
         session = await self._sessions.issue(admin)
         await self._uow.commit()
         return session

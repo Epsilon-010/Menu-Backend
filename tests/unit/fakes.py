@@ -36,9 +36,13 @@ class FakeClock:
 class FakeUnitOfWork:
     def __init__(self) -> None:
         self.commits = 0
+        self.releases = 0
 
     async def commit(self) -> None:
         self.commits += 1
+
+    async def release(self) -> None:
+        self.releases += 1
 
 
 class FakePasswordHasher:

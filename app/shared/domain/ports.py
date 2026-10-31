@@ -7,6 +7,11 @@ class UnitOfWork(Protocol):
 
     async def commit(self) -> None: ...
 
+    async def release(self) -> None:
+        """Ends the current transaction without changes and gives its connection back to the pool, so
+        slow work that needs no database (a password hash) never holds one. Reads after it start anew."""
+        ...
+
 
 class Clock(Protocol):
     """Port: current time (timezone-aware UTC)."""

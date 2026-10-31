@@ -36,6 +36,8 @@ class Login:
             raise TooManyLoginAttempts(retry_after)
 
         user = await self._find_user.execute(account)
+        # The hash below is slow: never hold a pooled connection while it runs.
+        await self._uow.release()
         if user is None:
             await self._hasher.verify_dummy(password)
         if user is None or not await self._hasher.verify(user.password_hash, password) or not user.is_active:

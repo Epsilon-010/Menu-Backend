@@ -39,7 +39,8 @@ async def reject_nul_characters(request: Request) -> None:
         return
     try:
         payload = json.loads(body)
-    except ValueError:
+    except (ValueError, RecursionError):
+        # Not JSON, or nested deeper than the decoder goes (routes without a body never decode it).
         return
     if _has_nul(payload):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=NUL_DETAIL)

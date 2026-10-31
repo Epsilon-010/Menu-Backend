@@ -21,6 +21,7 @@ from app.modules.orders.domain.errors import (
     OrderIdTaken,
 )
 from app.modules.orders.domain.model import (
+    ensure_within_bill_total,
     MAX_CART_LINES,
     Bill,
     CartLine,
@@ -291,7 +292,8 @@ class SubmitCart:
         visit = await authorize(ctx, diner, lock=True)
         if order_id is not None:
             existing = await ctx.orders.get(diner.tenant_id, order_id)
-            same_visit = visit.bill is None or (existing is not None and existing.bill_id == visit.bill.id)
+            # Without an open bill no order of this visit exists yet: an id found is from a past visit.
+            same_visit = visit.bill is not None and existing is not None and existing.bill_id == visit.bill.id
             if existing is not None and existing.table_id == diner.table_id and same_visit:
                 return existing
             if existing is not None or await ctx.orders.exists_anywhere(order_id):
@@ -335,6 +337,10 @@ class SubmitCart:
                 for line in cart.lines
             ),
             id=order_id or uuid.uuid4(),
+        )
+        ensure_within_bill_total(
+            await ctx.orders.list_for_bill(diner.tenant_id, bill.id) if visit.bill is not None else (),
+            order.total_cents,
         )
         await ctx.orders.add(order)
         await ctx.carts.clear(diner.tenant_id, diner.table_id)

@@ -33,6 +33,8 @@ class TableLogin:
             raise TooManyLoginAttempts(retry_after)
 
         table = await self._find_table.execute(code)
+        # The hash below is slow: never hold a pooled connection while it runs.
+        await self._uow.release()
         if table is None:
             await self._hasher.verify_dummy(pin)
         if table is None or not await self._hasher.verify(table.pin_hash, pin) or not table.is_active:

@@ -34,6 +34,10 @@ class CartEmpty(Exception):
     pass
 
 
+class BillTooLarge(Exception):
+    """The bill would go over MAX_BILL_TOTAL_CENTS."""
+
+
 class CartFull(Exception):
     pass
 

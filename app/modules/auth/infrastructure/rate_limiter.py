@@ -1,8 +1,8 @@
 from redis.asyncio import Redis
 
-# KEYS: client counter, account counter. ARGV: window, client limit, account limit.
-# Returns the seconds to wait when over a limit, else 0. The account counter only moves while the
-# client is within its own limit.
+# KEYS: client counter, address counter, account counter. ARGV: window, client limit, address limit,
+# account limit. Returns the seconds to wait when over a limit, else 0. The address and account
+# counters only move while the client is within its own limit.
 _ACQUIRE = """
 local function count(key)
   local value = redis.call('INCR', key)
@@ -16,14 +16,18 @@ local function wait(key)
 end
 if count(KEYS[1]) > tonumber(ARGV[2]) then return wait(KEYS[1]) end
 if count(KEYS[2]) > tonumber(ARGV[3]) then return wait(KEYS[2]) end
+if count(KEYS[3]) > tonumber(ARGV[4]) then return wait(KEYS[3]) end
 return 0
 """
 
-# KEYS: client counter, account counter. A successful attempt was counted on both (acquire let it
-# through), so it is taken back from the account; failures from other addresses still count.
+# KEYS: client counter, address counter, account counter. A successful attempt was counted on all of
+# them (acquire let it through), so it is taken back from the address and the account; failures from
+# other addresses (or on other accounts) still count.
 _SUCCEEDED = """
 redis.call('DEL', KEYS[1])
-if tonumber(redis.call('GET', KEYS[2]) or '0') > 0 then redis.call('DECR', KEYS[2]) end
+for i = 2, 3 do
+  if tonumber(redis.call('GET', KEYS[i]) or '0') > 0 then redis.call('DECR', KEYS[i]) end
+end
 return 0
 """
 
@@ -32,7 +36,9 @@ class RedisLoginAttemptLimiter:
     """Fixed-window counters of login attempts per client (IP) + account, plus a per-account backstop.
 
     A device that keeps failing locks only itself out of that account (`max_per_client`), so nobody
-    can lock a colleague or a tablet out from another device. The higher `max_per_account` caps the
+    can lock a colleague or a tablet out from another device. An address cap counts the failures of one
+    address over every account, so trying a new login each time (never repeating an account) is still
+    limited, and each such guess costs the server an Argon2 hash. The higher `max_per_account` caps the
     guesses from all addresses together, so rotating or spoofing the address never means unlimited
     attempts. Attempts a client makes while it is already blocked never reach the account counter,
     so one device retrying in a loop cannot exhaust the backstop for everyone else. Each attempt is
@@ -43,15 +49,22 @@ class RedisLoginAttemptLimiter:
     over a limit, logins are refused until the key expires.
     """
 
-    def __init__(self, redis: Redis, window_seconds: int, max_per_client: int, max_per_account: int) -> None:
+    def __init__(
+        self, redis: Redis, window_seconds: int, max_per_client: int, max_per_account: int, max_per_address: int
+    ) -> None:
         self._redis = redis
         self._window_seconds = window_seconds
         self._max_per_client = max_per_client
         self._max_per_account = max_per_account
+        self._max_per_address = max_per_address
 
     @staticmethod
     def _client_key(account: str, client: str) -> str:
         return f"login:attempts:client:{client}:{account}"
+
+    @staticmethod
+    def _address_key(client: str) -> str:
+        return f"login:attempts:address:{client}"
 
     @staticmethod
     def _account_key(account: str) -> str:
@@ -60,14 +73,18 @@ class RedisLoginAttemptLimiter:
     async def acquire(self, account: str, client: str) -> int | None:
         wait = await self._redis.eval(
             _ACQUIRE,
-            2,
+            3,
             self._client_key(account, client),
+            self._address_key(client),
             self._account_key(account),
             self._window_seconds,
             self._max_per_client,
+            self._max_per_address,
             self._max_per_account,
         )
         return int(wait) if int(wait) > 0 else None
 
     async def succeeded(self, account: str, client: str) -> None:
-        await self._redis.eval(_SUCCEEDED, 2, self._client_key(account, client), self._account_key(account))
+        await self._redis.eval(
+            _SUCCEEDED, 3, self._client_key(account, client), self._address_key(client), self._account_key(account)
+        )
