@@ -76,6 +76,7 @@ class JoseAccessTokens:
                 issued_at=datetime.fromtimestamp(float(claims["iat"]), UTC),
                 session_version=session_version,
                 must_change_password=claims.get("pwc") is True,
+                token_id=str(claims["jti"]),
             )
         except (JWTError, ValueError, TypeError, OverflowError) as error:
             raise InvalidAccessToken() from error

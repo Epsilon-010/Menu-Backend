@@ -568,12 +568,19 @@ class InMemoryRefreshTokenRepository:
 class FakeAccessRevocations:
     def __init__(self) -> None:
         self.required: dict[uuid.UUID, int] = {}
+        self.ended_tokens: set[str] = set()
 
     async def require_version(self, subject_id: uuid.UUID, session_version: int) -> None:
         self.required[subject_id] = max(session_version, self.required.get(subject_id, 0))
 
     async def required_version(self, subject_id: uuid.UUID) -> int | None:
         return self.required.get(subject_id)
+
+    async def end_token(self, token_id: str) -> None:
+        self.ended_tokens.add(token_id)
+
+    async def is_token_ended(self, token_id: str) -> bool:
+        return token_id in self.ended_tokens
 
 
 class FakeLoginAttemptLimiter:

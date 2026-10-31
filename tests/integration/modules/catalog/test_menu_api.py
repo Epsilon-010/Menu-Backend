@@ -91,6 +91,22 @@ def test_every_role_reads_the_menu_and_anonymous_gets_401(new_client: ClientFact
     assert new_client().get(MENU_URL).status_code == 401
 
 
+def test_the_kitchen_reads_the_menu_without_any_price(new_client: ClientFactory, tenant_a: SeedResult) -> None:
+    # "No ve precios ni cobros": not on the menu either (cached or not).
+    admin = admin_of(new_client)
+    build_menu(admin)
+    create_member(admin, "cook", "kitchen")
+    cook = new_client()
+    assert login(cook, username="cook", password=STAFF_PASSWORD).status_code == 200
+
+    for _ in range(2):  # built for the cook, then served from the cache
+        response = cook.get(MENU_URL)
+        assert response.status_code == 200
+        assert "price_cents" not in response.text
+        assert [item["name"] for item in response.json()[0]["items"]] == ["Pastor"]
+    assert "price_cents" in admin.get(MENU_URL).text
+
+
 def test_catalog_changes_reach_the_cached_menu_right_away(new_client: ClientFactory, tenant_a: SeedResult) -> None:
     admin = admin_of(new_client)
     ids = build_menu(admin)

@@ -49,3 +49,20 @@ class RedisAccessRevocations:
             logger.warning("Could not check the session version of %s", subject_id, exc_info=True)
             return None
         return int(value) if value is not None else None
+
+    @staticmethod
+    def _token_key(token_id: str) -> str:
+        return f"auth:ended-token:{token_id}"
+
+    async def end_token(self, token_id: str) -> None:
+        try:
+            await self._redis.set(self._token_key(token_id), 1, ex=self._ttl_seconds)
+        except RedisError:
+            logger.warning("Could not end an access token", exc_info=True)
+
+    async def is_token_ended(self, token_id: str) -> bool:
+        try:
+            return bool(await self._redis.exists(self._token_key(token_id)))
+        except RedisError:
+            logger.warning("Could not check whether an access token ended", exc_info=True)
+            return False

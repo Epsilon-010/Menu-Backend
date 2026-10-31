@@ -104,3 +104,9 @@ Backend white-box (W*), frontend white-box (FE*), live black-box (B*). Status: f
   Independent verifier (whole document, baseline b3e2b00): S4 and every "Fix" finding ok; its one blocker (tampered
   cursor → 500) is `bb76f4a`; its per-IP lockout advisory is `db821ff`. Backend suite at `656da56`: 1100 passed;
   frontend typecheck, lint, 377 tests.
+- L8 (2026-10-31, user, verbatim): "si hazlo corrige y si ya estan corregido pushealo"
+- L9: fixed the open items with defaults (W4 stays open: a longer PIN changes what staff type and is the user's call):
+  W9 the kitchen gets `/menu` without any `price_cents` (glossary: "No ve precios ni cobros"); B1 logout also ends that
+  access token (`jti` kept in Redis until it would expire; other devices keep their sessions); W7 a visit takes up to
+  30 guests (`MAX_GUESTS_PER_VISIT`), the 31st scan gets 409 "This table already has the most guests it allows; ask
+  your waiter" (CLAUDE.md spec updated from "cualquier cantidad"); this also bounds the guest share of the SSE cap.

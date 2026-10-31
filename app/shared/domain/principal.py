@@ -39,6 +39,12 @@ class AccessRevocations(Protocol):
 
     async def required_version(self, subject_id: uuid.UUID) -> int | None: ...
 
+    async def end_token(self, token_id: str) -> None:
+        """Ends one access token (its `jti`) until it would have expired: signing out of one device."""
+        ...
+
+    async def is_token_ended(self, token_id: str) -> bool: ...
+
 
 @dataclass(frozen=True)
 class Principal:
@@ -57,3 +63,5 @@ class Principal:
     bill_id: uuid.UUID | None = None
     # An admin still on a temporary password: may only change it (and sign out).
     must_change_password: bool = False
+    # The token's own id (`jti`), so signing out ends exactly this token.
+    token_id: str | None = None

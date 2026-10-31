@@ -29,7 +29,7 @@ from app.modules.auth.infrastructure.rate_limiter import RedisLoginAttemptLimite
 from app.modules.auth.infrastructure.refresh_tokens import OpaqueRefreshTokenCodec, SqlAlchemyRefreshTokenRepository
 from app.modules.auth.infrastructure.session_revocation import revoke_user_sessions
 from app.modules.orders.application.guests import GetActiveGuest, JoinTable
-from app.modules.orders.domain.errors import InvalidOrderData, TableNotOpen
+from app.modules.orders.domain.errors import InvalidOrderData, TableFull, TableNotOpen
 from app.modules.orders.domain.model import MAX_GUEST_NAME_LENGTH
 from app.modules.orders.infrastructure.adapters import TablesModule
 from app.modules.orders.infrastructure.repository import (
@@ -49,7 +49,7 @@ from app.modules.tenants.application.get_tenant import GetTenant
 from app.modules.tenants.domain.errors import InvalidTenantData, TenantIdTaken
 from app.modules.tenants.domain.tenant import MAX_TIMEZONE_LENGTH
 from app.modules.tenants.infrastructure.repository import SqlAlchemyTenantRepository
-from app.shared.domain.principal import Role
+from app.shared.domain.principal import InvalidAccessToken, Role
 from app.shared.infrastructure.config import get_settings
 from app.shared.infrastructure.database import SqlAlchemyUnitOfWork, get_session
 from app.shared.infrastructure.http.auth import ACCESS_COOKIE, ACCESS_COOKIE_PATH, CurrentPrincipal
@@ -407,13 +407,15 @@ async def qr_login(
     response: Response,
     use_case: Annotated[QrLogin, Depends(get_qr_login)],
 ) -> SessionResponse | JSONResponse:
-    """A guest who scanned the table's QR joins its open visit (any number of guests per table)."""
+    """A guest who scanned the table's QR joins its open visit (up to MAX_GUESTS_PER_VISIT guests)."""
     try:
         auth = await use_case.execute(body.token, body.name, _client_address(request))
     except InvalidCredentials:
         return problem(status.HTTP_401_UNAUTHORIZED, "This QR code is not valid")
     except TableNotOpen:
         return problem(status.HTTP_409_CONFLICT, "This table is not open yet; ask your waiter")
+    except TableFull:
+        return problem(status.HTTP_409_CONFLICT, "This table already has the most guests it allows; ask your waiter")
     except InvalidOrderData as error:
         return problem(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error))
     except TooManyLoginAttempts as error:
@@ -463,9 +465,27 @@ async def change_password(
     return _session_response(response, auth)
 
 
+async def _end_access_token(request: Request, access_token: str | None) -> None:
+    """Ends the access token this device holds, so a copy of it stops working right away."""
+    if not access_token:
+        return
+    try:
+        principal = request.app.state.access_tokens.decode(access_token)
+    except InvalidAccessToken:
+        return
+    if principal.token_id is not None:
+        await request.app.state.access_revocations.end_token(principal.token_id)
+
+
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-async def logout(use_case: Annotated[Logout, Depends(get_logout)], refresh_token: RefreshCookie = None) -> Response:
+async def logout(
+    request: Request,
+    use_case: Annotated[Logout, Depends(get_logout)],
+    refresh_token: RefreshCookie = None,
+    access_token: Annotated[str | None, Cookie(alias=ACCESS_COOKIE)] = None,
+) -> Response:
     await use_case.execute(refresh_token)
+    await _end_access_token(request, access_token)
     response = Response(status_code=status.HTTP_204_NO_CONTENT)
     _clear_session_cookies(response)
     return response

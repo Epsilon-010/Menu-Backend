@@ -225,6 +225,12 @@ class _NoRevocations:
     async def required_version(self, subject_id: uuid.UUID) -> int | None:
         return None
 
+    async def end_token(self, token_id: str) -> None:
+        return None
+
+    async def is_token_ended(self, token_id: str) -> bool:
+        return False
+
 
 def test_waiters_other_tenants_and_unknown_ids_are_not_admins(
     new_client: ClientFactory, owner: TestClient, tenant_b: SeedResult

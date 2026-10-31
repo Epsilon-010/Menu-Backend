@@ -3,10 +3,15 @@
 
 import uuid
 
-from app.modules.orders.domain.errors import QrNotValid, TableNotOpen
+from app.modules.orders.domain.errors import QrNotValid, TableFull, TableNotOpen
 from app.modules.orders.domain.model import Guest, validate_guest_name
 from app.modules.orders.domain.ports import BillRepository, GuestRepository, TableLocks, Tables
 from app.shared.domain.ports import Clock
+
+
+# Far beyond any real table, so one QR photo cannot mint endless guests (each with its own sessions
+# and live-update streams).
+MAX_GUESTS_PER_VISIT = 30
 
 
 class JoinTable:
@@ -35,7 +40,10 @@ class JoinTable:
         bill = await self._bills.get_open(tenant_id, table_id)
         if bill is None:
             raise TableNotOpen(table_id)
-        number = await self._guests.count_for_bill(tenant_id, bill.id) + 1
+        joined = await self._guests.count_for_bill(tenant_id, bill.id)
+        if joined >= MAX_GUESTS_PER_VISIT:
+            raise TableFull(table_id)
+        number = joined + 1
         guest = Guest(
             tenant_id=tenant_id,
             table_id=table_id,
