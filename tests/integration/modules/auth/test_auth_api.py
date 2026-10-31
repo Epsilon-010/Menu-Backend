@@ -113,7 +113,7 @@ def test_login_sets_both_tokens_as_hardened_cookies_and_never_returns_them_in_th
     response = login(client, username="OWNER@example.com")
 
     assert response.status_code == 200
-    assert response.json() == {"expires_in": 900, "role": "admin"}
+    assert response.json() == {"expires_in": 900, "role": "admin", "must_change_password": False}
     claims = jwt.decode(
         response.cookies["access_token"], get_settings().jwt_secret.get_secret_value(), algorithms=["HS256"]
     )
@@ -229,6 +229,7 @@ def test_me_returns_the_admin_and_the_business_name(client: TestClient, tenant_a
             "username": None,
             "full_name": "Owner",
             "role": "admin",
+            "must_change_password": False,
         },
         "table": None,
         "guest": None,
@@ -312,7 +313,7 @@ def test_refresh_rotates_the_token_and_the_previous_one_stops_working(client: Te
     assert rotated.json()["role"] == "admin"
     second = rotated.cookies["refresh_token"]
     assert second != first
-    assert rotated.json() == {"expires_in": 900, "role": "admin"}
+    assert rotated.json() == {"expires_in": 900, "role": "admin", "must_change_password": False}
     assert "access_token" in set_cookies(rotated)
     assert me(client).status_code == 200
 

@@ -27,6 +27,7 @@ class JoseAccessTokens:
         session_version: int,
         table_id: uuid.UUID | None = None,
         bill_id: uuid.UUID | None = None,
+        must_change_password: bool = False,
     ) -> IssuedAccessToken:
         expires_at = now + ACCESS_TOKEN_TTL
         claims: dict[str, Any] = {
@@ -44,6 +45,9 @@ class JoseAccessTokens:
             claims["table_id"] = str(table_id)
         if bill_id is not None:
             claims["bill_id"] = str(bill_id)
+        if must_change_password:
+            # Password change required: role-checked routes refuse the token until it is replaced.
+            claims["pwc"] = True
         return IssuedAccessToken(token=jwt.encode(claims, self._secret, algorithm=_ALGORITHM), expires_at=expires_at)
 
     def decode(self, token: str) -> Principal:
@@ -71,6 +75,7 @@ class JoseAccessTokens:
                 bill_id=uuid.UUID(bill_id) if role is Role.GUEST else None,
                 issued_at=datetime.fromtimestamp(float(claims["iat"]), UTC),
                 session_version=session_version,
+                must_change_password=claims.get("pwc") is True,
             )
         except (JWTError, ValueError, TypeError, OverflowError) as error:
             raise InvalidAccessToken() from error

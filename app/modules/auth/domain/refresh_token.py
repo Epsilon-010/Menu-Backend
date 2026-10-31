@@ -102,6 +102,7 @@ class AccessTokenIssuer(Protocol):
         session_version: int,
         table_id: uuid.UUID | None = None,
         bill_id: uuid.UUID | None = None,
+        must_change_password: bool = False,
     ) -> IssuedAccessToken: ...
 
 

@@ -18,6 +18,7 @@ from app.modules.tenants.domain.tenant import Tenant
 from app.modules.theming.domain.repository import ThemeRecord, ThemeVersion
 from app.modules.theming.domain.theme import Theme
 from app.shared.domain.images import ImageStorageUnavailable, ImageVariant, StoredImage, UploadSignature
+from app.shared.domain.principal import Role
 
 
 class FakeClock:
@@ -80,6 +81,7 @@ class InMemoryUserRepository:
         self.locked: list[uuid.UUID] = []
         self.create_locks: list[uuid.UUID] = []
         self.email_locks: list[str] = []
+        self.admin_locks: list[uuid.UUID] = []
         # Usernames get_by_username misses: simulates a concurrent create that took a code after the check.
         self.hidden_usernames: set[str] = set()
 
@@ -120,6 +122,13 @@ class InMemoryUserRepository:
     async def list_staff(self, tenant_id: uuid.UUID) -> list[User]:
         staff = [user for user in self.users.values() if user.tenant_id == tenant_id and user.role in STAFF_MEMBER_ROLES]
         return sorted(staff, key=lambda user: user.full_name.lower())
+
+    async def list_admins(self, tenant_id: uuid.UUID) -> list[User]:
+        admins = [user for user in self.users.values() if user.tenant_id == tenant_id and user.role is Role.ADMIN]
+        return sorted(admins, key=lambda user: user.full_name.lower())
+
+    async def lock_admin_changes(self, tenant_id: uuid.UUID) -> None:
+        self.admin_locks.append(tenant_id)
 
     async def update(self, user: User) -> None:
         self.users[user.id] = user
@@ -204,6 +213,7 @@ class FakeStaffCredentials:
         self.pins = list(pins or [])
         self.issued_codes = 0
         self.issued_pins = 0
+        self.issued_passwords = 0
 
     def new_code(self) -> str:
         if self.codes:
@@ -216,6 +226,10 @@ class FakeStaffCredentials:
             return self.pins.pop(0)
         self.issued_pins += 1
         return f"{self.issued_pins:06d}"
+
+    def new_temporary_password(self) -> str:
+        self.issued_passwords += 1
+        return f"TEMPPASS{self.issued_passwords:04d}"
 
 
 def _by_position(entity: Category | Item) -> tuple[int, str]:
