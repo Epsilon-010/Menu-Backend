@@ -30,7 +30,7 @@ Branch `feat/security-audit-pagination` in Backend and Menu-Frontend (both from 
 - [x] T3 S4 frontend pagination (inline). Frontend `3662087`.
 - [x] T4 S3 fixes: backend W1-W3, W5, W6, W8, W10 (inline), frontend FE1-FE4 (delegated writer: independent unit with a
   disjoint surface, run in parallel with the backend fixes). Frontend `df6fbd4`; backend in the commit after `9e87bbf`.
-- [ ] T5 verification: suites green (backend 1100, frontend 377); live replay of the attacks against the rebuilt stack.
+- [x] T5 verification: backend 1114 passed, frontend 377; independent verifier; two native reviews approved; live replay 16/16.
 
 ## Findings
 Backend white-box (W*), frontend white-box (FE*), live black-box (B*). Status: fix | advisory (needs a user decision).
