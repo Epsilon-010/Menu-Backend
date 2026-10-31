@@ -23,6 +23,7 @@ class AuthSession:
     refresh_token: str
     refresh_expires_at: datetime
     role: Role
+    must_change_password: bool = False
 
 
 class SessionIssuer:
@@ -44,7 +45,15 @@ class SessionIssuer:
         self._clock = clock
 
     async def issue(self, user: User, family_id: uuid.UUID | None = None) -> AuthSession:
-        return await self._issue(user.id, user.tenant_id, user.role, family_id, user.session_version, user_id=user.id)
+        return await self._issue(
+            user.id,
+            user.tenant_id,
+            user.role,
+            family_id,
+            user.session_version,
+            user_id=user.id,
+            must_change_password=user.must_change_password,
+        )
 
     async def issue_for_table(self, table: Table, family_id: uuid.UUID | None = None) -> AuthSession:
         """The table is both the token subject and its `table_id` claim."""
@@ -80,6 +89,7 @@ class SessionIssuer:
         claim_table_id: uuid.UUID | None = None,
         bill_id: uuid.UUID | None = None,
         expires_by: datetime | None = None,
+        must_change_password: bool = False,
     ) -> AuthSession:
         now = self._clock.now()
         plain = self._codec.generate()
@@ -104,6 +114,7 @@ class SessionIssuer:
             session_version=session_version,
             table_id=table_id or claim_table_id,
             bill_id=bill_id,
+            must_change_password=must_change_password,
         )
         return AuthSession(
             access_token=access.token,
@@ -111,4 +122,5 @@ class SessionIssuer:
             refresh_token=plain,
             refresh_expires_at=refresh.expires_at,
             role=role,
+            must_change_password=must_change_password,
         )

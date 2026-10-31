@@ -55,3 +55,5 @@ class Principal:
     issued_at: datetime | None = None
     session_version: int = 1
     bill_id: uuid.UUID | None = None
+    # An admin still on a temporary password: may only change it (and sign out).
+    must_change_password: bool = False

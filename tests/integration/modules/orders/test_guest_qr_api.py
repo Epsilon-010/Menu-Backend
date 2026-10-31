@@ -64,7 +64,7 @@ def guest_of(new_client: ClientFactory, qr_token: str, name: str | None = None) 
     client = new_client()
     response = scan(client, qr_token, name)
     assert response.status_code == 200, response.text
-    assert response.json() == {"expires_in": 900, "role": "guest"}
+    assert response.json() == {"expires_in": 900, "role": "guest", "must_change_password": False}
     return client
 
 

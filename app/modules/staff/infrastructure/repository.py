@@ -11,6 +11,7 @@ from app.modules.staff.domain.user import (
     STAFF_CODE_LENGTH,
     STAFF_MEMBER_ROLES,
     STAFF_PIN_LENGTH,
+    TEMPORARY_PASSWORD_LENGTH,
     User,
 )
 from app.modules.staff.infrastructure.models import UserModel
@@ -27,6 +28,10 @@ class RandomStaffCredentials:
     def new_pin(self) -> str:
         return "".join(secrets.choice("0123456789") for _ in range(STAFF_PIN_LENGTH))
 
+    def new_temporary_password(self) -> str:
+        # Same unambiguous alphabet as the codes: it is read off a screen and typed once.
+        return "".join(secrets.choice(STAFF_CODE_ALPHABET) for _ in range(TEMPORARY_PASSWORD_LENGTH))
+
 
 def _to_entity(model: UserModel) -> User:
     return User(
@@ -39,6 +44,7 @@ def _to_entity(model: UserModel) -> User:
         password_hash=model.password_hash,
         is_active=model.is_active,
         session_version=model.session_version,
+        must_change_password=model.must_change_password,
     )
 
 
@@ -57,6 +63,7 @@ class SqlAlchemyUserRepository:
             password_hash=user.password_hash,
             is_active=user.is_active,
             session_version=user.session_version,
+            must_change_password=user.must_change_password,
         )
         try:
             # A savepoint: when the random staff code collides, only this insert rolls back and the use
@@ -93,6 +100,9 @@ class SqlAlchemyUserRepository:
     async def lock_creates(self, tenant_id: uuid.UUID) -> None:
         await advisory_xact_lock(self._session, f"staff-create:{tenant_id}")
 
+    async def lock_admin_changes(self, tenant_id: uuid.UUID) -> None:
+        await advisory_xact_lock(self._session, f"admin-changes:{tenant_id}")
+
     async def lock_email(self, email: str) -> None:
         await advisory_xact_lock(self._session, f"signup-email:{email}")
 
@@ -112,6 +122,14 @@ class SqlAlchemyUserRepository:
         )
         return [_to_entity(model) for model in models]
 
+    async def list_admins(self, tenant_id: uuid.UUID) -> list[User]:
+        models = await self._session.scalars(
+            select(UserModel)
+            .where(UserModel.tenant_id == tenant_id, UserModel.role == Role.ADMIN.value)
+            .order_by(func.lower(UserModel.full_name), UserModel.email)
+        )
+        return [_to_entity(model) for model in models]
+
     async def update(self, user: User) -> None:
         # Tenant-scoped like every other query; email and username never change.
         result = await self._session.execute(
@@ -122,6 +140,7 @@ class SqlAlchemyUserRepository:
                 role=user.role.value,
                 password_hash=user.password_hash,
                 is_active=user.is_active,
+                must_change_password=user.must_change_password,
                 # Never lowered, even by a stale copy: that would revive the sessions it ended.
                 session_version=func.greatest(UserModel.session_version, user.session_version),
             )

@@ -16,6 +16,8 @@ _EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 STAFF_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 STAFF_CODE_LENGTH = 6
 STAFF_PIN_LENGTH = 6
+# Generated for a new admin, who must replace it on first sign-in.
+TEMPORARY_PASSWORD_LENGTH = 12
 
 # Accounts the admin manages from the staff panel (admins are not managed there).
 STAFF_MEMBER_ROLES = frozenset({Role.WAITER, Role.KITCHEN})
@@ -36,6 +38,13 @@ def is_email_login(login: str) -> bool:
     return "@" in login
 
 
+def validate_email(email: str) -> str:
+    email = normalize_email(email)
+    if len(email) > MAX_EMAIL_LENGTH or not _EMAIL_PATTERN.match(email):
+        raise InvalidUserData("Invalid email")
+    return email
+
+
 def validate_password(password: str) -> None:
     if not MIN_PASSWORD_LENGTH <= len(password) <= MAX_PASSWORD_LENGTH:
         raise InvalidUserData(f"Password must have {MIN_PASSWORD_LENGTH} to {MAX_PASSWORD_LENGTH} characters")
@@ -49,9 +58,21 @@ def validate_staff_code(code: str) -> str:
     return normalized
 
 
+def validate_new_password(current: str, new: str) -> None:
+    """Rules for a password an admin picks to replace their current one."""
+    validate_password(new)
+    if new == current:
+        raise InvalidUserData("The new password must be different from the current one")
+
+
 def validate_staff_member(full_name: str, role: Role) -> tuple[str, Role]:
     """What the admin types for a new waiter or cook: only a name and a role."""
     return _validate_full_name(full_name), _validate_staff_member_role(role)
+
+
+def validate_admin(full_name: str, email: str) -> tuple[str, str]:
+    """What an admin types for another admin of the business: a name and an email."""
+    return _validate_full_name(full_name), validate_email(email)
 
 
 def _validate_full_name(full_name: str) -> str:
@@ -85,17 +106,40 @@ class User:
     # Goes up whenever the member must be signed out (new password, role change, deactivation): every
     # session token carries the version it was issued for, so an older one is rejected.
     session_version: int = 1
+    # Set for an admin created by another admin (with a temporary password): until they pick their
+    # own password, their sessions can only change it.
+    must_change_password: bool = False
     id: uuid.UUID = field(default_factory=uuid.uuid4)
 
     @classmethod
     def create(cls, tenant_id: uuid.UUID, email: str, full_name: str, role: Role, password_hash: str) -> "User":
-        email = normalize_email(email)
-        if len(email) > MAX_EMAIL_LENGTH or not _EMAIL_PATTERN.match(email):
-            raise InvalidUserData("Invalid email")
+        email = validate_email(email)
         full_name = _validate_full_name(full_name)
         if role not in STAFF_ROLES:
             raise InvalidUserData(f"Role {role} is not a staff role")
         return cls(tenant_id=tenant_id, email=email, full_name=full_name, role=role, password_hash=password_hash)
+
+    @classmethod
+    def create_admin(
+        cls,
+        tenant_id: uuid.UUID,
+        email: str,
+        full_name: str,
+        temporary_password_hash: str,
+        user_id: uuid.UUID | None = None,
+    ) -> "User":
+        """Another admin of the business, who must replace the temporary password on first sign-in.
+        `user_id` comes from the client to make the create idempotent; None generates one."""
+        full_name, email = validate_admin(full_name, email)
+        return cls(
+            tenant_id=tenant_id,
+            email=email,
+            full_name=full_name,
+            role=Role.ADMIN,
+            password_hash=temporary_password_hash,
+            must_change_password=True,
+            id=user_id or uuid.uuid4(),
+        )
 
     @classmethod
     def create_staff(
@@ -126,6 +170,14 @@ class User:
     @property
     def is_staff_member(self) -> bool:
         return self.role in STAFF_MEMBER_ROLES
+
+    @property
+    def is_admin(self) -> bool:
+        return self.role is Role.ADMIN
+
+    def with_password(self, password_hash: str) -> "User":
+        """The account's own new password: no temporary one any more, and every session ends."""
+        return replace(self, password_hash=password_hash, must_change_password=False).with_sessions_ended()
 
     def with_changes(
         self, full_name: str | None = None, role: Role | None = None, is_active: bool | None = None
@@ -172,15 +224,26 @@ class UserRepository(Protocol):
         """Waiters and cooks of the tenant, ordered by name."""
         ...
 
+    async def list_admins(self, tenant_id: uuid.UUID) -> list[User]:
+        """Admins of the tenant, ordered by name."""
+        ...
+
+    async def lock_admin_changes(self, tenant_id: uuid.UUID) -> None:
+        """Serializes changes to the tenant's admins until the transaction ends, so two admins can never
+        deactivate each other at the same time."""
+        ...
+
     async def update(self, user: User) -> None: ...
 
 
 class StaffCredentials(Protocol):
-    """Port: generates random staff codes and PINs."""
+    """Port: generates random staff codes, PINs and temporary admin passwords."""
 
     def new_code(self) -> str: ...
 
     def new_pin(self) -> str: ...
+
+    def new_temporary_password(self) -> str: ...
 
 
 class SessionRevoker(Protocol):

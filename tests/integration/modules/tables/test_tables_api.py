@@ -109,7 +109,7 @@ def test_admin_creates_a_table_and_its_tablet_signs_in_as_that_table(
     tablet = new_client()
     session = table_login(tablet, table["code"].lower(), table["pin"])
     assert session.status_code == 200
-    assert session.json() == {"expires_in": 900, "role": "table"}
+    assert session.json() == {"expires_in": 900, "role": "table", "must_change_password": False}
     assert f"Max-Age={30 * 24 * 3600}" in set_cookies(session)["refresh_token"]
 
     me = tablet.get("/api/v1/auth/me")
@@ -121,7 +121,7 @@ def test_admin_creates_a_table_and_its_tablet_signs_in_as_that_table(
         "tenant": {"id": str(tenant_a.tenant_id), "name": "La Taquería"},
     }
     # The 30-day session renews itself as the same table.
-    assert tablet.post("/api/v1/auth/refresh").json() == {"expires_in": 900, "role": "table"}
+    assert tablet.post("/api/v1/auth/refresh").json() == {"expires_in": 900, "role": "table", "must_change_password": False}
     assert tablet.get("/api/v1/auth/me").json()["table"]["name"] == "Mesa 4"
 
 

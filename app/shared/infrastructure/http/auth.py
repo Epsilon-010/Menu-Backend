@@ -44,12 +44,17 @@ CurrentPrincipal = Annotated[Principal, Depends(get_principal)]
 
 
 def require_role(*roles: str) -> Callable[[Principal], Awaitable[Principal]]:
-    """Dependency factory: `Depends(require_role("admin", "waiter"))` returns the principal or 403."""
+    """Dependency factory: `Depends(require_role("admin", "waiter"))` returns the principal or 403.
+
+    An admin still on a temporary password gets 403 everywhere until they change it.
+    """
     allowed = frozenset(Role(role) for role in roles)
 
     async def dependency(principal: CurrentPrincipal) -> Principal:
         if principal.role not in allowed:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed")
+        if principal.must_change_password:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Change your temporary password first")
         return principal
 
     return dependency

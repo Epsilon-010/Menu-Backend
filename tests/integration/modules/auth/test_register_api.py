@@ -59,7 +59,7 @@ def test_signing_up_creates_the_business_and_its_admin_and_signs_in(new_client: 
     response = register(client, email=" Founder@Example.com ", business_name=" Tacos El Güero ")
 
     assert response.status_code == 201
-    assert response.json() == {"expires_in": 900, "role": "admin"}
+    assert response.json() == {"expires_in": 900, "role": "admin", "must_change_password": False}
     cookies = set_cookies(response)
     assert "HttpOnly" in cookies["access_token"] and "Path=/api" in cookies["access_token"]
     assert "HttpOnly" in cookies["refresh_token"] and "Path=/api/v1/auth" in cookies["refresh_token"]
@@ -115,7 +115,7 @@ def test_repeating_the_same_sign_up_signs_in_to_the_account_already_created(new_
     replay = register(again, id=chosen, email="FOUNDER@example.com")
 
     assert replay.status_code == 201
-    assert replay.json() == {"expires_in": 900, "role": "admin"}
+    assert replay.json() == {"expires_in": 900, "role": "admin", "must_change_password": False}
     assert again.get("/api/v1/auth/me").json()["tenant"]["id"] == chosen
     assert counts() == (1, 1)
 

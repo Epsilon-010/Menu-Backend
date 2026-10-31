@@ -51,10 +51,13 @@ class FakeAccessTokens:
         session_version: int,
         table_id: uuid.UUID | None = None,
         bill_id: uuid.UUID | None = None,
+        must_change_password: bool = False,
     ) -> IssuedAccessToken:
         token = f"access:{subject_id}:{tenant_id}:{role}" + (f":{table_id}" if table_id is not None else "")
         if session_version != 1:
             token += f":v{session_version}"
+        if must_change_password:
+            token += ":pwc"
         return IssuedAccessToken(token=token, expires_at=now + timedelta(minutes=15))
 
 

@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.auth.application.change_password import ChangePassword
 from app.modules.auth.application.get_current_account import GetCurrentAccount
 from app.modules.auth.application.login import Login
 from app.modules.auth.application.logout import Logout
@@ -26,6 +27,7 @@ from app.modules.auth.domain.errors import (
 from app.modules.auth.domain.refresh_token import ACCESS_TOKEN_TTL
 from app.modules.auth.infrastructure.rate_limiter import RedisLoginAttemptLimiter
 from app.modules.auth.infrastructure.refresh_tokens import OpaqueRefreshTokenCodec, SqlAlchemyRefreshTokenRepository
+from app.modules.auth.infrastructure.session_revocation import revoke_user_sessions
 from app.modules.orders.application.guests import GetActiveGuest, JoinTable
 from app.modules.orders.domain.errors import InvalidOrderData, TableNotOpen
 from app.modules.orders.domain.model import MAX_GUEST_NAME_LENGTH
@@ -37,7 +39,8 @@ from app.modules.orders.infrastructure.repository import (
 )
 from app.modules.staff.application.create_user import CreateUser, LockEmail
 from app.modules.staff.application.find_user import FindUserByLogin, GetUser
-from app.modules.staff.domain.errors import EmailAlreadyInUse, InvalidUserData
+from app.modules.staff.application.manage_admins import ReplaceOwnPassword
+from app.modules.staff.domain.errors import EmailAlreadyInUse, InvalidUserData, NotAnActiveAdmin, WrongCurrentPassword
 from app.modules.staff.infrastructure.repository import SqlAlchemyUserRepository
 from app.modules.tables.application.find_table import FindTableByCode, FindTableByQrToken, GetTable
 from app.modules.tables.infrastructure.repository import SqlAlchemyTableRepository
@@ -98,11 +101,20 @@ class RegisterRequest(BaseModel):
     timezone: str | None = Field(default=None, max_length=MAX_TIMEZONE_LENGTH)
 
 
+class ChangePasswordRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    current_password: str = Field(max_length=200)
+    new_password: str = Field(max_length=200)
+
+
 class SessionResponse(BaseModel):
     """Both tokens travel only in httpOnly cookies; the body tells the client who it is."""
 
     expires_in: int
     role: Role
+    # An admin on a temporary password: the client must send them to change it before anything else.
+    must_change_password: bool = False
 
 
 class UserOut(BaseModel):
@@ -111,6 +123,7 @@ class UserOut(BaseModel):
     username: str | None
     full_name: str
     role: Role
+    must_change_password: bool
 
 
 class TableOut(BaseModel):
@@ -178,6 +191,17 @@ def get_login(request: Request, session: SessionDep) -> Login:
         FindUserByLogin(SqlAlchemyUserRepository(session)),
         Argon2PasswordHasher(),
         _login_limiter(request),
+        _session_issuer(request, session),
+        SqlAlchemyUnitOfWork(session),
+    )
+
+
+def get_change_password(request: Request, session: SessionDep) -> ChangePassword:
+    users = SqlAlchemyUserRepository(session)
+    return ChangePassword(
+        ReplaceOwnPassword(users, Argon2PasswordHasher()),
+        _login_limiter(request),
+        revoke_user_sessions(request, session),
         _session_issuer(request, session),
         SqlAlchemyUnitOfWork(session),
     )
@@ -302,7 +326,11 @@ def _clear_session_cookies(response: Response) -> None:
 
 def _session_response(response: Response, auth: AuthSession) -> SessionResponse:
     _set_session_cookies(response, auth)
-    return SessionResponse(expires_in=int(ACCESS_TOKEN_TTL.total_seconds()), role=auth.role)
+    return SessionResponse(
+        expires_in=int(ACCESS_TOKEN_TTL.total_seconds()),
+        role=auth.role,
+        must_change_password=auth.must_change_password,
+    )
 
 
 def _too_many_attempts(error: TooManyLoginAttempts) -> JSONResponse:
@@ -404,6 +432,33 @@ async def refresh(
     return _session_response(response, auth)
 
 
+@router.post("/password", response_model=SessionResponse)
+async def change_password(
+    body: ChangePasswordRequest,
+    principal: CurrentPrincipal,
+    request: Request,
+    response: Response,
+    use_case: Annotated[ChangePassword, Depends(get_change_password)],
+) -> SessionResponse | JSONResponse:
+    """An admin replaces their own password (also the temporary one, so no `require_role` here): other
+    devices are signed out and this one gets fresh cookies."""
+    if principal.role is not Role.ADMIN:
+        return problem(status.HTTP_403_FORBIDDEN, "Not allowed")
+    try:
+        auth = await use_case.execute(
+            principal.tenant_id, principal.subject_id, body.current_password, body.new_password, _client_address(request)
+        )
+    except InvalidUserData as error:
+        return problem(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error))
+    except TooManyLoginAttempts as error:
+        return _too_many_attempts(error)
+    except WrongCurrentPassword:
+        return problem(status.HTTP_400_BAD_REQUEST, "The current password is incorrect")
+    except NotAnActiveAdmin:
+        return problem(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
+    return _session_response(response, auth)
+
+
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(use_case: Annotated[Logout, Depends(get_logout)], refresh_token: RefreshCookie = None) -> Response:
     await use_case.execute(refresh_token)
@@ -422,7 +477,14 @@ async def me(
         return problem(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
     user, table, guest, tenant = account.user, account.table, account.guest, account.tenant
     return MeResponse(
-        user=UserOut(id=user.id, email=user.email, username=user.username, full_name=user.full_name, role=user.role)
+        user=UserOut(
+            id=user.id,
+            email=user.email,
+            username=user.username,
+            full_name=user.full_name,
+            role=user.role,
+            must_change_password=user.must_change_password,
+        )
         if user is not None
         else None,
         table=TableOut(id=table.id, name=table.name) if table is not None else None,
