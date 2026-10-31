@@ -37,10 +37,10 @@ Branch `feat/slice-17-admin-accounts` in Backend (from `main`) and Menu-Frontend
 - S8 (isolation): one tenant never sees or changes another tenant's admins; waiter/kitchen/table get 403 on `/admins`.
 
 ## Tasks
-- [ ] T1 (S1-S6, S8) Backend: `must_change_password` column + migration, admin use cases and `/admins` router, change
-  password, token claim and 403 gate, tests. Route: inline (no writer reason: one unit, sequential).
-- [ ] T2 (S6-S7) Frontend: api, Admins page, account page, forced redirect, tests. Route: inline.
-- [ ] T3 Verify: independent verifier (Risk item 2: auth) + native review per repo.
+- [x] T1 (S1-S6, S8) Backend: `must_change_password` column + migration, admin use cases and `/admins` router, change
+  password, token claim and 403 gate, tests. Route: inline (no writer reason: one unit, sequential). Commit `92c7697`.
+- [x] T2 (S6-S7) Frontend: api, Admins page, account page, forced redirect, tests. Route: inline. Commit Frontend `4bec5df`.
+- [x] T3 Verify: independent verifier (Risk item 2: auth) + native review per repo.
 
 ## Log
 - L1 (2026-10-31, user): "haz la sigueitne slcie"
@@ -56,5 +56,16 @@ Branch `feat/slice-17-admin-accounts` in Backend (from `main`) and Menu-Frontend
   auth/register/QR/tables tests); `FakeAccessTokens` and the user/credential fakes learned the new members.
 - L7 T2 evidence: `npm test` 364 passed (new: admins api, account api, password rules, forced-screen render),
   typecheck, lint and build clean. The forced screen lives in `RequireRole`, so every role-guarded page shows it.
+- L8 T3 evidence: independent verifier S1-S8 PASS, no blockers (probe 92/92 against the live stack, concurrent mutual
+  deactivation 3/3 one 200 + one 403, rate limit [422x6, 400x5, 429], 12 role-checked routes 403 for a must-change admin,
+  migration round-trip on scratch DB `menu_verify17`, full suite 1018 passed). Native review approved and acknowledged:
+  Backend `review-4d6779dc6f811ba8` (1 advisory: concurrent same-email create is caught by the unique index, untested),
+  Frontend `review-cdfc3dc84ff1c241` (6 advisories: form failure and create-recovery untested, duplicated length limit,
+  catch message wording, upsert during load, shadowed `run`).
+  Open advisories from the verifier: `GET /menu` and `GET /theme` (principal only, read-only) answer a must-change admin;
+  a lost temporary password has no recovery (no reset of another admin, email stays taken); lax bool parsing accepts
+  `"no"` for `is_active` (same as staff); a new password over 200 characters gets the generic schema 422; create/list do
+  not re-check that the caller is still active (same as staff). Dev data: tenants `verify17-a/b-1321b7@example.com`,
+  `verify17-c-9502c8@example.com` (password `verify-pass-123`).
 - L5 Assumptions: `PATCH` also renames; a new password must differ from the current one; the self-registered owner and
   existing admins start with `must_change_password = false`. Frontend branch starts from `feat/slice-16-stats`.
