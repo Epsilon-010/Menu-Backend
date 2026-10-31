@@ -110,3 +110,8 @@ Backend white-box (W*), frontend white-box (FE*), live black-box (B*). Status: f
   access token (`jti` kept in Redis until it would expire; other devices keep their sessions); W7 a visit takes up to
   30 guests (`MAX_GUESTS_PER_VISIT`), the 31st scan gets 409 "This table already has the most guests it allows; ask
   your waiter" (CLAUDE.md spec updated from "cualquier cantidad"); this also bounds the guest share of the SSE cap.
+- L10: backend suite 1117 passed; branches pushed. Native review `review-4b73f7bd0b259abd` (risk, reliability;
+  d398cc9..f0a3767) approved and acknowledged. Advisories kept: the guest cap counts every scan of the visit (a phone
+  that lost its cookie and scans again takes another of the 30); the logout denylist fails open like the session
+  version floor; no test pins that a full table spends no login attempt. Not applicable: a token without `jti` is
+  already refused by the required-claims check before it is read.
