@@ -53,7 +53,7 @@ Branch `feat/slice-16-stats` in Backend and Menu-Frontend. Delivery: one PR per 
 - [x] T2 S2-S6, S8 — Backend stats module + `order_items.queued_at` (migration `f7f7d880b795`). Route: inline. Commit `c768227`.
 - [x] T3 S1, S7 — Frontend: register sends the zone, `/admin/stats` page with SVG chart, tables, zone setting. Route: inline. Frontend commit `dbc4358`.
 - [x] T5 S9 — $0 bills closed, not paid (backend + waiter card + menu). Route: inline.
-- [ ] T4 — Verify (independent verifier: T1/T2 touch migrations, item 1), docs, ROADMAP, CLAUDE.md. Route: delegated verifier.
+- [x] T4 — Verify (independent verifier: T1/T2 touch migrations, item 1), docs, ROADMAP, CLAUDE.md. Route: delegated verifier. Native review: frontend `review-720201a990c88289`, backend `review-cabab5d0b062b382`, both approved.
 
 ## Log
 - L1 (2026-10-30, user): "Arranca el Slice 16 — Estadísticas: rama feat/slice-16-stats desde main actualizado, en Backend
@@ -87,3 +87,14 @@ Branch `feat/slice-16-stats` in Backend and Menu-Frontend. Delivery: one PR per 
 - L11 Evidence T5: RED 3 failing (pay $0, ask for $0 bill, old $0 bill in stats), GREEN after the change; a bill with
   something left still refuses close and is paid. Frontend helpers `hasSomethingToCharge`, `hasSomethingToPay` tested;
   347 frontend tests, typecheck, lint, build ok. The first verifier run was cut by the session end (no report).
+- L12 Verifier (2026-10-31): S1-S9 ok, no blockers; migrations up/down/up with backfill checked in scratch DB
+  `menu_verify16` (dropped). Advisory 1 (Chrome reports "Etc/Unknown" → sign-up 422) fixed in Frontend `6f294a1`
+  (`knownTimeZone`); advisory 2 (a paid bill with NULL `paid_cents` is skipped by the stats) left: payments always
+  store the amount. Dev data: tenants `verify16-a/b/c-7a91db@example.com` (password `verify-pass-123`).
+- L13 Native review. Frontend approved; its warnings fixed in `f32696f` (reload after a zone change, guard
+  `Intl.supportedValuesOf`); open: no StatsPanel render tests, inline bill-request condition, `browserTimeZone` lives in
+  stats. Backend approved; open advisories: 366-day ranges load every order in memory (no index on
+  `orders.created_at`/`bills.closed_at`), the queued_at migration holds an exclusive lock while it backfills, the $0
+  rule is written three ways in bills/ordering, `day_bounds` shifts a day by the gap in zones whose DST jump is at
+  midnight. Full backend suite before the test fix: 973 passed, 3 failed (empty visits ended by paying $0), fixed in
+  `535af22`.
