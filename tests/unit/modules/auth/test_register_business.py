@@ -205,3 +205,33 @@ async def test_create_tenant_accepts_a_chosen_id_and_refuses_one_in_use() -> Non
     assert tenant == Tenant(name="La Taquería", id=chosen)
     with pytest.raises(TenantIdTaken):
         await CreateTenant(tenants, uow).execute("Burger Place", chosen)
+
+
+async def test_a_replay_counts_its_password_check_as_a_login_of_that_admin(world: SignUpWorld) -> None:
+    # Otherwise a known business id + name is a password oracle limited only per address.
+    chosen = uuid.uuid4()
+    await world.register().execute(EMAIL, PASSWORD, "La Taquería", CLIENT, chosen)
+
+    with pytest.raises(BusinessIdTaken):
+        await world.register().execute(EMAIL, "wrong-pass-1", "La Taquería", CLIENT, chosen)
+    await world.register().execute(EMAIL, PASSWORD, "La Taquería", CLIENT, chosen)
+
+    login_key = f"staff:{EMAIL}"
+    assert world.limiter.acquired.count((login_key, CLIENT)) == 2
+    assert world.limiter.succeeded_logins == [(login_key, CLIENT)]
+
+
+async def test_a_replay_is_refused_while_that_admin_login_is_blocked(world: SignUpWorld) -> None:
+    class BlocksLogins(FakeLoginAttemptLimiter):
+        async def acquire(self, account: str, client: str) -> int | None:
+            await super().acquire(account, client)
+            return 600 if account.startswith("staff:") else None
+
+    chosen = uuid.uuid4()
+    await world.register().execute(EMAIL, PASSWORD, "La Taquería", CLIENT, chosen)
+    world.limiter = BlocksLogins()
+
+    with pytest.raises(TooManyLoginAttempts):
+        await world.register().execute(EMAIL, PASSWORD, "La Taquería", CLIENT, chosen)
+
+    assert world.hasher.verified == []

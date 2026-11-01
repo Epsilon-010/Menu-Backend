@@ -2,7 +2,7 @@ from app.modules.auth.application.session_issuer import AuthSession, SessionIssu
 from app.modules.auth.domain.errors import InvalidCredentials, TooManyLoginAttempts
 from app.modules.auth.domain.refresh_token import LoginAttemptLimiter
 from app.modules.orders.application.guests import JoinTable
-from app.modules.orders.domain.errors import QrNotValid, TableNotOpen
+from app.modules.orders.domain.errors import QrNotValid, TableFull, TableNotOpen
 from app.modules.tables.application.find_table import FindTableByQrToken
 from app.shared.domain.ports import UnitOfWork
 
@@ -46,7 +46,7 @@ class QrLogin:
             guest = await self._join_table.execute(table.tenant_id, table.id, qr_token, name)
         except QrNotValid as error:
             raise InvalidCredentials() from error
-        except TableNotOpen:
+        except (TableNotOpen, TableFull):
             # A real QR at a closed table is no guess: never count it, so a group that scans before
             # the waiter opens the table is not locked out once it is open.
             await self._limiter.succeeded(account, client)

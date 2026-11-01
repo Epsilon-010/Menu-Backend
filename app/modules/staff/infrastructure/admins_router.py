@@ -26,6 +26,7 @@ from app.modules.staff.infrastructure.router import SessionDep, _session_revoker
 from app.shared.domain.principal import Principal
 from app.shared.infrastructure.database import SqlAlchemyUnitOfWork
 from app.shared.infrastructure.http.auth import require_role
+from app.shared.infrastructure.http.pagination import PageOut, PageQuery, page_out
 from app.shared.infrastructure.http.problems import problem
 from app.shared.infrastructure.security import Argon2PasswordHasher
 
@@ -106,9 +107,11 @@ def get_update_admin(request: Request, session: SessionDep) -> UpdateAdmin:
 # --- Routes (admin only; the tenant always comes from the token) -------------------------------
 
 
-@router.get("", response_model=list[AdminOut])
-async def list_admins(admin: Admin, use_case: Annotated[ListAdmins, Depends(get_list_admins)]) -> list[AdminOut]:
-    return [_out(item) for item in await use_case.execute(admin.tenant_id)]
+@router.get("", response_model=PageOut[AdminOut])
+async def list_admins(
+    admin: Admin, page: PageQuery, use_case: Annotated[ListAdmins, Depends(get_list_admins)]
+) -> PageOut[AdminOut]:
+    return page_out(await use_case.execute(admin.tenant_id, page), _out)
 
 
 @router.post("", response_model=AdminWithTemporaryPasswordOut, status_code=status.HTTP_201_CREATED)

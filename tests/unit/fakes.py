@@ -1,7 +1,7 @@
 """In-memory fakes for the domain ports, shared by the unit tests."""
 
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
@@ -18,6 +18,7 @@ from app.modules.tenants.domain.tenant import Tenant
 from app.modules.theming.domain.repository import ThemeRecord, ThemeVersion
 from app.modules.theming.domain.theme import Theme
 from app.shared.domain.images import ImageStorageUnavailable, ImageVariant, StoredImage, UploadSignature
+from app.shared.domain.pagination import Cursor, Page, PageRequest
 from app.shared.domain.principal import Role
 
 
@@ -35,9 +36,13 @@ class FakeClock:
 class FakeUnitOfWork:
     def __init__(self) -> None:
         self.commits = 0
+        self.releases = 0
 
     async def commit(self) -> None:
         self.commits += 1
+
+    async def release(self) -> None:
+        self.releases += 1
 
 
 class FakePasswordHasher:
@@ -45,6 +50,7 @@ class FakePasswordHasher:
 
     def __init__(self) -> None:
         self.verified: list[str] = []
+        self.waited = 0
 
     async def hash(self, password: str) -> str:
         return f"hashed:{password}"
@@ -55,6 +61,9 @@ class FakePasswordHasher:
 
     async def verify_dummy(self, password: str) -> None:
         self.verified.append("dummy")
+
+    async def wait_like_verify(self) -> None:
+        self.waited += 1
 
 
 class InMemoryTenantRepository:
@@ -119,13 +128,13 @@ class InMemoryUserRepository:
     async def lock_email(self, email: str) -> None:
         self.email_locks.append(email)
 
-    async def list_staff(self, tenant_id: uuid.UUID) -> list[User]:
+    async def list_staff(self, tenant_id: uuid.UUID, page: PageRequest = PageRequest()) -> Page[User]:
         staff = [user for user in self.users.values() if user.tenant_id == tenant_id and user.role in STAFF_MEMBER_ROLES]
-        return sorted(staff, key=lambda user: user.full_name.lower())
+        return keyset_page(staff, lambda user: user.full_name.lower(), page)
 
-    async def list_admins(self, tenant_id: uuid.UUID) -> list[User]:
+    async def list_admins(self, tenant_id: uuid.UUID, page: PageRequest = PageRequest()) -> Page[User]:
         admins = [user for user in self.users.values() if user.tenant_id == tenant_id and user.role is Role.ADMIN]
-        return sorted(admins, key=lambda user: user.full_name.lower())
+        return keyset_page(admins, lambda user: user.full_name.lower(), page)
 
     async def lock_admin_changes(self, tenant_id: uuid.UUID) -> None:
         self.admin_locks.append(tenant_id)
@@ -172,6 +181,9 @@ class InMemoryTableRepository:
             ),
             None,
         )
+
+    async def list_page(self, tenant_id: uuid.UUID, page: PageRequest) -> Page[Table]:
+        return keyset_page(await self.list(tenant_id), lambda table: table.name.lower(), page)
 
     async def list(self, tenant_id: uuid.UUID) -> list[Table]:
         tables = [table for table in self.tables.values() if table.tenant_id == tenant_id]
@@ -230,6 +242,19 @@ class FakeStaffCredentials:
     def new_temporary_password(self) -> str:
         self.issued_passwords += 1
         return f"TEMPPASS{self.issued_passwords:04d}"
+
+
+def keyset_page[Row: (User, Table, ModifierGroup)](
+    rows: Iterable[Row], key: Callable[[Row], str], page: PageRequest
+) -> Page[Row]:
+    """In-memory twin of the SQL keyset page: ordered by (key, id), starting after the cursor."""
+    ordered = sorted(rows, key=lambda row: (key(row), row.id))
+    if page.after is not None:
+        after = (page.after.key, page.after.id)
+        ordered = [row for row in ordered if (key(row), row.id) > after]
+    items = ordered[: page.limit]
+    has_more = len(ordered) > page.limit
+    return Page(items, Cursor(key(items[-1]), items[-1].id) if has_more else None)
 
 
 def _by_position(entity: Category | Item) -> tuple[int, str]:
@@ -391,6 +416,9 @@ class InMemoryModifierGroupRepository:
                     kept = tuple(g for g in item.modifier_group_ids if g != group_id)
                     self._items.items[item.id] = replace(item, modifier_group_ids=kept)
 
+    async def list_page(self, tenant_id: uuid.UUID, page: PageRequest) -> Page[ModifierGroup]:
+        return keyset_page(await self.list(tenant_id), lambda group: group.name.lower(), page)
+
     async def list(self, tenant_id: uuid.UUID) -> list[ModifierGroup]:
         return sorted((g for g in self.groups.values() if g.tenant_id == tenant_id), key=lambda g: g.name.lower())
 
@@ -540,6 +568,7 @@ class InMemoryRefreshTokenRepository:
 class FakeAccessRevocations:
     def __init__(self) -> None:
         self.required: dict[uuid.UUID, int] = {}
+        self.ended_tokens: set[str] = set()
 
     async def require_version(self, subject_id: uuid.UUID, session_version: int) -> None:
         self.required[subject_id] = max(session_version, self.required.get(subject_id, 0))
@@ -547,12 +576,20 @@ class FakeAccessRevocations:
     async def required_version(self, subject_id: uuid.UUID) -> int | None:
         return self.required.get(subject_id)
 
+    async def end_token(self, token_id: str) -> None:
+        self.ended_tokens.add(token_id)
+
+    async def is_token_ended(self, token_id: str) -> bool:
+        return token_id in self.ended_tokens
+
 
 class FakeLoginAttemptLimiter:
-    def __init__(self, blocked_for: int | None = None) -> None:
+    def __init__(self, blocked_for: int | None = None, unknown_blocked_for: int | None = None) -> None:
         self.blocked_for = blocked_for
+        self.unknown_blocked_for = unknown_blocked_for
         self.acquired: list[tuple[str, str]] = []
         self.succeeded_logins: list[tuple[str, str]] = []
+        self.unknown_from: list[str] = []
 
     async def acquire(self, account: str, client: str) -> int | None:
         self.acquired.append((account, client))
@@ -560,6 +597,10 @@ class FakeLoginAttemptLimiter:
 
     async def succeeded(self, account: str, client: str) -> None:
         self.succeeded_logins.append((account, client))
+
+    async def unknown_account(self, client: str) -> int | None:
+        self.unknown_from.append(client)
+        return self.unknown_blocked_for
 
 class FakeTableGuests:
     """Records which tables had their QR guests ended, and when their access was revoked."""

@@ -1,5 +1,6 @@
+import json
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, TypeAdapter
@@ -14,6 +15,7 @@ from app.modules.catalog.infrastructure.repository import (
     SqlAlchemyModifierGroupRepository,
 )
 from app.shared.domain.images import ImageStorage, ImageVariant
+from app.shared.domain.principal import Role
 from app.shared.infrastructure.database import get_session
 from app.shared.infrastructure.http.auth import CurrentPrincipal
 
@@ -120,11 +122,23 @@ async def read_menu(
     use_case: Annotated[GetMenu, Depends(get_menu)],
     cache: Annotated[RedisMenuCache, Depends(menu_cache)],
 ) -> Response:
-    """Every signed-in role reads its own tenant's menu (tables and guests order from it)."""
+    """Every signed-in role reads its own tenant's menu (tables and guests order from it); the kitchen
+    gets it without any price."""
     generation, cached = await cache.get(principal.tenant_id)
     if cached is None:
         menu = await _read_menu(principal.tenant_id, use_case, request.app.state.image_storage)
         cached = _MENU.dump_json(menu).decode()
         if generation is not None:
             await cache.put(principal.tenant_id, generation, cached)
+    if principal.role is Role.KITCHEN:
+        cached = json.dumps(_without_prices(json.loads(cached)), ensure_ascii=False)
     return Response(content=cached, media_type="application/json")
+
+
+def _without_prices(value: Any) -> Any:
+    """The same document with every `price_cents` (items and modifier options) left out."""
+    if isinstance(value, list):
+        return [_without_prices(entry) for entry in value]
+    if isinstance(value, dict):
+        return {key: _without_prices(entry) for key, entry in value.items() if key != "price_cents"}
+    return value

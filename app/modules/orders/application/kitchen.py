@@ -22,6 +22,7 @@ from app.modules.orders.domain.errors import (
     OrderNotFound,
 )
 from app.modules.orders.domain.model import (
+    ensure_within_bill_total,
     STAFF_NAME,
     Order,
     OrderItem,
@@ -216,6 +217,9 @@ class AddDishToOrder:
         if item is None:
             raise ItemsUnavailable([item_id])
         chosen = choose_modifiers(item, modifier_option_ids)
+        ensure_within_bill_total(
+            await ctx.orders.list_for_bill(tenant_id, order.bill_id), unit_price(item, chosen) * quantity
+        )
         now = ctx.clock.now()
         await ctx.orders.add_dish(
             tenant_id,

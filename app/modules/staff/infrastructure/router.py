@@ -21,6 +21,7 @@ from app.modules.staff.infrastructure.repository import RandomStaffCredentials, 
 from app.shared.domain.principal import Principal, Role
 from app.shared.infrastructure.database import SqlAlchemyUnitOfWork, get_session
 from app.shared.infrastructure.http.auth import require_role
+from app.shared.infrastructure.http.pagination import PageOut, PageQuery, page_out
 from app.shared.infrastructure.http.problems import problem
 from app.shared.infrastructure.security import Argon2PasswordHasher
 
@@ -138,9 +139,11 @@ def get_regenerate_staff_pin(request: Request, session: SessionDep) -> Regenerat
 # --- Routes (admin only; the tenant always comes from the token) -------------------------------
 
 
-@router.get("", response_model=list[StaffMemberOut])
-async def list_staff(admin: Admin, use_case: Annotated[ListStaff, Depends(get_list_staff)]) -> list[StaffMemberOut]:
-    return [_out(member) for member in await use_case.execute(admin.tenant_id)]
+@router.get("", response_model=PageOut[StaffMemberOut])
+async def list_staff(
+    admin: Admin, page: PageQuery, use_case: Annotated[ListStaff, Depends(get_list_staff)]
+) -> PageOut[StaffMemberOut]:
+    return page_out(await use_case.execute(admin.tenant_id, page), _out)
 
 
 @router.post("", response_model=StaffMemberWithPinOut, status_code=status.HTTP_201_CREATED)

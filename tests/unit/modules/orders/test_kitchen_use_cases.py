@@ -80,6 +80,9 @@ class InMemoryOrders:
         order = self.orders[order_id]
         self.orders[order_id] = replace(order, items=(*order.items, dish))
 
+    async def list_for_bill(self, tenant_id: uuid.UUID, bill_id: uuid.UUID) -> list[Order]:
+        return [o for o in self.orders.values() if o.tenant_id == tenant_id and o.bill_id == bill_id]
+
     async def dish_id_taken(self, dish_id: uuid.UUID) -> bool:
         return any(item.id == dish_id for order in self.orders.values() for item in order.items)
 

@@ -11,6 +11,7 @@ from typing import Protocol
 
 from app.modules.catalog.domain.catalog import validate_price
 from app.modules.catalog.domain.errors import InvalidCatalogData
+from app.shared.domain.pagination import Page, PageRequest
 
 MAX_GROUP_NAME_LENGTH = 80
 MAX_OPTION_NAME_LENGTH = 80
@@ -169,6 +170,10 @@ class ModifierGroupRepository(Protocol):
 
     async def delete(self, tenant_id: uuid.UUID, group_id: uuid.UUID) -> None:
         """Deletes the group and detaches it from every item."""
+        ...
+
+    async def list_page(self, tenant_id: uuid.UUID, page: PageRequest) -> Page[ModifierGroup]:
+        """One page of the tenant's groups by name (case-insensitive), each with its options in order."""
         ...
 
     # Last on purpose: a method named `list` shadows the builtin in the annotations below it.

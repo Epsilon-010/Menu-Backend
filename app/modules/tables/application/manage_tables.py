@@ -22,6 +22,7 @@ from app.modules.tables.domain.table import (
     TableRepository,
     validate_table_name,
 )
+from app.shared.domain.pagination import Page, PageRequest
 from app.shared.domain.ports import PasswordHasher, UnitOfWork
 
 # Codes come from ~887 million combinations; a collision is rare, several in a row are a bug.
@@ -103,6 +104,9 @@ class ListTables:
 
     async def execute(self, tenant_id: uuid.UUID) -> list[Table]:
         return await self._tables.list(tenant_id)
+
+    async def page(self, tenant_id: uuid.UUID, page: PageRequest) -> Page[Table]:
+        return await self._tables.list_page(tenant_id, page)
 
 
 class UpdateTable:

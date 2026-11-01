@@ -350,3 +350,56 @@ def test_a_signed_out_tablet_can_no_longer_order(new_client: ClientFactory, tena
 
     assert add(tablet, items["pastor"]).status_code == 401
     assert submit(tablet, 1).status_code == 401
+
+
+# --- Audit fixes: bill total cap (W6) and replays from a past visit (W10) -----------------------------
+
+
+def _bill_of(staff: TestClient, table: Json) -> str:
+    return str(next(row for row in tables_overview(staff) if row["table_id"] == table["id"])["bill"]["id"])
+
+
+def test_a_bill_never_goes_over_its_maximum_total_and_its_maximum_can_be_paid(
+    new_client: ClientFactory, tenant_a: SeedResult
+) -> None:
+    # Without a cap, a few big rounds overflowed the 32-bit totals: paying gave a 500 and the bill stuck open.
+    admin = admin_of(new_client)
+    tacos = ok(create_category(admin, "Banquets"), 201)["id"]
+    banquet = ok(create_item(admin, tacos, "Banquet", 10_000_000), 201)["id"]
+    snack = ok(create_item(admin, tacos, "Snack", 1), 201)["id"]
+    table = created(create_table(admin))
+    tablet = tablet_of(new_client, table)
+    waiter = staff_of(new_client, admin, "waiter.night", "waiter")
+    for _ in range(2):
+        ok(add(tablet, banquet, 50))
+    first = ok(submit(tablet, cart(tablet)["version"]), 201)  # 2 x 50 x $100,000.00 = the maximum
+    ok(add(tablet, snack))
+
+    refused = submit(tablet, cart(tablet)["version"])
+
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == "This bill would go over its maximum total; ask the staff for help"
+    added = waiter.post(f"/api/v1/orders/{first['id']}/items", json={"item_id": snack, "quantity": 1})
+    assert added.status_code == 409
+    assert added.json()["detail"] == "This bill would go over its maximum total; ask the staff for help"
+    paid = ok(waiter.post(f"{BILLS_URL}/{_bill_of(waiter, table)}/payment", json={"method": "card"}))
+    assert paid["total_cents"] == 1_000_000_000
+
+
+def test_a_send_id_from_a_past_visit_is_a_clash_not_a_replay(new_client: ClientFactory, tenant_a: SeedResult) -> None:
+    admin = admin_of(new_client)
+    items = menu_items(admin)
+    table = created(create_table(admin))
+    tablet = tablet_of(new_client, table)
+    waiter = staff_of(new_client, admin, "waiter.day", "waiter")
+    order_id = str(uuid.uuid4())
+    ok(add(tablet, items["pastor"]))
+    ok(submit(tablet, cart(tablet)["version"], id=order_id), 201)
+    ok(waiter.post(f"{BILLS_URL}/{_bill_of(waiter, table)}/payment", json={"method": "cash"}))
+    ok(add(tablet, items["suadero"]))
+
+    replayed = submit(tablet, cart(tablet)["version"], id=order_id)
+
+    assert replayed.status_code == 409
+    assert replayed.json()["detail"] == "That id is already used by something else"
+    assert len(cart(tablet)["lines"]) == 1

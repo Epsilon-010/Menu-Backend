@@ -4,6 +4,7 @@ import uuid
 import pytest
 from argon2 import PasswordHasher as Argon2
 
+from app.shared.domain.pagination import PageRequest
 from app.modules.staff.domain.errors import EmailAlreadyInUse
 from app.modules.staff.domain.user import User
 from app.modules.staff.infrastructure.repository import SqlAlchemyUserRepository
@@ -166,7 +167,7 @@ def test_concurrent_staff_replays_create_one_member_and_say_so() -> None:
 
             results = list(await asyncio.gather(*(create() for _ in range(3)), return_exceptions=True))
             async with factory() as session:
-                count = len(await SqlAlchemyUserRepository(session).list_staff(tenant.tenant_id))
+                count = len((await SqlAlchemyUserRepository(session).list_staff(tenant.tenant_id, PageRequest())).items)
             return results, count
         finally:
             await engine.dispose()

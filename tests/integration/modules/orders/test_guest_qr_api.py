@@ -9,11 +9,13 @@ import uuid
 from datetime import timedelta
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
 from redis import Redis
 from sqlalchemy import update
 
+from app.modules.orders.application import guests
 from app.modules.orders.infrastructure.models import GuestModel
 from app.seed import SeedResult
 from app.shared.infrastructure.config import get_settings
@@ -422,3 +424,21 @@ def test_a_cart_line_id_from_a_previous_visit_is_a_clash_not_a_replay(
     repeated = add(next_guest, items["pastor"], id=line_id)
 
     assert (repeated.status_code, repeated.json()["detail"]) == (409, "That id is already used by something else")
+
+
+def test_a_visit_takes_up_to_its_guest_cap(
+    new_client: ClientFactory, tenant_a: SeedResult, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Unlimited joins let one QR photo mint endless guests (each with its own live-update streams).
+    monkeypatch.setattr(guests, "MAX_GUESTS_PER_VISIT", 2)
+    admin = admin_of(new_client)
+    table = created(create_table(admin))
+    open_table(admin, table)
+    for _ in range(2):
+        guest_of(new_client, table["qr_token"])
+
+    full = scan(new_client(), table["qr_token"])
+
+    assert full.status_code == 409
+    assert full.json()["detail"] == "This table already has the most guests it allows; ask your waiter"
+    assert "set-cookie" not in full.headers

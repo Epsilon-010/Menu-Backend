@@ -5,7 +5,7 @@ see an id as free. Claiming an id takes a lock on the id itself: the second requ
 (409), never a 500 and never one id in two places."""
 
 import asyncio
-import time
+import threading
 import uuid
 from typing import Any
 
@@ -31,18 +31,25 @@ TAKEN = (409, "That id is already used by something else")
 HOLD = 0.6
 
 
-def slowed(monkeypatch: pytest.MonkeyPatch, owner: type, name: str) -> None:
-    """The first call waits before writing, holding its locks while the other request arrives."""
+def slowed(monkeypatch: pytest.MonkeyPatch, owner: type, name: str) -> threading.Event:
+    """The first call waits before writing, holding its locks while the other request arrives.
+
+    The returned event is set once that first call is in: send the other request only then (a fixed
+    sleep is not enough on a slow CI runner, where the first request may not have taken its locks yet).
+    """
     original = getattr(owner, name)
     calls = {"count": 0}
+    entered = threading.Event()
 
     async def slow(self: Any, *args: Any) -> Any:
         calls["count"] += 1
         if calls["count"] == 1:
+            entered.set()
             await asyncio.sleep(HOLD)
         return await original(self, *args)
 
     monkeypatch.setattr(owner, name, slow)
+    return entered
 
 
 def outcome(response: Any) -> tuple[int, str | None]:
@@ -57,10 +64,10 @@ def test_two_tables_adding_a_line_with_the_same_id_at_once_get_one_line_and_a_40
     items = menu_items(admin)
     first, second = (tablet_of(new_client, created(create_table(admin, name))) for name in ("Table 1", "Table 2"))
     line_id = str(uuid.uuid4())
-    slowed(monkeypatch, SqlAlchemyCartRepository, "add_line")
+    holding = slowed(monkeypatch, SqlAlchemyCartRepository, "add_line")
 
     thread, results = in_background(lambda: add(first, items["pastor"], id=line_id))
-    time.sleep(HOLD / 3)
+    assert holding.wait(timeout=10)
     late = add(second, items["pastor"], id=line_id)
     thread.join()
 
@@ -79,10 +86,10 @@ def test_two_tables_sending_orders_with_the_same_id_at_once_make_one_order_and_a
     for tablet in (first, second):
         ok(add(tablet, items["pastor"]))
     order_id = str(uuid.uuid4())
-    slowed(monkeypatch, SqlAlchemyOrderRepository, "add")
+    holding = slowed(monkeypatch, SqlAlchemyOrderRepository, "add")
 
     thread, results = in_background(lambda: submit(first, cart(first)["version"], id=order_id))
-    time.sleep(HOLD / 3)
+    assert holding.wait(timeout=10)
     late = submit(second, cart(second)["version"], id=order_id)
     thread.join()
 
@@ -102,10 +109,10 @@ def test_a_cart_line_and_a_dish_added_at_another_table_never_share_an_id(
     ok(add(served, items["pastor"]))
     order = ok(submit(served, cart(served)["version"]), 201)
     shared_id = str(uuid.uuid4())
-    slowed(monkeypatch, SqlAlchemyCartRepository, "add_line")
+    holding = slowed(monkeypatch, SqlAlchemyCartRepository, "add_line")
 
     thread, results = in_background(lambda: add(diners, items["pastor"], id=shared_id))
-    time.sleep(HOLD / 3)
+    assert holding.wait(timeout=10)
     dish = add_dish(admin, order, items["pastor"], id=shared_id)
     thread.join()
 

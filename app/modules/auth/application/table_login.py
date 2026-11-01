@@ -33,7 +33,15 @@ class TableLogin:
             raise TooManyLoginAttempts(retry_after)
 
         table = await self._find_table.execute(code)
+        # The hash below is slow: never hold a pooled connection while it runs.
+        await self._uow.release()
         if table is None:
+            # A made-up code never repeats a table: only this per-address cap limits such a flood.
+            if await self._limiter.unknown_account(client) is not None:
+                # The same answer and about the same time as any failure (a 429 here would tell which
+                # logins exist), without the hash.
+                await self._hasher.wait_like_verify()
+                raise InvalidCredentials()
             await self._hasher.verify_dummy(pin)
         if table is None or not await self._hasher.verify(table.pin_hash, pin) or not table.is_active:
             raise InvalidCredentials()

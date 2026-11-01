@@ -350,6 +350,19 @@ def test_logout_revokes_the_session_and_clears_the_cookie(client: TestClient, te
     assert refresh_with(client, token).status_code == 401
 
 
+def test_logout_ends_its_access_token_too_but_no_other_session(client: TestClient, tenant_a: SeedResult) -> None:
+    # A shared tablet: a copy of the access cookie taken before signing out must not work for 15 more minutes.
+    access = login(client).cookies["access_token"]
+    other_access = login(client).cookies["access_token"]  # another device of the same account
+    assert me(client, access).status_code == 200
+
+    response = client.post("/api/v1/auth/logout", headers={"Cookie": f"access_token={access}"})
+
+    assert response.status_code == 204
+    assert me(client, access).status_code == 401
+    assert me(client, other_access).status_code == 200
+
+
 def test_logout_without_a_session_still_succeeds(client: TestClient) -> None:
     assert client.post("/api/v1/auth/logout").status_code == 204
 

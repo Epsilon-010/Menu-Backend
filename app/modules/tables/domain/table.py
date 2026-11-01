@@ -3,12 +3,15 @@ from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from app.modules.tables.domain.errors import InvalidTableData
+from app.shared.domain.pagination import Page, PageRequest
 
 MAX_TABLE_NAME_LENGTH = 60
 # Uppercase letters and digits without the look-alikes 0/O, 1/I/L: the code is typed on a tablet.
 TABLE_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 TABLE_CODE_LENGTH = 6
-PIN_LENGTH = 6
+# 8 digits: 100 million PINs, so guessing one within the login limits takes decades, not weeks.
+# PINs given before (6 digits) keep working until the admin generates a new one.
+PIN_LENGTH = 8
 
 
 def normalize_table_code(code: str) -> str:
@@ -102,6 +105,10 @@ class TableRepository(Protocol):
 
     async def get_by_name(self, tenant_id: uuid.UUID, name: str) -> Table | None:
         """Case-insensitive match inside the tenant."""
+        ...
+
+    async def list_page(self, tenant_id: uuid.UUID, page: PageRequest) -> Page[Table]:
+        """One page of the tenant's tables, ordered by name."""
         ...
 
     async def list(self, tenant_id: uuid.UUID) -> list[Table]:

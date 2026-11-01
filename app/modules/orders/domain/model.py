@@ -5,17 +5,21 @@ unsent cart in the same transaction, and an order is always sent on the table's 
 """
 
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
 
-from app.modules.orders.domain.errors import InvalidOrderData, TransitionNotAllowed
+from app.modules.orders.domain.errors import BillTooLarge, InvalidOrderData, TransitionNotAllowed
 from app.modules.orders.domain.modifiers import ChosenModifier
 from app.shared.domain.principal import Role
 
 MAX_QUANTITY = 50
 MAX_NOTE_LENGTH = 200
 MAX_CART_LINES = 100
+# $10,000,000.00: far beyond any real visit, and below what the 32-bit total columns hold, so a
+# bill can always be paid. Capping the bill also caps every unit price and line subtotal.
+MAX_BILL_TOTAL_CENTS = 1_000_000_000
 MAX_GUEST_NAME_LENGTH = 30
 MAX_REASON_LENGTH = 200
 # Who a dish added by the staff to a sent order shows as added by.
@@ -293,3 +297,9 @@ class Order:
     @property
     def status(self) -> OrderStatus:
         return derive_order_status([item.status for item in self.items])
+
+
+def ensure_within_bill_total(orders: Iterable["Order"], adding_cents: int) -> None:
+    """Raises BillTooLarge when adding `adding_cents` to the bill of `orders` goes over the maximum."""
+    if sum(order.total_cents for order in orders) + adding_cents > MAX_BILL_TOTAL_CENTS:
+        raise BillTooLarge()

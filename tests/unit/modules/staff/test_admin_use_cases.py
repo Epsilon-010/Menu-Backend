@@ -2,6 +2,7 @@ import uuid
 
 import pytest
 
+from app.shared.domain.pagination import PageRequest
 from app.modules.staff.application.manage_admins import (
     CreateAdmin,
     ListAdmins,
@@ -130,7 +131,7 @@ async def test_lists_only_the_tenants_admins(users: InMemoryUserRepository, uow:
     waiter = User(tenant_id=TENANT_A, full_name="A waiter", role=Role.WAITER, password_hash="x")
     users.users[waiter.id] = waiter
 
-    assert await ListAdmins(users).execute(TENANT_A) == [owner]
+    assert (await ListAdmins(users).execute(TENANT_A, PageRequest())).items == [owner]
 
 
 # --- UpdateAdmin ----------------------------------------------------------------------------------

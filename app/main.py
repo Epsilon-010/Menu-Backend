@@ -16,12 +16,14 @@ from app.modules.stats.infrastructure import router as stats_router
 from app.modules.tables.infrastructure import router as tables_router
 from app.modules.tenants.infrastructure import router as tenants_router
 from app.modules.theming.infrastructure import router as theming_router
+from app.modules.orders.infrastructure.stream_slots import StreamSlots
 from app.shared.infrastructure.cache import create_redis
 from app.shared.infrastructure.celery_app import create_celery
 from app.shared.infrastructure.config import get_settings
 from app.shared.infrastructure.database import create_engine, create_session_factory
 from app.shared.infrastructure.http import health_router
 from app.shared.infrastructure.http.problems import register_problem_handlers
+from app.shared.infrastructure.http.body_limit import BodySizeLimit
 from app.shared.infrastructure.http.validation import reject_nul_characters
 from app.shared.infrastructure.images import build_image_storage
 
@@ -35,9 +37,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.session_factory = create_session_factory(app.state.engine)
     app.state.redis = create_redis(settings.redis_url)
     app.state.access_revocations = RedisAccessRevocations(app.state.redis)
+    # Live-update streams block on their own pool (one connection each, capped by `stream_slots`).
+    app.state.stream_redis = create_redis(settings.redis_url, max_connections=settings.sse_max_streams + 10)
     try:
         yield
     finally:
+        await app.state.stream_redis.aclose()
         await app.state.redis.aclose()
         await app.state.engine.dispose()
 
@@ -46,9 +51,11 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
     app.state.access_tokens = JoseAccessTokens(settings.jwt_secret.get_secret_value())
+    app.state.stream_slots = StreamSlots(settings.sse_max_streams, settings.sse_max_streams_per_session)
     app.state.image_storage = build_image_storage(settings)
     app.state.image_cleanup = CeleryImageCleanupScheduler(create_celery(settings))
     register_problem_handlers(app)
+    app.add_middleware(BodySizeLimit, max_bytes=settings.max_request_body_bytes)
 
     api = APIRouter(prefix=API_PREFIX, dependencies=[Depends(reject_nul_characters)])
     api.include_router(health_router.router)

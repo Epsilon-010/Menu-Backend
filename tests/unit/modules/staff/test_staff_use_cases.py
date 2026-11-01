@@ -2,6 +2,7 @@ import uuid
 
 import pytest
 
+from app.shared.domain.pagination import PageRequest
 from app.modules.staff.application.create_user import CreateUser, LockEmail
 from app.modules.staff.application.find_user import FindUserByLogin, GetUser
 from app.modules.staff.application.manage_staff import (
@@ -279,7 +280,7 @@ async def test_lists_only_the_waiters_and_cooks_of_the_tenant_by_name(
     bob = (await create.execute(TENANT_A, "bob", Role.WAITER)).member
     await create.execute(TENANT_B, "Carl", Role.WAITER)
 
-    assert await ListStaff(users).execute(TENANT_A) == [bob, zoe]
+    assert (await ListStaff(users).execute(TENANT_A, PageRequest())).items == [bob, zoe]
 
 
 async def test_updates_name_and_role_and_revokes_sessions_on_role_change(

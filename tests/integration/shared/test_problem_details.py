@@ -196,3 +196,40 @@ def test_unhandled_errors_are_a_500_problem_that_leaks_nothing(failing_client: T
 
     assert_problem(response, problem(500, "Internal Server Error"))
     assert "hunter2" not in response.text
+
+
+@pytest.mark.parametrize("path", ["/api/v1/auth/refresh", "/api/v1/auth/logout"])
+def test_deeply_nested_bodies_on_routes_without_a_body_never_end_in_a_500(client: TestClient, path: str) -> None:
+    # No body model: FastAPI never decodes it, so only the NUL check reads it.
+    too_deep = "[" * 100_000 + "]" * 100_000
+    response = client.post(path, content=too_deep, headers={"Content-Type": "application/json"})
+    assert response.status_code != 500
+
+
+def test_a_body_over_1_mib_is_a_413_problem_before_any_route_code(client: TestClient) -> None:
+    big = '{"username": "' + "a" * (1024 * 1024) + '", "password": "x"}'
+    response = client.post("/api/v1/auth/login", content=big, headers={"Content-Type": "application/json"})
+
+    assert response.status_code == 413
+    assert response.headers["content-type"] == PROBLEM_JSON
+    assert response.json()["detail"] == "The request body is too large"
+
+
+def test_a_streamed_body_without_a_length_is_capped_too(client: TestClient) -> None:
+    def chunks() -> Iterator[bytes]:
+        for _ in range(20):
+            yield b"a" * 100_000
+
+    response = client.post("/api/v1/auth/login", content=chunks(), headers={"Content-Type": "application/json"})
+
+    assert response.status_code == 413
+
+
+def test_a_streamed_body_under_the_cap_reaches_the_route(client: TestClient) -> None:
+    def chunks() -> Iterator[bytes]:
+        yield b'{"username": "nobody@example.com",'
+        yield b' "password": "wrong-pass"}'
+
+    response = client.post("/api/v1/auth/login", content=chunks(), headers={"Content-Type": "application/json"})
+
+    assert response.status_code == 401

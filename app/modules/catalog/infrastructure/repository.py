@@ -23,12 +23,14 @@ from app.modules.catalog.infrastructure.models import (
     ModifierGroupModel,
     ModifierOptionModel,
 )
+from app.shared.domain.pagination import Page, PageRequest
 from app.shared.infrastructure.database import (
     affected_rows,
     advisory_xact_lock,
     violated_foreign_key,
     violated_unique_constraint,
 )
+from app.shared.infrastructure.pagination import keyset_page
 
 _CATEGORY_NAME_INDEX = "uq_categories_tenant_id_lower_name"
 _ITEM_CATEGORY_FK = "fk_items_category_id_tenant_id_categories"
@@ -483,6 +485,16 @@ class SqlAlchemyModifierGroupRepository:
         )
         if not affected_rows(result):
             raise ModifierGroupNotFound(group_id)
+
+    async def list_page(self, tenant_id: uuid.UUID, page: PageRequest) -> Page[ModifierGroup]:
+        models, following = await keyset_page(
+            self._session,
+            select(ModifierGroupModel).where(ModifierGroupModel.tenant_id == tenant_id),
+            func.lower(ModifierGroupModel.name),
+            ModifierGroupModel.id,
+            page,
+        )
+        return Page(await self._groups(models), following)
 
     # Last on purpose: a method named `list` shadows the builtin in the annotations below it.
     async def list(self, tenant_id: uuid.UUID) -> list[ModifierGroup]:

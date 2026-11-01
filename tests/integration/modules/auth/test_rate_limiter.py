@@ -13,7 +13,11 @@ async def _run(steps: list[Step], max_per_client: int = 5, max_per_account: int 
     redis = Redis.from_url(get_settings().redis_url, decode_responses=True)
     try:
         limiter = RedisLoginAttemptLimiter(
-            redis, window_seconds=900, max_per_client=max_per_client, max_per_account=max_per_account
+            redis,
+            window_seconds=900,
+            max_per_client=max_per_client,
+            max_per_account=max_per_account,
+            max_unknown_per_address=100,
         )
         results: list[int | None] = []
         batch: list[tuple[str, str]] = []
@@ -112,3 +116,23 @@ def test_successful_logins_never_take_back_failures_from_other_devices() -> None
 
     assert results[:64] == [None] * 64
     assert results[64:].count(None) == 2
+
+
+def test_logins_to_unknown_accounts_are_capped_per_address() -> None:
+    async def run() -> list[int | None]:
+        redis = Redis.from_url(get_settings().redis_url, decode_responses=True)
+        try:
+            limiter = RedisLoginAttemptLimiter(
+                redis, window_seconds=900, max_per_client=5, max_per_account=50, max_unknown_per_address=30
+            )
+            first = await asyncio.gather(*(limiter.unknown_account("10.0.0.1") for _ in range(40)))
+            other = await limiter.unknown_account("10.0.0.2")
+            return [*first, other]
+        finally:
+            await redis.aclose()
+
+    results = asyncio.run(run())
+
+    assert results[:40].count(None) == 30
+    assert all(0 < wait <= 900 for wait in results[:40] if wait is not None)
+    assert results[40] is None  # another address keeps its own budget

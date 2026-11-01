@@ -37,6 +37,9 @@ async def get_principal(
     required = await revocations.required_version(principal.subject_id)
     if required is not None and principal.session_version < required:
         raise _unauthorized()
+    # Signed out on this device: the token stays dead until it would have expired.
+    if principal.token_id is not None and await revocations.is_token_ended(principal.token_id):
+        raise _unauthorized()
     return principal
 
 

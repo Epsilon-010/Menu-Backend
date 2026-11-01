@@ -68,7 +68,7 @@ def test_creating_an_admin_returns_a_temporary_password_once(owner: TestClient, 
         "is_active": True,
         "must_change_password": True,
     }
-    listed = owner.get(ADMINS_URL).json()
+    listed = owner.get(ADMINS_URL).json()["items"]
     assert all("temporary_password" not in admin for admin in listed)
 
 
@@ -114,7 +114,7 @@ def test_repeating_a_create_with_the_same_id_never_makes_a_second_admin(owner: T
 
     assert replay.status_code == 409
     assert detail(replay) == "This admin was already created"
-    assert [admin["id"] for admin in owner.get(ADMINS_URL).json()].count(admin_id) == 1
+    assert [admin["id"] for admin in owner.get(ADMINS_URL).json()["items"]].count(admin_id) == 1
 
 
 def test_an_id_used_by_something_else_is_a_conflict_without_details(
@@ -142,7 +142,7 @@ def test_the_list_has_only_this_tenants_admins_ordered_by_name(
     created(add_admin(owner, "abe@example.com", "abe"))
     created(add_member(owner))
 
-    listed = owner.get(ADMINS_URL).json()
+    listed = owner.get(ADMINS_URL).json()["items"]
 
     assert [admin["full_name"] for admin in listed] == ["abe", "Owner", "Zed"]
     assert listed[1] == {
@@ -153,7 +153,7 @@ def test_the_list_has_only_this_tenants_admins_ordered_by_name(
         "must_change_password": False,
     }
     other = signed_in(new_client, tenant_b.email)
-    assert [admin["email"] for admin in other.get(ADMINS_URL).json()] == [tenant_b.email]
+    assert [admin["email"] for admin in other.get(ADMINS_URL).json()["items"]] == [tenant_b.email]
 
 
 # --- S4 manage --------------------------------------------------------------------------------
@@ -163,7 +163,7 @@ def test_deactivating_an_admin_ends_their_sessions_and_reactivating_lets_them_ba
     new_client: ClientFactory, owner: TestClient
 ) -> None:
     manager = ready_admin(new_client, owner)
-    manager_id = next(a["id"] for a in owner.get(ADMINS_URL).json() if a["email"] == "manager@example.com")
+    manager_id = next(a["id"] for a in owner.get(ADMINS_URL).json()["items"] if a["email"] == "manager@example.com")
 
     response = owner.patch(f"{ADMINS_URL}/{manager_id}", json={"is_active": False})
 
@@ -197,7 +197,7 @@ def test_a_deactivated_admin_with_a_live_token_cannot_deactivate_anyone(
     new_client: ClientFactory, owner: TestClient, tenant_a: SeedResult
 ) -> None:
     manager = ready_admin(new_client, owner)
-    manager_id = next(a["id"] for a in owner.get(ADMINS_URL).json() if a["email"] == "manager@example.com")
+    manager_id = next(a["id"] for a in owner.get(ADMINS_URL).json()["items"] if a["email"] == "manager@example.com")
     # Simulates the race: the manager's request runs after the owner's committed, with a token still valid
     # (as if Redis lost the revocation).
     manager_cookie = manager.cookies.get("access_token")
@@ -224,6 +224,12 @@ class _NoRevocations:
 
     async def required_version(self, subject_id: uuid.UUID) -> int | None:
         return None
+
+    async def end_token(self, token_id: str) -> None:
+        return None
+
+    async def is_token_ended(self, token_id: str) -> bool:
+        return False
 
 
 def test_waiters_other_tenants_and_unknown_ids_are_not_admins(
@@ -319,7 +325,7 @@ def test_an_admin_with_a_temporary_password_can_do_nothing_else_until_changing_i
     assert changed.json()["must_change_password"] is False
     assert client.get(ADMINS_URL).status_code == 200
     assert me(client).json()["user"]["must_change_password"] is False
-    listed = owner.get(ADMINS_URL).json()
+    listed = owner.get(ADMINS_URL).json()["items"]
     assert next(a for a in listed if a["email"] == "manager@example.com")["must_change_password"] is False
 
 

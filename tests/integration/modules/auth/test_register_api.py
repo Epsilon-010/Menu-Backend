@@ -70,7 +70,7 @@ def test_signing_up_creates_the_business_and_its_admin_and_signs_in(new_client: 
     assert account["user"]["role"] == "admin"
     assert account["tenant"]["name"] == "Tacos El Güero"
     # The new business starts empty, and the new admin can manage it right away.
-    assert client.get("/api/v1/staff").json() == []
+    assert client.get("/api/v1/staff").json()["items"] == []
     assert client.post("/api/v1/staff", json={"full_name": "Cook 1", "role": "kitchen"}).status_code == 201
     # The account signs in later like any admin.
     assert login(new_client(), username=EMAIL, password=PASSWORD).status_code == 200
@@ -87,7 +87,7 @@ def test_a_new_business_never_sees_another_tenants_staff(new_client: ClientFacto
     assert register(client).status_code == 201
 
     assert client.get("/api/v1/auth/me").json()["tenant"]["id"] != str(other.tenant_id)
-    assert client.get("/api/v1/staff").json() == []
+    assert client.get("/api/v1/staff").json()["items"] == []
     assert client.patch(f"/api/v1/staff/{member['id']}", json={"is_active": False}).status_code == 404
     assert client.post(f"/api/v1/staff/{member['id']}/pin").status_code == 404
     assert login(new_client(), username=member["code"], password=member["pin"]).status_code == 200

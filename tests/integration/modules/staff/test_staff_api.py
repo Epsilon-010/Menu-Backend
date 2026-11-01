@@ -124,12 +124,12 @@ def test_admin_creates_a_waiter_and_a_cook_with_only_a_name_and_each_signs_in_wi
     }
     for member in (waiter, cook):
         assert len(member["code"]) == 6 and set(member["code"]) <= set(STAFF_CODE_ALPHABET)
-        assert len(member["pin"]) == 6 and member["pin"].isdigit()
+        assert len(member["pin"]) == 8 and member["pin"].isdigit()
     assert waiter["code"] != cook["code"]
     # The PIN is shown once: the list never carries it.
     listed = admin.get(STAFF_URL)
     assert listed.status_code == 200
-    assert listed.json() == [{k: v for k, v in m.items() if k != "pin"} for m in (waiter, cook)]
+    assert listed.json()["items"] == [{k: v for k, v in m.items() if k != "pin"} for m in (waiter, cook)]
 
     for member in (waiter, cook):
         client = new_client()
@@ -219,7 +219,7 @@ def test_non_admin_roles_get_403_on_every_staff_endpoint(
     ]
 
     assert [response.status_code for response in responses] == [403, 403, 403, 403]
-    assert "Intruder" not in [member["full_name"] for member in admin.get(STAFF_URL).json()]
+    assert "Intruder" not in [member["full_name"] for member in admin.get(STAFF_URL).json()["items"]]
     assert login(new_client(), username=target["code"], password=target["pin"]).status_code == 200
 
 
@@ -304,7 +304,7 @@ def test_regenerating_the_pin_keeps_the_code_ends_the_sessions_and_only_the_new_
     assert response.status_code == 200
     renewed = response.json()
     assert {k: v for k, v in renewed.items() if k != "pin"} == {k: v for k, v in target.items() if k != "pin"}
-    assert len(renewed["pin"]) == 6 and renewed["pin"].isdigit()
+    assert len(renewed["pin"]) == 8 and renewed["pin"].isdigit()
     assert waiter.get("/api/v1/auth/me").status_code == 401
     assert waiter.post("/api/v1/auth/refresh").status_code == 401
     if renewed["pin"] != target["pin"]:
@@ -335,7 +335,7 @@ def test_a_legacy_member_keeps_their_username_and_password_until_the_admin_gener
     admin = signed_in(new_client, "owner@example.com")
     target = member_id(create_member(admin, "demo.mesero"))
 
-    assert admin.get(STAFF_URL).json()[0]["code"] == "DEMO.MESERO"
+    assert admin.get(STAFF_URL).json()["items"][0]["code"] == "DEMO.MESERO"
     assert login(new_client(), username="demo.mesero", password=STAFF_PASSWORD).status_code == 200
 
     renewed = admin.post(f"{STAFF_URL}/{target}/pin").json()
@@ -370,7 +370,7 @@ def test_invalid_staff_data_is_rejected(new_client: ClientFactory, tenant_a: See
 
     assert response.status_code == 422
     assert response.headers["content-type"] == "application/problem+json"
-    assert admin.get(STAFF_URL).json() == []
+    assert admin.get(STAFF_URL).json()["items"] == []
 
 
 def test_a_blank_name_gets_the_domain_message(new_client: ClientFactory, tenant_a: SeedResult) -> None:
@@ -388,7 +388,7 @@ def test_invalid_updates_are_rejected_without_changes(
     target = created(add_member(admin))
 
     assert admin.patch(f"{STAFF_URL}/{target['id']}", json=body).status_code == 422
-    [member] = admin.get(STAFF_URL).json()
+    [member] = admin.get(STAFF_URL).json()["items"]
     assert (member["role"], member["code"], member["full_name"]) == ("waiter", target["code"], "Juan Pérez")
 
 
@@ -403,12 +403,12 @@ def test_an_admin_never_sees_nor_changes_another_tenants_staff(
     waiter = signed_in(new_client, target["code"], target["pin"])
     admin_b = signed_in(new_client, "boss@example.com")
 
-    assert admin_b.get(STAFF_URL).json() == []
+    assert admin_b.get(STAFF_URL).json()["items"] == []
     assert admin_b.patch(f"{STAFF_URL}/{target['id']}", json={"is_active": False}).status_code == 404
     assert admin_b.post(f"{STAFF_URL}/{target['id']}/pin").status_code == 404
 
     assert waiter.get("/api/v1/auth/me").status_code == 200
-    assert admin_a.get(STAFF_URL).json()[0]["is_active"] is True
+    assert admin_a.get(STAFF_URL).json()["items"][0]["is_active"] is True
     assert login(new_client(), username=target["code"], password=target["pin"]).status_code == 200
 
 
@@ -443,6 +443,6 @@ def test_repeating_a_staff_create_with_its_id_never_makes_a_second_member(
     for clash in (other_tenant, admin_id):
         assert clash.status_code == 409
         assert clash.json()["detail"] == "That id is already used by something else"
-    assert [m["id"] for m in admin.get(STAFF_URL).json()] == [chosen]
+    assert [m["id"] for m in admin.get(STAFF_URL).json()["items"]] == [chosen]
     # The PIN is still the first one.
     assert login(new_client(), username=first["code"], password=first["pin"]).status_code == 200

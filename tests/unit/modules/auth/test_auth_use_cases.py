@@ -247,6 +247,75 @@ async def test_login_with_an_unknown_email_fails_the_same_way_and_still_spends_a
     assert world.limiter.succeeded_logins == []
 
 
+def _record_releases_at_each_hash(world: World) -> list[int]:
+    """How many times the database connection had been released when each password check ran."""
+    seen: list[int] = []
+    verify, verify_dummy = world.hasher.verify, world.hasher.verify_dummy
+
+    async def spy_verify(password_hash: str, password: str) -> bool:
+        seen.append(world.uow.releases)
+        return await verify(password_hash, password)
+
+    async def spy_dummy(password: str) -> None:
+        seen.append(world.uow.releases)
+        await verify_dummy(password)
+
+    world.hasher.verify = spy_verify  # type: ignore[method-assign]
+    world.hasher.verify_dummy = spy_dummy  # type: ignore[method-assign]
+    return seen
+
+
+async def test_login_frees_the_database_connection_before_hashing(world: World, admin: User) -> None:
+    # Argon2 takes ~64 MiB and tens of ms: a flood of logins must not hold every pooled connection meanwhile.
+    seen = _record_releases_at_each_hash(world)
+
+    await world.login().execute("owner@example.com", PASSWORD, CLIENT)
+    with pytest.raises(InvalidCredentials):
+        await world.login().execute("nobody@example.com", PASSWORD, CLIENT)
+
+    assert seen == [1, 2]
+
+
+async def test_table_login_frees_the_database_connection_before_hashing(world: World) -> None:
+    await world.add_table(Tenant.create("La Taqueria"))
+    seen = _record_releases_at_each_hash(world)
+
+    await world.table_login().execute("K7M2QX", PIN, CLIENT)
+    with pytest.raises(InvalidCredentials):
+        await world.table_login().execute("ZZZZZZ", PIN, CLIENT)
+
+    assert seen == [1, 2]
+
+
+async def test_only_logins_to_unknown_accounts_count_per_address(world: World, admin: User) -> None:
+    # A venue's devices share one address: failing on real accounts must never lock the others out.
+    with pytest.raises(InvalidCredentials):
+        await world.login().execute("owner@example.com", "wrong-pass", CLIENT)
+    await world.add_table(Tenant.create("La Taqueria"))
+    with pytest.raises(InvalidCredentials):
+        await world.table_login().execute("K7M2QX", "000000", CLIENT)
+    assert world.limiter.unknown_from == []
+
+    for login in (world.login().execute("nobody@example.com", PASSWORD, CLIENT), world.table_login().execute("ZZZZZZ", PIN, CLIENT)):
+        with pytest.raises(InvalidCredentials):
+            await login
+
+    assert world.limiter.unknown_from == [CLIENT, CLIENT]
+
+
+async def test_logins_to_unknown_accounts_over_the_address_cap_spend_no_hash_and_look_the_same(world: World) -> None:
+    # Answering 429 here (and 401 for real accounts) would tell which logins exist: same generic
+    # failure, after waiting as long as a hash takes, but without computing one.
+    world.limiter.unknown_blocked_for = 300
+
+    for login in (world.login().execute("nobody@example.com", PASSWORD, CLIENT), world.table_login().execute("ZZZZZZ", PIN, CLIENT)):
+        with pytest.raises(InvalidCredentials):
+            await login
+
+    assert world.hasher.verified == []
+    assert world.hasher.waited == 2
+
+
 async def test_login_of_an_inactive_user_fails_generically(world: World) -> None:
     await world.add_user(Tenant(name="Closed"), "gone@example.com", active=False)
 

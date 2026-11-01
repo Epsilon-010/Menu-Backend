@@ -5,7 +5,6 @@ waited for a new QR re-checks the token once it gets the lock."""
 
 import asyncio
 import threading
-import time
 from collections.abc import Callable
 from typing import Any
 
@@ -86,15 +85,18 @@ def test_changing_a_table_while_a_guest_adds_never_deadlocks(
     open_table(admin, table)
     guest = guest_of(new_client, table["qr_token"])
     original_add_line = SqlAlchemyCartRepository.add_line
+    holding = threading.Event()
 
     async def slow_add_line(self: SqlAlchemyCartRepository, line: Any) -> None:
         # The guest holds the table lock while the admin's request arrives.
+        holding.set()
         await asyncio.sleep(0.6)
         await original_add_line(self, line)
 
     monkeypatch.setattr(SqlAlchemyCartRepository, "add_line", slow_add_line)
     thread, results = in_background(lambda: add(guest, items["pastor"]))
-    time.sleep(0.25)
+    # Only once the guest is in (a fixed sleep loses the race on a slow CI runner).
+    assert holding.wait(timeout=10)
 
     changed = admin_change(admin, table)
     thread.join()

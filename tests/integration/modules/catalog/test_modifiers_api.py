@@ -39,7 +39,7 @@ def create_group(admin: TestClient, body: Json | None = None, **changes: object)
 
 
 def groups(admin: TestClient) -> list[Json]:
-    body: list[Json] = ok(admin.get(GROUPS_URL))  # type: ignore[assignment]
+    body: list[Json] = ok(admin.get(GROUPS_URL))["items"]  # type: ignore[assignment,index]
     return body
 
 

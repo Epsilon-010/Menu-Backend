@@ -104,6 +104,10 @@ class SqlAlchemyUnitOfWork:
     async def commit(self) -> None:
         await self._session.commit()
 
+    async def release(self) -> None:
+        # Nothing was written yet: rolling back closes the transaction and returns the connection.
+        await self._session.rollback()
+
 
 class PostgresProbe:
     name = "postgres"

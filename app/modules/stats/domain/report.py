@@ -17,6 +17,9 @@ from zoneinfo import ZoneInfo
 from app.modules.stats.domain.errors import InvalidStatsRange
 
 MAX_RANGE_DAYS = 366
+# Beyond these, local midnights can overflow a datetime; no business sold anything there anyway.
+FIRST_DAY = date(2000, 1, 1)
+LAST_DAY = date(2100, 12, 31)
 PAYMENT_METHODS = ("cash", "card", "other")
 
 
@@ -146,6 +149,8 @@ class Statistics:
 
 
 def validate_range(first_day: date, last_day: date) -> None:
+    if not (FIRST_DAY <= first_day <= LAST_DAY and FIRST_DAY <= last_day <= LAST_DAY):
+        raise InvalidStatsRange(f"Dates must be between {FIRST_DAY.isoformat()} and {LAST_DAY.isoformat()}")
     if last_day < first_day:
         raise InvalidStatsRange("The end date must be on or after the start date")
     if (last_day - first_day).days + 1 > MAX_RANGE_DAYS:

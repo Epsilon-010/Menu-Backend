@@ -34,6 +34,14 @@ class CartEmpty(Exception):
     pass
 
 
+class TableFull(Exception):
+    """The visit already has MAX_GUESTS_PER_VISIT guests."""
+
+
+class BillTooLarge(Exception):
+    """The bill would go over MAX_BILL_TOTAL_CENTS."""
+
+
 class CartFull(Exception):
     pass
 

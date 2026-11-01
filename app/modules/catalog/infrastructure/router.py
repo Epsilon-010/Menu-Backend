@@ -61,6 +61,7 @@ from app.shared.domain.images import (
 from app.shared.domain.principal import Principal
 from app.shared.infrastructure.database import SqlAlchemyUnitOfWork, get_session
 from app.shared.infrastructure.http.auth import CurrentPrincipal, require_role
+from app.shared.infrastructure.http.pagination import PageOut, PageQuery, page_out
 from app.shared.infrastructure.http.problems import problem
 
 async def _invalidate_menu_after_writes(principal: CurrentPrincipal, request: Request) -> AsyncIterator[None]:
@@ -472,11 +473,11 @@ async def delete_item(
     return result if isinstance(result, JSONResponse) else Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get("/modifier-groups", response_model=list[ModifierGroupOut])
+@router.get("/modifier-groups", response_model=PageOut[ModifierGroupOut])
 async def list_modifier_groups(
-    admin: Admin, use_case: Annotated[ListModifierGroups, Depends(get_list_groups)]
-) -> list[ModifierGroupOut]:
-    return [_group_out(group) for group in await use_case.execute(admin.tenant_id)]
+    admin: Admin, page: PageQuery, use_case: Annotated[ListModifierGroups, Depends(get_list_groups)]
+) -> PageOut[ModifierGroupOut]:
+    return page_out(await use_case.page(admin.tenant_id, page), _group_out)
 
 
 @router.post("/modifier-groups", response_model=ModifierGroupOut, status_code=status.HTTP_201_CREATED)

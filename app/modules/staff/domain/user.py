@@ -4,6 +4,7 @@ from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from app.modules.staff.domain.errors import InvalidUserData
+from app.shared.domain.pagination import Page, PageRequest
 from app.shared.domain.principal import STAFF_ROLES, Role
 
 MIN_PASSWORD_LENGTH = 8
@@ -15,7 +16,9 @@ _EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 # modules do not share domain code). Uppercase letters and digits without the look-alikes 0/O, 1/I/L.
 STAFF_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 STAFF_CODE_LENGTH = 6
-STAFF_PIN_LENGTH = 6
+# 8 digits: 100 million PINs, so guessing one within the login limits takes decades, not weeks.
+# PINs given before (6 digits) keep working until the admin generates a new one.
+STAFF_PIN_LENGTH = 8
 # Generated for a new admin, who must replace it on first sign-in.
 TEMPORARY_PASSWORD_LENGTH = 12
 
@@ -220,12 +223,12 @@ class UserRepository(Protocol):
         concurrent replay waits for the first one and then finds it."""
         ...
 
-    async def list_staff(self, tenant_id: uuid.UUID) -> list[User]:
-        """Waiters and cooks of the tenant, ordered by name."""
+    async def list_staff(self, tenant_id: uuid.UUID, page: PageRequest) -> Page[User]:
+        """One page of the tenant's waiters and cooks, ordered by name."""
         ...
 
-    async def list_admins(self, tenant_id: uuid.UUID) -> list[User]:
-        """Admins of the tenant, ordered by name."""
+    async def list_admins(self, tenant_id: uuid.UUID, page: PageRequest) -> Page[User]:
+        """One page of the tenant's admins, ordered by name."""
         ...
 
     async def lock_admin_changes(self, tenant_id: uuid.UUID) -> None:

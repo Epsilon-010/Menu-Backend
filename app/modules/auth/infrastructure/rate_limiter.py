@@ -28,6 +28,18 @@ return 0
 """
 
 
+# KEYS: address counter. ARGV: window, limit. Counts one attempt; returns the seconds to wait when over
+# the limit, else 0.
+_COUNT = """
+local value = redis.call('INCR', KEYS[1])
+if value == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
+if value <= tonumber(ARGV[2]) then return 0 end
+local ttl = redis.call('TTL', KEYS[1])
+if ttl > 0 then return ttl end
+return tonumber(ARGV[1])
+"""
+
+
 class RedisLoginAttemptLimiter:
     """Fixed-window counters of login attempts per client (IP) + account, plus a per-account backstop.
 
@@ -43,11 +55,19 @@ class RedisLoginAttemptLimiter:
     over a limit, logins are refused until the key expires.
     """
 
-    def __init__(self, redis: Redis, window_seconds: int, max_per_client: int, max_per_account: int) -> None:
+    def __init__(
+        self,
+        redis: Redis,
+        window_seconds: int,
+        max_per_client: int,
+        max_per_account: int,
+        max_unknown_per_address: int,
+    ) -> None:
         self._redis = redis
         self._window_seconds = window_seconds
         self._max_per_client = max_per_client
         self._max_per_account = max_per_account
+        self._max_unknown_per_address = max_unknown_per_address
 
     @staticmethod
     def _client_key(account: str, client: str) -> str:
@@ -71,3 +91,9 @@ class RedisLoginAttemptLimiter:
 
     async def succeeded(self, account: str, client: str) -> None:
         await self._redis.eval(_SUCCEEDED, 2, self._client_key(account, client), self._account_key(account))
+
+    async def unknown_account(self, client: str) -> int | None:
+        wait = await self._redis.eval(
+            _COUNT, 1, f"login:unknown:address:{client}", self._window_seconds, self._max_unknown_per_address
+        )
+        return int(wait) if int(wait) > 0 else None
