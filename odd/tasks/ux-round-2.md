@@ -74,3 +74,7 @@ draggable blocks and a structure per category. Branch `feat/ux-round-2` in Backe
   scans from one IP get 429 (pre-existing limiter counts in-flight logins); an old guest's SSE can see the next visit's
   events up to 5 min if `bill.closed` is missed (pre-existing); no test for `/table/events` after payment. Stale texts
   fixed (Frontend `775c19f`, CLAUDE.md).
+- L9: native review of the T1 backend range (`review-60e58bb7b66709de`, 4 lenses, granted by the user): approved and
+  acknowledged. R3/R4 "announce after commit can 500" is a false positive: `RedisTableEvents.publish` catches
+  `RedisError` (`orders/infrastructure/adapters.py:109`). R1 (QR alone opens a visit) is the S1 decision. Advisory
+  R2: `JoinTable.execute` + `announce` is a two-step protocol the caller must order (commit, then announce).
