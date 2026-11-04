@@ -8,12 +8,12 @@ The frontend turns these values into CSS variables; nothing else from the theme 
 import re
 import uuid
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from app.shared.domain.images import ImageKind, InvalidImage, ensure_owned_image
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 MODES = ("light", "dark")
 LOGO_SIZES = ("sm", "md", "lg")
@@ -35,6 +35,11 @@ DENSITIES = ("compact", "comfortable", "spacious")
 CATEGORY_HEADERS = ("plain", "underline", "band")
 CART_STYLES = ("bar", "panel", "floating")
 MIN_COLUMNS, MAX_COLUMNS = 1, 4  # the grid on wide screens; narrow screens show fewer
+# The parts of the menu header, in the order the admin drags them (the logo stays with the name).
+HEADER_BLOCKS = ("banner", "name", "tagline", "welcome")
+MAX_CATEGORY_LAYOUTS = 100
+# A category id as the catalog writes it (any case on input; stored lowercase).
+_CATEGORY_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
 
 CARD_TEMPLATES = ("vertical", "horizontal", "overlay")
 IMAGE_ASPECTS = ("square", "landscape", "wide")  # 1:1, 4:3, 16:9
@@ -53,6 +58,9 @@ CARD_ANIMATIONS = ("none", "fade", "rise")
 BADGE_SHAPES = ("pill", "rounded")
 MIN_DESCRIPTION_LINES, MAX_DESCRIPTION_LINES = 0, 6  # 0 hides the description
 MIN_OVERLAY_OPACITY, MAX_OVERLAY_OPACITY = 30, 90  # % of the scrim under the text of the overlay template
+# The parts of a product card, in the order the admin drags them. `heading` is the name with the price; the image
+# order is honored by the vertical template only.
+CARD_BLOCKS = ("image", "heading", "description", "badges", "add_button")
 
 MIN_SCALE, MAX_SCALE = 80, 130  # % of every size
 MIN_SIZE, MAX_SIZE = 10, 72  # px, before the scale
@@ -217,8 +225,21 @@ class Typography:
 
 
 @dataclass(frozen=True)
+class CategoryLayout:
+    """How one category shows its products instead of the general layout and cards."""
+
+    product_view: str
+    columns: int
+    card_template: str
+
+
+@dataclass(frozen=True)
 class Layout:
-    """How the menu is arranged: category navigation, product view, spacing, sections shown and the cart."""
+    """How the menu is arranged: category navigation, product view, spacing, sections shown and the cart.
+
+    `categories` overrides the product view, columns and card template per category id (lowercase UUID); ids of
+    deleted categories are simply never drawn.
+    """
 
     navigation: str
     product_view: str
@@ -230,6 +251,9 @@ class Layout:
     show_tagline: bool
     show_welcome: bool
     cart: str
+    header_blocks: tuple[str, ...]
+    # Left out of the hash (a dict has none); still compared, so equal layouts keep equal hashes.
+    categories: dict[str, CategoryLayout] = field(hash=False)
 
 
 @dataclass(frozen=True)
@@ -268,6 +292,7 @@ class Cards:
     animation: str
     overlay_opacity: int
     badge_shape: str
+    blocks: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -294,6 +319,8 @@ class Theme:
     def to_dict(self) -> dict[str, Any]:
         doc = asdict(self)
         doc["colors"] = colors_to_dict(self.colors)
+        doc["layout"] = layout_to_dict(self.layout)
+        doc["cards"] = cards_to_dict(self.cards)
         return doc
 
 
@@ -303,6 +330,20 @@ def colors_to_dict(colors: Colors) -> dict[str, Any]:
     gradient = doc["gradient"]
     gradient["from"] = gradient.pop("from_color")
     gradient["to"] = gradient.pop("to_color")
+    return doc
+
+
+def layout_to_dict(layout: Layout) -> dict[str, Any]:
+    """The layout as JSON: block orders are lists."""
+    doc = asdict(layout)
+    doc["header_blocks"] = list(layout.header_blocks)
+    return doc
+
+
+def cards_to_dict(cards: Cards) -> dict[str, Any]:
+    """The cards as JSON: block orders are lists."""
+    doc = asdict(cards)
+    doc["blocks"] = list(cards.blocks)
     return doc
 
 
@@ -394,6 +435,8 @@ DEFAULT_LAYOUT = Layout(
     show_tagline=True,
     show_welcome=True,
     cart="bar",
+    header_blocks=HEADER_BLOCKS,
+    categories={},
 )
 
 
@@ -412,6 +455,7 @@ DEFAULT_CARDS = Cards(
     animation="none",
     overlay_opacity=60,
     badge_shape="pill",
+    blocks=CARD_BLOCKS,
 )
 
 
@@ -488,6 +532,17 @@ class _Reader:
         if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
             raise InvalidTheme(self.name(key))
         return value
+
+    def order(self, key: str, blocks: tuple[str, ...]) -> tuple[str, ...]:
+        """A permutation of exactly `blocks`: each one once, none missing, nothing else."""
+        value = self.get(key)
+        if (
+            not isinstance(value, list)
+            or not all(isinstance(block, str) for block in value)
+            or sorted(value) != sorted(blocks)
+        ):
+            raise InvalidTheme(self.name(key))
+        return tuple(value)
 
     def flag(self, key: str) -> bool:
         value = self.get(key)
@@ -629,6 +684,29 @@ def _parse_typography(doc: _Reader) -> Typography:
     return typography
 
 
+def _parse_categories(doc: _Reader) -> dict[str, CategoryLayout]:
+    raw = doc.get("categories")
+    path = doc.name("categories")
+    # Keys are never echoed in errors: they are whatever the client sent.
+    if not isinstance(raw, Mapping) or len(raw) > MAX_CATEGORY_LAYOUTS:
+        raise InvalidTheme(path)
+    categories: dict[str, CategoryLayout] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str) or _CATEGORY_ID.fullmatch(key) is None:
+            raise InvalidTheme(path)
+        category_id = key.lower()
+        if category_id in categories:
+            raise InvalidTheme(path)
+        entry = _Reader(value, f"{path}.{category_id}")
+        categories[category_id] = CategoryLayout(
+            product_view=entry.choice("product_view", PRODUCT_VIEWS),
+            columns=entry.number("columns", MIN_COLUMNS, MAX_COLUMNS),
+            card_template=entry.choice("card_template", CARD_TEMPLATES),
+        )
+        entry.done()
+    return categories
+
+
 def _parse_layout(doc: _Reader) -> Layout:
     layout = Layout(
         navigation=doc.choice("navigation", NAVIGATIONS),
@@ -641,6 +719,8 @@ def _parse_layout(doc: _Reader) -> Layout:
         show_tagline=doc.flag("show_tagline"),
         show_welcome=doc.flag("show_welcome"),
         cart=doc.choice("cart", CART_STYLES),
+        header_blocks=doc.order("header_blocks", HEADER_BLOCKS),
+        categories=_parse_categories(doc),
     )
     doc.done()
     return layout
@@ -676,6 +756,7 @@ def _parse_cards(doc: _Reader) -> Cards:
         animation=doc.choice("animation", CARD_ANIMATIONS),
         overlay_opacity=doc.number("overlay_opacity", MIN_OVERLAY_OPACITY, MAX_OVERLAY_OPACITY),
         badge_shape=doc.choice("badge_shape", BADGE_SHAPES),
+        blocks=doc.order("blocks", CARD_BLOCKS),
     )
     doc.done()
     return cards

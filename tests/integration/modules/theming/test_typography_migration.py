@@ -24,9 +24,19 @@ WITH_TYPOGRAPHY = "3f7686d2fe3f"
 Json = dict[str, Any]
 
 
+def v4_document() -> Json:
+    """The default theme as Slice 13 stored it (schema_version 4: before the blocks and per-category layout)."""
+    doc = default_theme().to_dict()
+    del doc["cards"]["blocks"]
+    del doc["layout"]["header_blocks"]
+    del doc["layout"]["categories"]
+    doc["schema_version"] = 4
+    return doc
+
+
 def v1_document(logo_position: str, primary: str) -> Json:
     """A theme as Slice 10 stored it."""
-    doc = default_theme().to_dict()
+    doc = v4_document()
     del doc["typography"]
     del doc["layout"]
     del doc["cards"]
@@ -86,7 +96,7 @@ def test_stored_v1_themes_get_the_default_typography_and_downgrade_removes_it(at
 
     draft, published = stored(centered.tenant_id)
     assert published is not None
-    defaults = default_theme().to_dict()["typography"]
+    defaults = v4_document()["typography"]
     for doc, original in ((draft, draft_centered), (published, published_centered)):
         assert doc["schema_version"] == 2
         assert doc["typography"] == defaults

@@ -92,7 +92,7 @@ def test_an_export_of_an_older_version_is_upgraded(
 @pytest.mark.parametrize(
     ("change", "detail"),
     [
-        (lambda doc: doc.update(schema_version=5), "Invalid theme value: schema_version"),
+        (lambda doc: doc.update(schema_version=6), "Invalid theme value: schema_version"),
         (lambda doc: doc["colors"].update(primary="url(javascript:alert(1))"), "Invalid theme value: colors.primary"),
         (lambda doc: doc.update(css="body{}"), "Invalid theme value: css"),
         (lambda doc: doc.pop("brand"), "Invalid theme value: brand"),

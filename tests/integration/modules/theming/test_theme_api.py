@@ -267,7 +267,7 @@ def test_each_element_gets_its_own_font_and_size_and_tables_see_it_only_after_pu
     admin = admin_of(new_client)
     tablet = tablet_of(new_client, created(create_table(admin)))
     doc = draft_of(admin)["draft"]
-    assert doc["schema_version"] == 4
+    assert doc["schema_version"] == 5
     doc["typography"]["fonts"]["heading"] = "playfair_display"
     doc["typography"]["fonts"]["price"] = "oswald"
     doc["typography"]["elements"]["business_name"].update(size=48, weight=800, style="italic", transform="uppercase")
@@ -373,7 +373,9 @@ def test_a_theme_cached_before_the_schema_change_is_never_served(
         redis.set(f"theme:{tenant_a.tenant_id}:v2:0", stale)
         # Where Slice 12 stored it (schema_version 3).
         redis.set(f"theme:{tenant_a.tenant_id}:v3:0", stale)
-    assert ok(admin.get(THEME_URL))["theme"]["schema_version"] == 4
+        # Where Slices 13-17 stored it (schema_version 4).
+        redis.set(f"theme:{tenant_a.tenant_id}:v4:0", stale)
+    assert ok(admin.get(THEME_URL))["theme"]["schema_version"] == 5
 
 
 # --- Presets (templates): "si no quiere personalizar el menú o quieren algo rápido las seleccione"
@@ -499,6 +501,7 @@ def test_admin_designs_the_cards_and_tables_see_them_only_after_publishing(
         "animation": "fade",
         "overlay_opacity": 75,
         "badge_shape": "rounded",
+        "blocks": ["heading", "image", "description", "badges", "add_button"],
     }
     assert ok(save(admin, doc))["draft"]["cards"] == doc["cards"]
 

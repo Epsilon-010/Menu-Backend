@@ -21,8 +21,12 @@ def current() -> Json:
 
 
 def older(version: int, **colors: str) -> Json:
-    """A document as an earlier slice exported it: version 1 had no typography, 2 no layout, 3 no cards."""
+    """A document as an earlier slice exported it: version 1 had no typography, 2 no layout, 3 no cards, 4 no
+    blocks nor categories."""
     doc = current()
+    del doc["cards"]["blocks"]
+    del doc["layout"]["header_blocks"]
+    del doc["layout"]["categories"]
     for key in ("typography", "layout", "cards")[version - 1 :]:
         del doc[key]
     doc["schema_version"] = version
@@ -38,7 +42,7 @@ def test_a_current_document_comes_back_as_it_is() -> None:
     assert imported.removed_images == ()
 
 
-@pytest.mark.parametrize("version", [1, 2, 3])
+@pytest.mark.parametrize("version", [1, 2, 3, 4])
 def test_an_older_version_gets_the_defaults_it_missed_and_keeps_the_rest(version: int) -> None:
     doc = older(version, primary="#123456")
     original = copy.deepcopy(doc)
@@ -58,6 +62,38 @@ def test_a_version_1_business_name_keeps_following_the_logo(position: str, align
     assert theme.typography.elements.business_name.align == align
 
 
+def test_a_version_4_export_keeps_its_cards_and_layout_and_gets_the_default_blocks() -> None:
+    doc = older(4)
+    doc["cards"]["template"] = "overlay"
+    doc["layout"]["product_view"] = "carousel"
+    theme = import_theme(doc, TENANT, set()).theme
+    assert theme.schema_version == 5
+    assert theme.cards.template == "overlay"
+    assert theme.layout.product_view == "carousel"
+    assert theme.cards.blocks == ("image", "heading", "description", "badges", "add_button")
+    assert theme.layout.header_blocks == ("banner", "name", "tagline", "welcome")
+    assert theme.layout.categories == {}
+
+
+@pytest.mark.parametrize(("part", "key"), [("cards", "blocks"), ("layout", "header_blocks"), ("layout", "categories")])
+def test_a_version_4_export_that_already_has_a_version_5_field_is_rejected(part: str, key: str) -> None:
+    doc = older(4)
+    doc[part][key] = current()[part][key]
+    with pytest.raises(InvalidTheme) as error:
+        import_theme(doc, TENANT, set())
+    assert error.value.field == f"{part}.{key}"
+
+
+def test_a_version_5_export_keeps_its_blocks_and_categories() -> None:
+    doc = current()
+    doc["cards"]["blocks"] = ["heading", "image", "description", "badges", "add_button"]
+    doc["layout"]["header_blocks"] = ["name", "banner", "tagline", "welcome"]
+    doc["layout"]["categories"] = {"0b6f3c2e-6a8d-4f6e-9a51-3d2c1b0a9f87": {
+        "product_view": "list", "columns": 1, "card_template": "horizontal"
+    }}
+    assert import_theme(doc, TENANT, set()).theme.to_dict() == doc
+
+
 def test_the_upgrade_keeps_what_the_older_version_had() -> None:
     doc = older(3)
     doc["layout"]["navigation"] = "tabs"
@@ -68,7 +104,7 @@ def test_the_upgrade_keeps_what_the_older_version_had() -> None:
     assert theme.cards == default_theme().cards
 
 
-@pytest.mark.parametrize("version", [0, 5, 99, "4", 4.0, True, None])
+@pytest.mark.parametrize("version", [0, 6, 99, "4", 4.0, True, None])
 def test_an_unknown_version_is_rejected(version: Any) -> None:
     doc = current()
     doc["schema_version"] = version

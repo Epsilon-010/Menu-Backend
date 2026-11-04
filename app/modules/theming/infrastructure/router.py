@@ -157,6 +157,12 @@ class TypographyDoc(_Strict):
     elements: TextElementsDoc
 
 
+class CategoryLayoutDoc(_Strict):
+    product_view: StrictStr
+    columns: StrictInt
+    card_template: StrictStr
+
+
 class LayoutDoc(_Strict):
     navigation: StrictStr
     product_view: StrictStr
@@ -168,6 +174,9 @@ class LayoutDoc(_Strict):
     show_tagline: StrictBool
     show_welcome: StrictBool
     cart: StrictStr
+    header_blocks: list[StrictStr]
+    # By category id; the domain checks the ids, the count and every value.
+    categories: dict[StrictStr, CategoryLayoutDoc]
 
 
 class CardImageDoc(_Strict):
@@ -200,6 +209,7 @@ class CardsDoc(_Strict):
     animation: StrictStr
     overlay_opacity: StrictInt
     badge_shape: StrictStr
+    blocks: list[StrictStr]
 
 
 class ThemeDoc(_Strict):

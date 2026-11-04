@@ -41,6 +41,7 @@ DEFAULT_CARDS = {
     "animation": "none",
     "overlay_opacity": 60,
     "badge_shape": "pill",
+    "blocks": ["image", "heading", "description", "badges", "add_button"],
 }
 
 
@@ -56,10 +57,10 @@ def rejected_field(doc: dict[str, Any]) -> str:
     return error.value.field
 
 
-def test_the_theme_is_version_4_and_the_default_cards_are_the_current_card() -> None:
-    assert SCHEMA_VERSION == 4
+def test_the_default_cards_are_the_current_card() -> None:
+    assert SCHEMA_VERSION == 5
     doc = default_theme().to_dict()
-    assert doc["schema_version"] == 4
+    assert doc["schema_version"] == 5
     assert doc["cards"] == DEFAULT_CARDS
     assert parse_theme(doc, TENANT) == default_theme()
 
@@ -102,6 +103,7 @@ def test_every_option_is_kept_as_given() -> None:
         "animation": "rise",
         "overlay_opacity": 90,
         "badge_shape": "rounded",
+        "blocks": ["add_button", "badges", "description", "heading", "image"],
     }
     assert parse_theme(document(**given), TENANT).to_dict()["cards"] == given
 

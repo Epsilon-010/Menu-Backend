@@ -42,6 +42,8 @@ def test_the_default_layout_is_the_current_menu() -> None:
         "show_tagline": True,
         "show_welcome": True,
         "cart": "bar",
+        "header_blocks": ["banner", "name", "tagline", "welcome"],
+        "categories": {},
     }
     assert parse_theme(doc, TENANT) == default_theme()
 
