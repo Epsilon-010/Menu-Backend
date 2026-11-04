@@ -7,7 +7,7 @@ and discards the unsent cart, all in one transaction: after that nobody at the t
 import uuid
 from dataclasses import dataclass
 
-from app.modules.orders.application.ordering import Ordering, clear_bill_request
+from app.modules.orders.application.ordering import Ordering, clear_bill_request, open_bill
 from app.modules.orders.domain.errors import BillHasOrders, BillNotFound, NothingToCharge, TableNotFound
 from app.modules.orders.domain.model import Bill, Order, PaymentMethod
 
@@ -38,7 +38,9 @@ async def _table_name(ctx: Ordering, tenant_id: uuid.UUID, table_id: uuid.UUID) 
 
 
 class OpenTable:
-    """Opens the table's bill so its QR lets guests in; opening an open table returns its bill."""
+    """The waiter (or admin) opens the table's bill by hand; opening an open table returns its bill.
+
+    Optional for the QR: the first guest who scans it opens the visit too (JoinTable)."""
 
     def __init__(self, ctx: Ordering) -> None:
         self._ctx = ctx
@@ -50,8 +52,7 @@ class OpenTable:
         bill = await ctx.bills.get_open(tenant_id, table_id)
         if bill is not None:
             return BillDetail(bill=bill, table_name=name, orders=await ctx.orders.list_for_bill(tenant_id, bill.id))
-        bill = Bill(tenant_id=tenant_id, table_id=table_id, opened_at=ctx.clock.now())
-        await ctx.bills.add(bill)
+        bill = await open_bill(ctx.bills, tenant_id, table_id, ctx.clock.now())
         await ctx.uow.commit()
         await ctx.events.publish(tenant_id, table_id, "bill.opened")
         return BillDetail(bill=bill, table_name=name, orders=[])

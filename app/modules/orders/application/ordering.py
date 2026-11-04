@@ -55,6 +55,17 @@ from app.shared.domain.ports import Clock, UnitOfWork
 TABLET_NAME = "Tablet"
 
 
+async def open_bill(bills: BillRepository, tenant_id: uuid.UUID, table_id: uuid.UUID, now: datetime) -> Bill:
+    """Starts a new visit at the table: the waiter opening it, its tablet's first order or the first QR scan.
+
+    The caller holds the table lock and saw no open bill, so two callers never open two visits (the
+    partial unique index on open bills is the last guarantee). It neither commits nor announces.
+    """
+    bill = Bill(tenant_id=tenant_id, table_id=table_id, opened_at=now)
+    await bills.add(bill)
+    return bill
+
+
 @dataclass(frozen=True)
 class Ordering:
     """Everything the ordering use cases share; built once per request by the infrastructure."""
@@ -314,8 +325,7 @@ class SubmitCart:
         now = ctx.clock.now()
         bill = visit.bill
         if bill is None:
-            bill = Bill(tenant_id=diner.tenant_id, table_id=diner.table_id, opened_at=now)
-            await ctx.bills.add(bill)
+            bill = await open_bill(ctx.bills, diner.tenant_id, diner.table_id, now)
         order = Order(
             tenant_id=diner.tenant_id,
             table_id=diner.table_id,

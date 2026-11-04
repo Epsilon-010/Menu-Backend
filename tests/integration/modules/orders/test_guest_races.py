@@ -12,12 +12,13 @@ import pytest
 from httpx import Response
 from sqlalchemy import func, select, text
 
-from app.modules.orders.infrastructure.repository import SqlAlchemyCartRepository
+from app.modules.orders.infrastructure.repository import SqlAlchemyBillRepository, SqlAlchemyCartRepository
 from app.seed import SeedResult
 from app.shared.infrastructure.config import get_settings
 from app.shared.infrastructure.database import create_engine
 from tests.integration.modules.catalog.test_catalog_api import ok
-from tests.integration.modules.orders.test_guest_qr_api import guest_of, open_table, scan
+from tests.integration.modules.auth.test_auth_api import me
+from tests.integration.modules.orders.test_guest_qr_api import guest_of, open_bill_of, open_table, scan
 from tests.integration.modules.orders.test_ordering_api import BILLS_URL, CART_URL, add, cart, menu_items, submit
 from tests.integration.modules.tables.test_tables_api import (  # noqa: F401  (fixtures)
     TABLES_URL,
@@ -35,6 +36,47 @@ def in_background(call: Callable[[], Response]) -> tuple[threading.Thread, list[
     thread = threading.Thread(target=lambda: results.append(call()))
     thread.start()
     return thread, results
+
+
+def test_two_scans_of_a_closed_table_at_once_open_one_visit_for_both(
+    new_client: ClientFactory, tenant_a: SeedResult, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    admin = admin_of(new_client)
+    table = created(create_table(admin))
+    phones = [new_client() for _ in range(2)]
+    original_get_open = SqlAlchemyBillRepository.get_open
+    looked = threading.Barrier(2, timeout=1)
+
+    async def slow_get_open(self: SqlAlchemyBillRepository, tenant_id: Any, table_id: Any) -> Any:
+        # Both scans see "no visit yet" together unless the table lock makes the second one wait.
+        bill = await original_get_open(self, tenant_id, table_id)
+        try:
+            await asyncio.to_thread(looked.wait)
+        except threading.BrokenBarrierError:
+            pass  # the other scan is waiting for the lock: the expected, serialized path
+        return bill
+
+    monkeypatch.setattr(SqlAlchemyBillRepository, "get_open", slow_get_open)
+    started = [in_background(lambda phone=phone: scan(phone, table["qr_token"])) for phone in phones]
+    for thread, _ in started:
+        thread.join()
+    monkeypatch.undo()
+
+    assert [results[0].status_code for _, results in started] == [200, 200], [r[0].text for _, r in started]
+    bill_id = open_bill_of(admin, table)
+    assert bill_id is not None
+    assert sorted(ok(me(phone))["guest"]["name"] for phone in phones) == ["Guest 1", "Guest 2"]
+
+    async def open_bills() -> int:
+        engine = create_engine(get_settings().database_url)
+        async with engine.connect() as conn:
+            count = await conn.scalar(
+                text("SELECT count(*) FROM bills WHERE table_id = :id AND closed_at IS NULL"), {"id": table["id"]}
+            )
+        await engine.dispose()
+        return int(count or 0)
+
+    assert asyncio.run(open_bills()) == 1
 
 
 def test_a_scan_of_the_old_qr_waiting_on_a_new_qr_is_refused(new_client: ClientFactory, tenant_a: SeedResult) -> None:

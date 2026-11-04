@@ -2,7 +2,7 @@ from app.modules.auth.application.session_issuer import AuthSession, SessionIssu
 from app.modules.auth.domain.errors import InvalidCredentials, TooManyLoginAttempts
 from app.modules.auth.domain.refresh_token import LoginAttemptLimiter
 from app.modules.orders.application.guests import JoinTable
-from app.modules.orders.domain.errors import QrNotValid, TableFull, TableNotOpen
+from app.modules.orders.domain.errors import QrNotValid, TableFull
 from app.modules.tables.application.find_table import FindTableByQrToken
 from app.shared.domain.ports import UnitOfWork
 
@@ -10,10 +10,10 @@ _MAX_QR_TOKEN_LENGTH = 64
 
 
 class QrLogin:
-    """Signs a guest in as the table whose QR they scanned, only while the waiter has the table open.
+    """Signs a guest in as the table whose QR they scanned, opening the table (a new visit) if nobody is there.
 
-    Anyone can scan the QR (it is printed on the table, and a photo of it works anywhere), so the QR
-    alone lets nobody in: the open bill is the gate, and the guest's sessions end with it.
+    The guest's sessions are bound to that visit's bill, so paying or closing it signs every one of them out:
+    a phone left open from a paid visit never reaches the next one, even after a new scan opened it.
     """
 
     def __init__(
@@ -31,7 +31,7 @@ class QrLogin:
         self._uow = uow
 
     async def execute(self, qr_token: str, name: str | None, client: str) -> AuthSession:
-        """Raises InvalidCredentials for an unknown or old QR, TableNotOpen when the table is closed."""
+        """Raises InvalidCredentials for an unknown, old or inactive table's QR, TableFull past the guest cap."""
         qr_token = qr_token.strip()[:_MAX_QR_TOKEN_LENGTH]
         # Namespaced like the other logins ("staff:", "table:"), so no other login shares this counter.
         account = f"qr:{qr_token}"
@@ -43,16 +43,16 @@ class QrLogin:
         if table is None or not table.is_active:
             raise InvalidCredentials()
         try:
-            guest = await self._join_table.execute(table.tenant_id, table.id, qr_token, name)
+            joined = await self._join_table.execute(table.tenant_id, table.id, qr_token, name)
         except QrNotValid as error:
             raise InvalidCredentials() from error
-        except (TableNotOpen, TableFull):
-            # A real QR at a closed table is no guess: never count it, so a group that scans before
-            # the waiter opens the table is not locked out once it is open.
+        except TableFull:
+            # A real QR at a full table is no guess: never count it, so nobody is locked out once a seat frees.
             await self._limiter.succeeded(account, client)
             raise
 
         await self._limiter.succeeded(account, client)
-        session = await self._sessions.issue_for_guest(guest)
+        session = await self._sessions.issue_for_guest(joined.guest)
         await self._uow.commit()
+        await self._join_table.announce(joined)
         return session

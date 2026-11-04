@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from app.modules.orders.infrastructure.stream_slots import StreamSlots
 from app.seed import SeedResult
 from tests.integration.modules.catalog.test_catalog_api import ok
-from tests.integration.modules.orders.test_guest_qr_api import open_table, pay
+from tests.integration.modules.orders.test_guest_qr_api import guest_of, open_bill_of, open_table, pay
 from tests.integration.modules.orders.test_kitchen_api import mark, send_order
 from tests.integration.modules.orders.test_ordering_api import add, menu_items, staff_of
 from tests.integration.modules.orders.test_table_events_api import short_streams  # noqa: F401  (fixture)
@@ -63,6 +63,21 @@ def test_the_staff_hear_orders_and_bills_of_every_table_but_no_carts_or_prices(
     ]
     for staff in (cook, waiter, admin):
         assert received(staff, STAFF_EVENTS_URL) == expected
+
+
+def test_the_staff_hear_a_table_that_opened_itself_with_a_qr_scan(
+    new_client: ClientFactory, tenant_a: SeedResult
+) -> None:
+    admin = admin_of(new_client)
+    table = created(create_table(admin, "Mesa 2"))
+    waiter = staff_of(new_client, admin, "waiter.qr", "waiter")
+
+    guest = guest_of(new_client, table["qr_token"])
+    guest_of(new_client, table["qr_token"])  # joining an open visit announces nothing new
+    assert open_bill_of(waiter, table) is not None
+
+    assert received(waiter, STAFF_EVENTS_URL) == [("bill.opened", {"table_id": table["id"]})]
+    assert received(guest, TABLE_EVENTS_URL) == [("bill.opened", {})]
 
 
 def test_a_table_hears_the_changes_of_its_own_orders_only(new_client: ClientFactory, tenant_a: SeedResult) -> None:

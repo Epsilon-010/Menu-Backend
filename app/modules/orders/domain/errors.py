@@ -10,10 +10,6 @@ class BillNotFound(Exception):
     """No bill with that id in the caller's tenant (or it is already closed)."""
 
 
-class TableNotOpen(Exception):
-    """A guest tried to join, or act on, a table whose bill is closed (or was never opened)."""
-
-
 class QrNotValid(Exception):
     """The QR is not (or no longer) the table's: it was replaced, or the table was deactivated."""
 
