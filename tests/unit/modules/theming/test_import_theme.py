@@ -70,7 +70,7 @@ def test_a_version_4_export_keeps_its_cards_and_layout_and_gets_the_default_bloc
     assert theme.schema_version == 5
     assert theme.cards.template == "overlay"
     assert theme.layout.product_view == "carousel"
-    assert theme.cards.blocks == ("image", "heading", "description", "badges", "add_button")
+    assert theme.cards.blocks == ("image", "badges", "heading", "description", "add_button")
     assert theme.layout.header_blocks == ("banner", "name", "tagline", "welcome")
     assert theme.layout.categories == {}
 

@@ -76,7 +76,7 @@ _CARDS_V4 = {
 
 
 # Added by schema_version 5: the order of the card and header blocks, and no per-category layout.
-_CARD_BLOCKS_V5 = ["image", "heading", "description", "badges", "add_button"]
+_CARD_BLOCKS_V5 = ["image", "badges", "heading", "description", "add_button"]
 _HEADER_BLOCKS_V5 = ["banner", "name", "tagline", "welcome"]
 
 

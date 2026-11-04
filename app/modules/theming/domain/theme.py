@@ -60,7 +60,7 @@ MIN_DESCRIPTION_LINES, MAX_DESCRIPTION_LINES = 0, 6  # 0 hides the description
 MIN_OVERLAY_OPACITY, MAX_OVERLAY_OPACITY = 30, 90  # % of the scrim under the text of the overlay template
 # The parts of a product card, in the order the admin drags them. `heading` is the name with the price; the image
 # order is honored by the vertical template only.
-CARD_BLOCKS = ("image", "heading", "description", "badges", "add_button")
+CARD_BLOCKS = ("image", "badges", "heading", "description", "add_button")
 
 MIN_SCALE, MAX_SCALE = 80, 130  # % of every size
 MIN_SIZE, MAX_SIZE = 10, 72  # px, before the scale

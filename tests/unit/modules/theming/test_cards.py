@@ -41,7 +41,7 @@ DEFAULT_CARDS = {
     "animation": "none",
     "overlay_opacity": 60,
     "badge_shape": "pill",
-    "blocks": ["image", "heading", "description", "badges", "add_button"],
+    "blocks": ["image", "badges", "heading", "description", "add_button"],
 }
 
 

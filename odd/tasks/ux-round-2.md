@@ -26,8 +26,8 @@ draggable blocks and a structure per category. Branch `feat/ux-round-2` in Backe
   template; categories without an override use the general layout. Drag library: dnd-kit.
 - S6 (contract for S4, decided by the parent): theme `schema_version` **5** adds, with defaults that reproduce the
   current look exactly:
-  - `cards.blocks`: ordered list, a permutation of exactly `["image", "heading", "description", "badges",
-    "add_button"]` (default in that order). `heading` is the name with the price (still placed by `price_position`).
+  - `cards.blocks`: ordered list, a permutation of exactly `["image", "badges", "heading", "description",
+    "add_button"]` (default in that order: the pre-v5 card drew the badges above the name; corrected in L10). `heading` is the name with the price (still placed by `price_position`).
     The `image` position is honored only by the `vertical` template; `horizontal` and `overlay` keep their fixed image.
   - `layout.header_blocks`: ordered list, a permutation of exactly `["banner", "name", "tagline", "welcome"]` (default
     in that order); the logo stays with the name; `show_*` flags still hide blocks.
@@ -44,9 +44,10 @@ draggable blocks and a structure per category. Branch `feat/ux-round-2` in Backe
 - T1 S1-S2 backend auto-open on QR + frontend copy that says the QR opens the table — delegated (parallel unit A) — done (see L5)
 - T2 S3 shadcn/ui foundation + design editor controls — delegated (parallel unit B) — done, Frontend `b1fb760`
 - T3 S3 staff screens (waiter, kitchen, admin panels) restyled — pending (after T2)
-- T4 S4 backend theme `schema_version` 5 (card block order, header block order, per-category overrides) + migration of
+- T4 S4 backend theme `schema_version` 5 — delegated — done, Backend `7211d6b` + fix (L10)
+  (was: backend theme `schema_version` 5 (card block order, header block order, per-category overrides) + migration of
   `themes` and `theme_versions` + import conversion — pending
-- T5 S4 frontend drag-and-drop editor and per-category rendering — pending (after T2, T4)
+- T5 S4 frontend drag-and-drop editor and per-category rendering — delegated — done, Frontend `7ed0c27`
 
 ## Log
 - L1 (2026-11-03, verbatim): "El mesero puede ver las ordenes que ya entrego que le aparezcan como unas notas mejor y
@@ -78,3 +79,15 @@ draggable blocks and a structure per category. Branch `feat/ux-round-2` in Backe
   acknowledged. R3/R4 "announce after commit can 500" is a false positive: `RedisTableEvents.publish` catches
   `RedisError` (`orders/infrastructure/adapters.py:109`). R1 (QR alone opens a visit) is the S1 decision. Advisory
   R2: `JoinTable.execute` + `announce` is a two-step protocol the caller must order (commit, then announce).
+- L10: the S6 default card order written by the parent was wrong (badges below the description; the pre-v5 card drew
+  them above the name). Found by the T5 writer. Fixed: default `image, badges, heading, description, add_button` in
+  backend and frontend; `b7e3a91c4d52` was already applied to the dev DB, so a new migration `e2a6c0b9d817` rewrites
+  only documents still on the first default order (test `test_badges_first_migration.py`). T4 independent verifier:
+  every S6 rule passes at `7211d6b` except the default order (the blocker above, fixed); live probe 124/124; migration
+  round trip byte-identical on a copy of the 80 dev documents; full suite 1201 passed. Advisories: a non-UUID category
+  key can be echoed in the 422 `errors[].loc`; the follow-up downgrade cannot tell an admin's badges-first choice from
+  the default; theme equality with `categories` has no test. Frontend React warning "Unsupported style property
+  color-scheme" in `theming/style.ts:87` predates this feature.
+- L11: native review of the whole frontend range was too large (8037 lines, `lens_context_budget_exceeded`); reviewing
+  it in six slices from `b2d3361`. Slice 1 (`b2d3361..bf52b99`, `review-1358b53443173efc`): approved and acknowledged;
+  advisories: backend details still English (mixed sentences), AppShell nav thresholds are literals.

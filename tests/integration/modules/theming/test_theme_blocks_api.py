@@ -39,7 +39,7 @@ def test_the_draft_starts_with_the_default_blocks_and_no_category_layouts(
     response = draft_of(admin)
     draft = response["draft"]
     assert draft["schema_version"] == 5
-    assert draft["cards"]["blocks"] == ["image", "heading", "description", "badges", "add_button"]
+    assert draft["cards"]["blocks"] == ["image", "badges", "heading", "description", "add_button"]
     assert draft["layout"]["header_blocks"] == ["banner", "name", "tagline", "welcome"]
     assert draft["layout"]["categories"] == {}
     for preset in response["presets"]:
@@ -149,7 +149,7 @@ def test_a_version_5_export_round_trips_and_a_version_4_export_gets_the_default_
     del old["layout"]["categories"]
     imported = ok(admin.post(IMPORT_URL, json=old))["theme"]
     assert imported["schema_version"] == 5
-    assert imported["cards"]["blocks"] == ["image", "heading", "description", "badges", "add_button"]
+    assert imported["cards"]["blocks"] == ["image", "badges", "heading", "description", "add_button"]
     assert imported["layout"]["header_blocks"] == ["banner", "name", "tagline", "welcome"]
     assert imported["layout"]["categories"] == {}
     assert imported["cards"]["template"] == exported["cards"]["template"]
@@ -170,4 +170,4 @@ def test_tables_cannot_change_the_blocks_and_tenants_never_see_each_other(
     ok(owner_a.post(PUBLISH_URL))
     assert ok(tablet_a.get(THEME_URL))["theme"]["layout"]["categories"] == doc["layout"]["categories"]
     assert draft_of(owner_b)["draft"]["layout"]["categories"] == {}
-    assert ok(tablet_b.get(THEME_URL))["theme"]["cards"]["blocks"] == ["image", "heading", "description", "badges", "add_button"]
+    assert ok(tablet_b.get(THEME_URL))["theme"]["cards"]["blocks"] == ["image", "badges", "heading", "description", "add_button"]

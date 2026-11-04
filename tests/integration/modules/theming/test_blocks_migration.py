@@ -20,6 +20,7 @@ from tests.integration.modules.theming.test_typography_migration import (
 )
 
 BEFORE_BLOCKS = "548bab5f5d29"
+BLOCKS = "b7e3a91c4d52"
 
 CARD_BLOCKS = ["image", "heading", "description", "badges", "add_button"]
 HEADER_BLOCKS = ["banner", "name", "tagline", "welcome"]
@@ -79,16 +80,17 @@ def test_stored_v4_themes_and_their_history_get_the_default_blocks_and_downgrade
             at=datetime(2026, 11, number, tzinfo=UTC),
         )
 
-    command.upgrade(at_head_afterwards, "head")
+    command.upgrade(at_head_afterwards, BLOCKS)
 
     assert stored(published_tenant.tenant_id) == (as_v5(draft), as_v5(published))
     assert stored(draft_only.tenant_id) == (as_v5(lone_draft), None)
     assert versions(published_tenant.tenant_id) == [as_v5(first_version), as_v5(published)]
-    # The app reads them all, and the defaults are exactly the current ones.
+    # The app reads them all. The order is the first default this migration froze; e2a6c0b9d817 then puts the badges
+    # back above the name (test_badges_first_migration.py).
     for doc in (*stored(published_tenant.tenant_id), *versions(published_tenant.tenant_id)):
         assert doc is not None
         theme = parse_theme(doc, published_tenant.tenant_id)
-        assert theme.cards.blocks == default_theme().cards.blocks
+        assert theme.cards.blocks == tuple(CARD_BLOCKS)
         assert theme.layout.header_blocks == default_theme().layout.header_blocks
         assert theme.layout.categories == {}
     assert parse_theme(stored(published_tenant.tenant_id)[1], published_tenant.tenant_id).cards.template == "horizontal"
@@ -98,7 +100,7 @@ def test_stored_v4_themes_and_their_history_get_the_default_blocks_and_downgrade
     assert stored(draft_only.tenant_id) == (lone_draft, None)
     assert versions(published_tenant.tenant_id) == [first_version, published]
 
-    command.upgrade(at_head_afterwards, "head")
+    command.upgrade(at_head_afterwards, BLOCKS)
     assert stored(published_tenant.tenant_id) == (as_v5(draft), as_v5(published))
     assert versions(published_tenant.tenant_id) == [as_v5(first_version), as_v5(published)]
 

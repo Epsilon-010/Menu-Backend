@@ -41,7 +41,7 @@ def test_the_theme_is_version_5_and_the_defaults_keep_the_current_menu() -> None
     assert SCHEMA_VERSION == 5
     doc = document()
     assert doc["schema_version"] == 5
-    assert doc["cards"]["blocks"] == ["image", "heading", "description", "badges", "add_button"]
+    assert doc["cards"]["blocks"] == ["image", "badges", "heading", "description", "add_button"]
     assert doc["layout"]["header_blocks"] == ["banner", "name", "tagline", "welcome"]
     assert doc["layout"]["categories"] == {}
     assert parse_theme(doc, TENANT) == default_theme()
@@ -49,7 +49,7 @@ def test_the_theme_is_version_5_and_the_defaults_keep_the_current_menu() -> None
 
 
 def test_the_blocks_are_the_ones_the_admin_can_drag() -> None:
-    assert CARD_BLOCKS == ("image", "heading", "description", "badges", "add_button")
+    assert CARD_BLOCKS == ("image", "badges", "heading", "description", "add_button")
     assert HEADER_BLOCKS == ("banner", "name", "tagline", "welcome")
     assert MAX_CATEGORY_LAYOUTS == 100
 
