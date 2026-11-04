@@ -24,6 +24,19 @@ draggable blocks and a structure per category. Branch `feat/ux-round-2` in Backe
   order the parts of a product card (image, name, description, price, add button) and the parts of the menu header
   (banner, name, tagline, welcome); each category can override the product view (grid/list/carousel), columns and card
   template; categories without an override use the general layout. Drag library: dnd-kit.
+- S6 (contract for S4, decided by the parent): theme `schema_version` **5** adds, with defaults that reproduce the
+  current look exactly:
+  - `cards.blocks`: ordered list, a permutation of exactly `["image", "heading", "description", "badges",
+    "add_button"]` (default in that order). `heading` is the name with the price (still placed by `price_position`).
+    The `image` position is honored only by the `vertical` template; `horizontal` and `overlay` keep their fixed image.
+  - `layout.header_blocks`: ordered list, a permutation of exactly `["banner", "name", "tagline", "welcome"]` (default
+    in that order); the logo stays with the name; `show_*` flags still hide blocks.
+  - `layout.categories`: object keyed by category id (UUID string, lowercase), at most 100 entries, each value
+    `{"product_view": grid|list|carousel, "columns": 1-4, "card_template": vertical|horizontal|overlay}` (all three
+    required). Default `{}`. A category without an entry uses the general layout and cards; ids of deleted categories
+    are ignored when rendering (never an error). No extra keys anywhere (422).
+  - Migration v4→v5 on `themes.draft`, `themes.published` **and every row of `theme_versions`**; downgrade removes the
+    three fields. Import accepts v1-v5 and converts. Presets get the defaults. Theme cache key bumped.
 - S5 (done before this doc): waiter "Entregadas" notes (Frontend `843ddb4`), visible "Subir imagen" button
   (`e1dd7c7`), category bar overlap fix (`ae8f18c`).
 
@@ -54,3 +67,10 @@ draggable blocks and a structure per category. Branch `feat/ux-round-2` in Backe
   (bill created under the table lock at sign-in): independent verifier required.
 - L6: T2 committed after a parent fix: the segmented control now estimates its width (7.5 px per character + 20 px per
   option, 165 px budget) because "Compacto / Cómodo / Amplio" and "Cuadrada / 4:3 / 16:9" were clipped.
+- L7: T3 done: waiter/kitchen Frontend `7c933d6`, admin panels `c6bf4bb` (row helpers moved to `shared/ui`; the
+  modifiers section renamed "Opciones y extras"). Frontend 390 tests.
+- L8: T1 independent verifier: S1 pass, S2 pass, no blockers (full suite 1123 passed; race test fails without the
+  lock). Advisories: anyone with the QR can open or join a visit (decision S1; regenerate the QR); >5 simultaneous
+  scans from one IP get 429 (pre-existing limiter counts in-flight logins); an old guest's SSE can see the next visit's
+  events up to 5 min if `bill.closed` is missed (pre-existing); no test for `/table/events` after payment. Stale texts
+  fixed (Frontend `775c19f`, CLAUDE.md).
