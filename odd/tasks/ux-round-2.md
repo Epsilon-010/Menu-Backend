@@ -91,3 +91,13 @@ draggable blocks and a structure per category. Branch `feat/ux-round-2` in Backe
 - L11: native review of the whole frontend range was too large (8037 lines, `lens_context_budget_exceeded`); reviewing
   it in six slices from `b2d3361`. Slice 1 (`b2d3361..bf52b99`, `review-1358b53443173efc`): approved and acknowledged;
   advisories: backend details still English (mixed sentences), AppShell nav thresholds are literals.
+- L12: frontend native review by slices (the user chose "only the slices with logic"; translation-only commits
+  `09b46f2`, `35d5eac` skipped). Approved and acknowledged: L1 `35d5eac..e1dd7c7` (`review-e35f596f9020a133`; its
+  advisory "pending counts lines, not quantities" fixed in Frontend `2717ef5`), L2 `e1dd7c7..b1fb760`
+  (`review-e27a041e987f0289`), L3 `b1fb760..7c933d6` (`review-f027f1b9fa616ade`), L4 `7c933d6..775c19f`
+  (`review-03f7adf40c14d500`), L5 `775c19f..2717ef5` (`review-3d17d664c2a15102`). Open advisories: the design section
+  tabs always declare `orientation="vertical"` (horizontal arrow keys do not move on small screens); Choice/Slider/
+  Switch and ConfirmDialog interactions have no tests (render tests cannot open Radix portals); the modifiers example
+  hardcodes "$"; an unused label id in DeliveryQueue. Status: every task T1-T5 done; branches pushed; PRs to be
+  opened by the user (Backend `feat/ux-round-2` from main; Frontend `feat/ux-round-2` stacked on `feat/spanish-ui` and
+  `feat/design-editor-compact`).
