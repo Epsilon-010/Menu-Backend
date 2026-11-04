@@ -101,3 +101,6 @@ draggable blocks and a structure per category. Branch `feat/ux-round-2` in Backe
   hardcodes "$"; an unused label id in DeliveryQueue. Status: every task T1-T5 done; branches pushed; PRs to be
   opened by the user (Backend `feat/ux-round-2` from main; Frontend `feat/ux-round-2` stacked on `feat/spanish-ui` and
   `feat/design-editor-compact`).
+- L13: native review of the backend schema v5 range (`b8808b0..416d167`, `review-cc73192448351c82`, granted):
+  approved and acknowledged. Advisory: `DEFAULT_LAYOUT.categories` is one mutable dict shared by the default theme and
+  every preset inside a frozen dataclass (no code mutates it today; a `MappingProxyType` would make that impossible).
