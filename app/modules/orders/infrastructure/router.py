@@ -543,9 +543,9 @@ async def submit_order(body: SubmitIn, diner: DinerDep, ctx: OrderingDep) -> Ord
     return result if isinstance(result, JSONResponse) else _order_out(result)
 
 
-def _take_stream_slot(request: Request, subject: str) -> JSONResponse | None:
-    """None when the stream may open; else the problem to answer (the cap per session, or the server's)."""
-    refusal = request.app.state.stream_slots.take(subject)
+def _take_stream_slot(request: Request, subject: str, tenant_id: uuid.UUID) -> JSONResponse | None:
+    """None when the stream may open; else the problem to answer (the cap per session, or the tenant or server one)."""
+    refusal = request.app.state.stream_slots.take(subject, str(tenant_id))
     if refusal == "session":
         return problem(status.HTTP_429_TOO_MANY_REQUESTS, "Too many open live updates; close another tab first")
     if refusal == "server":
@@ -555,10 +555,12 @@ def _take_stream_slot(request: Request, subject: str) -> JSONResponse | None:
     return None
 
 
-def _event_stream(request: Request, subject: str, events: AsyncIterator[str]) -> StreamingResponse:
+def _event_stream(
+    request: Request, subject: str, tenant_id: uuid.UUID, events: AsyncIterator[str]
+) -> StreamingResponse:
     """Holds the slot taken for `subject` until the stream ends."""
     return StreamingResponse(
-        request.app.state.stream_slots.holding(subject, events),
+        request.app.state.stream_slots.holding(subject, str(tenant_id), events),
         media_type="text/event-stream",
         # Proxies (nginx) must pass each event on at once instead of buffering the response.
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -582,7 +584,7 @@ async def table_events_stream(
         except DinerNotAllowed:
             return problem(status.HTTP_401_UNAUTHORIZED, "Your visit at this table has ended")
     subject = str(diner.guest_id or diner.table_id)
-    refused = _take_stream_slot(request, subject)
+    refused = _take_stream_slot(request, subject, diner.tenant_id)
     if refused is not None:
         return refused
     events = table_events(
@@ -592,7 +594,7 @@ async def table_events_stream(
         last_event_id if last_event_id and _STREAM_ID.fullmatch(last_event_id) else None,
         stop_on_close=diner.guest_id is not None,
     )
-    return _event_stream(request, subject, events)
+    return _event_stream(request, subject, diner.tenant_id, events)
 
 
 @table_router.get("/orders", response_model=list[OrderOut])
@@ -730,7 +732,7 @@ async def staff_events_stream(
     `bill.requested`, `bill.request_cleared` and `bill.closed` of the tenant, with `{table_id, order_id?}`;
     never cart changes or prices."""
     subject = str(staff.subject_id)
-    refused = _take_stream_slot(request, subject)
+    refused = _take_stream_slot(request, subject, staff.tenant_id)
     if refused is not None:
         return refused
     events = staff_events(
@@ -738,4 +740,4 @@ async def staff_events_stream(
         staff.tenant_id,
         last_event_id if last_event_id and _STREAM_ID.fullmatch(last_event_id) else None,
     )
-    return _event_stream(request, subject, events)
+    return _event_stream(request, subject, staff.tenant_id, events)
