@@ -59,7 +59,8 @@ class OpenTable:
 
 
 class ListTables:
-    """Every active table of the tenant, with its open bill and what it owes so far."""
+    """The tables the staff can work on, with the open bill and what it owes so far: every active table,
+    plus a deactivated one that still has a bill to charge or close (the bill never gets stranded)."""
 
     def __init__(self, ctx: Ordering) -> None:
         self._ctx = ctx
@@ -68,14 +69,16 @@ class ListTables:
         ctx = self._ctx
         open_bills = {bill.table_id: bill for bill in await ctx.bills.list_open(tenant_id)}
         overview = []
-        for table_id, name in await ctx.tables.list_active(tenant_id):
-            bill = open_bills.get(table_id)
+        for table in await ctx.tables.list_all(tenant_id):
+            bill = open_bills.get(table.table_id)
+            if bill is None and not table.is_active:
+                continue
             detail = (
-                BillDetail(bill=bill, table_name=name, orders=await ctx.orders.list_for_bill(tenant_id, bill.id))
+                BillDetail(bill=bill, table_name=table.name, orders=await ctx.orders.list_for_bill(tenant_id, bill.id))
                 if bill is not None
                 else None
             )
-            overview.append(TableOverview(table_id=table_id, table_name=name, bill=detail))
+            overview.append(TableOverview(table_id=table.table_id, table_name=table.name, bill=detail))
         return overview
 
 

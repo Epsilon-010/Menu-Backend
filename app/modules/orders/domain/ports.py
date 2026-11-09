@@ -140,6 +140,13 @@ class TableInfo:
     qr_token: str | None = None
 
 
+@dataclass(frozen=True)
+class TableRow:
+    table_id: uuid.UUID
+    name: str
+    is_active: bool
+
+
 class Tables(Protocol):
     """Port to the tables module."""
 
@@ -147,6 +154,10 @@ class Tables(Protocol):
 
     async def list_active(self, tenant_id: uuid.UUID) -> list[tuple[uuid.UUID, str]]:
         """(id, name) of the tenant's active tables, by name."""
+        ...
+
+    async def list_all(self, tenant_id: uuid.UUID) -> list[TableRow]:
+        """Every table of the tenant, deactivated ones too, by name."""
         ...
 
 

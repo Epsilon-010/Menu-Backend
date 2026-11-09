@@ -33,7 +33,7 @@ from app.modules.orders.domain.model import (
     PaymentMethod,
 )
 from app.modules.orders.domain.modifiers import MenuModifierGroup, MenuModifierOption
-from app.modules.orders.domain.ports import DishChange, MenuItem, TableInfo
+from app.modules.orders.domain.ports import DishChange, MenuItem, TableInfo, TableRow
 from app.shared.domain.principal import Role
 from tests.unit.fakes import FakeClock, FakeUnitOfWork
 
@@ -140,6 +140,9 @@ class FakeTables:
 
     async def list_active(self, tenant_id: uuid.UUID) -> list[tuple[uuid.UUID, str]]:
         return [(TABLE, "Table 1")]
+
+    async def list_all(self, tenant_id: uuid.UUID) -> list[TableRow]:
+        return [TableRow(table_id=TABLE, name="Table 1", is_active=True)]
 
 
 class FakeEvents:
