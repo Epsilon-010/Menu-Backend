@@ -1,4 +1,5 @@
 import uuid
+from dataclasses import replace
 
 import pytest
 
@@ -273,3 +274,44 @@ async def test_an_item_whose_required_group_cannot_be_met_is_not_orderable(world
 
     assert set(orderable) == {plain}
     assert orderable[plain].modifier_groups == ()
+
+
+def _no_whole_catalog(*_args: object) -> None:
+    raise AssertionError("GetOrderableItems must not load the whole catalog")
+
+
+async def test_orderable_items_are_fetched_by_id_without_loading_the_catalog(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    size = await world.create()
+    wanted = await world.item((size.id,))
+    await world.item()
+    for repository in (world.categories, world.items, world.groups):
+        monkeypatch.setattr(repository, "list", _no_whole_catalog)
+
+    orderable = await GetOrderableItems(world.categories, world.items, world.groups).execute(TENANT_A, {wanted})
+
+    assert set(orderable) == {wanted}
+    assert [g.id for g in orderable[wanted].modifier_groups] == [size.id]
+
+
+async def test_orderable_items_keep_the_rules_of_the_menu(world: World) -> None:
+    available = await world.item()
+    sold_out = await world.item()
+    item = world.items.items[sold_out]
+    world.items.items[sold_out] = replace(item, is_available=False)
+    hidden = await world.item()
+    category_id = world.items.items[hidden].category_id
+    world.categories.categories[category_id] = replace(world.categories.categories[category_id], is_visible=False)
+
+    use_case = GetOrderableItems(world.categories, world.items, world.groups)
+
+    assert set(await use_case.execute(TENANT_A, {available, sold_out, hidden})) == {available}
+    assert await use_case.execute(TENANT_A, set()) == {}
+    assert set((await use_case.execute(TENANT_A, {available, uuid.uuid4()}))) == {available}
+
+
+async def test_orderable_items_never_cross_tenants(world: World) -> None:
+    theirs = await world.item(tenant_id=TENANT_B)
+
+    assert await GetOrderableItems(world.categories, world.items, world.groups).execute(TENANT_A, {theirs}) == {}

@@ -213,6 +213,10 @@ class CategoryRepository(Protocol):
 
     async def set_positions(self, tenant_id: uuid.UUID, ordered_ids: list[uuid.UUID]) -> None: ...
 
+    async def list_by_ids(self, tenant_id: uuid.UUID, category_ids: Iterable[uuid.UUID]) -> list[Category]:
+        """Those categories of the tenant, in no particular order (unknown ids are skipped)."""
+        ...
+
     # Last on purpose: a method named `list` shadows the builtin in the annotations below it.
     async def list(self, tenant_id: uuid.UUID) -> list[Category]:
         """Categories of the tenant in menu order."""
@@ -247,6 +251,10 @@ class ItemRepository(Protocol):
     async def delete(self, tenant_id: uuid.UUID, item_id: uuid.UUID) -> None: ...
 
     async def set_positions(self, tenant_id: uuid.UUID, ordered_ids: list[uuid.UUID]) -> None: ...
+
+    async def list_by_ids(self, tenant_id: uuid.UUID, item_ids: Iterable[uuid.UUID]) -> list[Item]:
+        """Those items of the tenant, in no particular order (unknown ids are skipped)."""
+        ...
 
     async def list(self, tenant_id: uuid.UUID) -> list[Item]:
         """Items of the tenant in menu order inside each category."""
