@@ -12,6 +12,10 @@ class UploadStatus(StrEnum):
     DISCARDED = "discarded"
 
 
+class TooManyPendingUploads(Exception):
+    """The tenant already has as many signed uploads waiting to be used as it may have."""
+
+
 @dataclass(frozen=True)
 class DueImage:
     public_id: str

@@ -49,7 +49,7 @@ from app.modules.catalog.infrastructure.repository import (
     SqlAlchemyItemRepository,
     SqlAlchemyModifierGroupRepository,
 )
-from app.modules.media.infrastructure.jobs import image_cleanup_scheduler, image_registry
+from app.modules.media.infrastructure.jobs import TooManyPendingUploads, image_cleanup_scheduler, image_registry
 from app.shared.domain.images import (
     MAX_IMAGE_BYTES,
     ImageCleanupScheduler,
@@ -281,6 +281,8 @@ async def _run(call: Awaitable[T]) -> T | JSONResponse:
         return problem(status.HTTP_404_NOT_FOUND, "Item not found")
     except ModifierGroupNotFound:
         return problem(status.HTTP_404_NOT_FOUND, "Modifier group not found")
+    except TooManyPendingUploads:
+        return problem(status.HTTP_429_TOO_MANY_REQUESTS, "Too many images are waiting to be used; try again later")
     except ImageStorageUnavailable as error:
         return problem(status.HTTP_503_SERVICE_UNAVAILABLE, str(error) or "Image storage is not available")
 

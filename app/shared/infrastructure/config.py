@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     celery_broker_url: str = "amqp://menu:menu@127.0.0.1:5673//"
     # A signed upload never attached to an item is deleted after this many minutes.
     image_pending_ttl_minutes: int = Field(default=60, gt=0)
+    # Signed uploads a tenant may have waiting to be used; one more signature is a 429.
+    image_max_pending_per_tenant: int = Field(default=100, gt=0)
     # Celery beat runs the image cleanup this often, besides the immediate request after each change.
     image_cleanup_interval_seconds: int = Field(default=300, gt=0)
 
