@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass
 
 from app.modules.orders.application.ordering import Ordering, clear_bill_request, open_bill
-from app.modules.orders.domain.errors import BillHasOrders, BillNotFound, NothingToCharge, TableNotFound
+from app.modules.orders.domain.errors import BillChanged, BillHasOrders, BillNotFound, NothingToCharge, TableNotFound
 from app.modules.orders.domain.model import Bill, Order, PaymentMethod
 
 
@@ -126,11 +126,21 @@ class PayBill:
     def __init__(self, ctx: Ordering) -> None:
         self._ctx = ctx
 
-    async def execute(self, tenant_id: uuid.UUID, bill_id: uuid.UUID, method: PaymentMethod) -> BillDetail:
+    async def execute(
+        self,
+        tenant_id: uuid.UUID,
+        bill_id: uuid.UUID,
+        method: PaymentMethod,
+        expected_total_cents: int | None = None,
+    ) -> BillDetail:
+        """`expected_total_cents` is the total the person charging saw: if the bill no longer adds up to it
+        (compared under the table lock, so nothing can change it before the payment) nothing is charged."""
         ctx = self._ctx
         bill = await _locked_open_bill(ctx, tenant_id, bill_id)
         orders = await ctx.orders.list_for_bill(tenant_id, bill.id)
         total = sum(order.total_cents for order in orders)
+        if expected_total_cents is not None and expected_total_cents != total:
+            raise BillChanged(bill_id)
         if total == 0:
             raise NothingToCharge(bill_id)
         paid = bill.paid(ctx.clock.now(), method, total)

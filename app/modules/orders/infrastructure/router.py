@@ -45,6 +45,7 @@ from app.modules.orders.application.ordering import (
     authorize,
 )
 from app.modules.orders.domain.errors import (
+    BillChanged,
     BillClosed,
     BillHasOrders,
     NothingToCharge,
@@ -198,6 +199,8 @@ class OpenTableIn(_In):
 
 class PaymentIn(_In):
     method: PaymentMethod
+    # The total the staff member saw; omitted, the payment takes whatever the bill adds up to.
+    expected_total_cents: int | None = Field(default=None, strict=True, ge=0)
 
 
 class CartModifierOut(BaseModel):
@@ -473,6 +476,8 @@ async def _run(call: Awaitable[T]) -> T | JSONResponse:
         return problem(status.HTTP_409_CONFLICT, "That id is already used by something else")
     except NothingToPay:
         return problem(status.HTTP_409_CONFLICT, "There is nothing to pay yet")
+    except BillChanged:
+        return problem(status.HTTP_409_CONFLICT, "The bill changed, review it")
     except NothingToCharge:
         return problem(status.HTTP_409_CONFLICT, "This bill has nothing to charge; close the table instead")
     except BillHasOrders:
@@ -637,7 +642,7 @@ async def read_bill(bill_id: uuid.UUID, staff: Staff, ctx: OrderingDep) -> BillO
 
 @bills_router.post("/{bill_id}/payment", response_model=BillOut)
 async def pay_bill(bill_id: uuid.UUID, body: PaymentIn, staff: Staff, ctx: OrderingDep) -> BillOut | JSONResponse:
-    result = await _run(PayBill(ctx).execute(staff.tenant_id, bill_id, body.method))
+    result = await _run(PayBill(ctx).execute(staff.tenant_id, bill_id, body.method, body.expected_total_cents))
     return result if isinstance(result, JSONResponse) else _bill_out(result)
 
 
