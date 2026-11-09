@@ -1,5 +1,6 @@
 """Slice 14: exporting a design from one business and importing it into another, older versions included."""
 
+import json
 from typing import Any
 
 import pytest
@@ -11,6 +12,7 @@ from tests.integration.modules.orders.test_guest_qr_api import guest_of, open_ta
 from tests.integration.modules.staff.test_staff_api import STAFF_PASSWORD, create_member
 from tests.integration.modules.tables.test_tables_api import create_table, created, tablet_of
 from tests.integration.modules.theming.test_theme_api import (  # noqa: F401 (fixtures)
+    DRAFT_URL,
     PUBLISH_URL,
     THEME_URL,
     Json,
@@ -142,3 +144,22 @@ def test_only_the_admin_imports(
     for client in (tablet, guest, waiter, cook):
         assert client.post(IMPORT_URL, json=doc).status_code == 403
     assert new_client().post(IMPORT_URL, json=doc).status_code == 401
+
+
+def test_a_lone_surrogate_in_a_theme_is_a_422_never_a_500(
+    new_client: ClientFactory, tenant_a: SeedResult
+) -> None:
+    admin = admin_of(new_client)
+    before = draft_of(admin)["draft"]
+    # Sent as its JSON escape: httpx could not encode the character itself.
+    doc = json.loads(json.dumps(before))
+    doc["brand"]["name"] = "PLACEHOLDER"
+    body = json.dumps(doc).replace("PLACEHOLDER", r"Tacos \ud800")
+    raw = {"content": body, "headers": {"Content-Type": "application/json"}}
+
+    for response in (admin.put(DRAFT_URL, **raw), admin.post(IMPORT_URL, **raw)):
+        assert response.status_code == 422
+        assert response.headers["content-type"] == "application/problem+json"
+        assert response.json()["detail"] == "Text cannot contain invalid Unicode characters"
+
+    assert draft_of(admin)["draft"] == before

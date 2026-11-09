@@ -165,6 +165,42 @@ def test_a_backslash_followed_by_u0000_is_ordinary_text(admin: TestClient) -> No
     assert response.json()["name"] == "Ta\\u0000cos"
 
 
+def _raw(client: TestClient, method: str, path: str, body: str) -> Response:
+    return client.request(method, path, content=body, headers={"Content-Type": "application/json"})
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        r'{"name": "Ta\ud800cos"}',
+        r'{"name": "ok", "nested": {"deep": ["fine", "\udfff"]}}',
+        r'{"name": "ok", "ke\ud800y": "value"}',
+    ],
+)
+def test_a_lone_surrogate_anywhere_in_the_body_is_a_422_problem(admin: TestClient, body: str) -> None:
+    # It decodes to a Python string that cannot be encoded back: it used to surface as a 500.
+    assert_problem(
+        _raw(admin, "POST", "/api/v1/catalog/categories", body),
+        problem(422, "Unprocessable Content", "Text cannot contain invalid Unicode characters"),
+    )
+    assert admin.get("/api/v1/catalog/categories").json() == []
+
+
+def test_a_lone_surrogate_is_refused_before_login_too(client: TestClient) -> None:
+    response = _raw(client, "POST", "/api/v1/auth/login", r'{"username": "owner\ud800", "password": "x"}')
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Text cannot contain invalid Unicode characters"
+
+
+def test_a_real_surrogate_pair_is_ordinary_text(admin: TestClient) -> None:
+    # An emoji escaped as a pair decodes to one valid character.
+    response = _raw(admin, "POST", "/api/v1/catalog/categories", r'{"name": "Tacos \ud83c\udf2e"}')
+
+    assert response.status_code == 201
+    assert response.json()["name"] == "Tacos 🌮"
+
+
 def test_rate_limited_login_is_a_429_problem_with_retry_after(client: TestClient, tenant_a: SeedResult) -> None:
     from app.shared.infrastructure.config import get_settings
 
