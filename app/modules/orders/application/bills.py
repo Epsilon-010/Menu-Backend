@@ -68,13 +68,15 @@ class ListTables:
     async def execute(self, tenant_id: uuid.UUID) -> list[TableOverview]:
         ctx = self._ctx
         open_bills = {bill.table_id: bill for bill in await ctx.bills.list_open(tenant_id)}
+        # One read for every bill, never one per table.
+        orders = await ctx.orders.list_for_bills(tenant_id, [bill.id for bill in open_bills.values()])
         overview = []
         for table in await ctx.tables.list_all(tenant_id):
             bill = open_bills.get(table.table_id)
             if bill is None and not table.is_active:
                 continue
             detail = (
-                BillDetail(bill=bill, table_name=table.name, orders=await ctx.orders.list_for_bill(tenant_id, bill.id))
+                BillDetail(bill=bill, table_name=table.name, orders=orders.get(bill.id, []))
                 if bill is not None
                 else None
             )

@@ -83,6 +83,10 @@ class OrderRepository(Protocol):
 
     async def exists_anywhere(self, order_id: uuid.UUID) -> bool: ...
 
+    async def list_for_bills(self, tenant_id: uuid.UUID, bill_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[Order]]:
+        """The orders of each bill, in order; a bill without orders is left out. One query, however many bills."""
+        ...
+
     async def list_for_bill(self, tenant_id: uuid.UUID, bill_id: uuid.UUID) -> list[Order]:
         """Oldest first."""
         ...
