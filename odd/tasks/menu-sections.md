@@ -99,3 +99,9 @@ Delivery: one PR per repo (as previous slices); Backend merges first. Tests: `uv
   characters in text fields are trimmed rather than rejected (baseline `_Reader.text`); a hand-made import putting the
   tenant's own in-use banner id in an image section fails with 422 instead of being emptied (same as brand slots).
   Pending: browser check after merge; Frontend native review (`under_budget`); push and PRs are the user's call.
+- **L9 (2026-11-10, user):** "habre los prs porque preguntas si ya se puede subir subelo" → both branches pushed;
+  `gh` has no session here, so the PRs open from prefilled compare links (Backend first). Frontend native review of
+  `e7384ff..` approved and acknowledged (`review-7dabfd0705dc0a8e`) with two warnings, both fixed in Frontend
+  `bcc2d51`: deleted featured products no longer count toward the 12 nor block new picks (`withFeaturedItem`, RED
+  observed), and the section/product limits are pinned by real tests (496 tests ok). Backend review suggestion done:
+  the stale-cache test now seeds a `v5` key too.
