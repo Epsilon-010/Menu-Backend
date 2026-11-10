@@ -375,7 +375,11 @@ def test_a_theme_cached_before_the_schema_change_is_never_served(
         redis.set(f"theme:{tenant_a.tenant_id}:v3:0", stale)
         # Where Slices 13-17 stored it (schema_version 4).
         redis.set(f"theme:{tenant_a.tenant_id}:v4:0", stale)
-    assert ok(admin.get(THEME_URL))["theme"]["schema_version"] == 6
+        # Where UX round 2 stored it (schema_version 5, before the page sections).
+        redis.set(f"theme:{tenant_a.tenant_id}:v5:0", stale)
+    theme = ok(admin.get(THEME_URL))["theme"]
+    assert theme["schema_version"] == 6
+    assert [section["type"] for section in theme["layout"]["sections"]] == ["hero", "menu"]
 
 
 # --- Presets (templates): "si no quiere personalizar el menú o quieren algo rápido las seleccione"
