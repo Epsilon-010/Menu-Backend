@@ -4,17 +4,34 @@ from datetime import datetime
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.media.domain.uploads import DueImage, UploadStatus
+from app.modules.media.domain.uploads import DueImage, TooManyPendingUploads, UploadStatus
 from app.modules.media.infrastructure.models import ImageUploadModel
+from app.shared.infrastructure.database import advisory_xact_lock
 
 
 class SqlAlchemyImageUploads:
     """Implements the shared `ImageRegistry` port (tenant-scoped) and the media `CleanupRepository`."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, max_pending: int | None = None) -> None:
         self._session = session
+        self._max_pending = max_pending
+
+    async def _ensure_room(self, tenant_id: uuid.UUID) -> None:
+        """Raises TooManyPendingUploads at the tenant limit. Serialized per tenant until the transaction ends,
+        so requests signing at the same time cannot all pass the count."""
+        if self._max_pending is None:
+            return
+        await advisory_xact_lock(self._session, f"image-uploads:{tenant_id}")
+        pending = await self._session.scalar(
+            select(func.count())
+            .select_from(ImageUploadModel)
+            .where(ImageUploadModel.tenant_id == tenant_id, ImageUploadModel.status == UploadStatus.PENDING)
+        )
+        if int(pending or 0) >= self._max_pending:
+            raise TooManyPendingUploads(tenant_id)
 
     async def register(self, tenant_id: uuid.UUID, public_id: str) -> None:
+        await self._ensure_room(tenant_id)
         self._session.add(ImageUploadModel(tenant_id=tenant_id, public_id=public_id, status=UploadStatus.PENDING))
         await self._session.flush()
 

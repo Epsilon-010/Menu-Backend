@@ -29,9 +29,9 @@ from app.modules.auth.infrastructure.rate_limiter import RedisLoginAttemptLimite
 from app.modules.auth.infrastructure.refresh_tokens import OpaqueRefreshTokenCodec, SqlAlchemyRefreshTokenRepository
 from app.modules.auth.infrastructure.session_revocation import revoke_user_sessions
 from app.modules.orders.application.guests import GetActiveGuest, JoinTable
-from app.modules.orders.domain.errors import InvalidOrderData, TableFull, TableNotOpen
+from app.modules.orders.domain.errors import InvalidOrderData, TableFull
 from app.modules.orders.domain.model import MAX_GUEST_NAME_LENGTH
-from app.modules.orders.infrastructure.adapters import TablesModule
+from app.modules.orders.infrastructure.adapters import RedisTableEvents, TablesModule
 from app.modules.orders.infrastructure.repository import (
     PostgresTableLocks,
     SqlAlchemyBillRepository,
@@ -258,6 +258,7 @@ def get_qr_login(request: Request, session: SessionDep) -> QrLogin:
             TablesModule(session),
             SqlAlchemyBillRepository(session),
             SqlAlchemyGuestRepository(session),
+            RedisTableEvents(request.app.state.redis),
             SystemClock(),
         ),
         _login_limiter(request),
@@ -407,13 +408,12 @@ async def qr_login(
     response: Response,
     use_case: Annotated[QrLogin, Depends(get_qr_login)],
 ) -> SessionResponse | JSONResponse:
-    """A guest who scanned the table's QR joins its open visit (up to MAX_GUESTS_PER_VISIT guests)."""
+    """A guest who scanned the table's QR joins its visit, opening one if the table has none (up to
+    MAX_GUESTS_PER_VISIT guests per visit)."""
     try:
         auth = await use_case.execute(body.token, body.name, _client_address(request))
     except InvalidCredentials:
         return problem(status.HTTP_401_UNAUTHORIZED, "This QR code is not valid")
-    except TableNotOpen:
-        return problem(status.HTTP_409_CONFLICT, "This table is not open yet; ask your waiter")
     except TableFull:
         return problem(status.HTTP_409_CONFLICT, "This table already has the most guests it allows; ask your waiter")
     except InvalidOrderData as error:

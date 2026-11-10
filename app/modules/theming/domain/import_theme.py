@@ -1,7 +1,7 @@
 """Bringing an exported theme document into a tenant's draft: older versions are upgraded, foreign images dropped.
 
 The upgrade adds what each schema version introduced with the same frozen values as the data migrations that moved
-the stored themes (3f7686d2fe3f typography, 9c2e41b7d5a3 layout, c5d18a7e4f20 cards), so an old export looks exactly
+the stored themes (3f7686d2fe3f typography, 9c2e41b7d5a3 layout, c5d18a7e4f20 cards, b7e3a91c4d52 blocks), so an old export looks exactly
 as a stored theme of that version looks today. Those values are copies on purpose: the app's defaults may change.
 """
 
@@ -75,6 +75,11 @@ _CARDS_V4 = {
 }
 
 
+# Added by schema_version 5: the order of the card and header blocks, and no per-category layout.
+_CARD_BLOCKS_V5 = ["image", "badges", "heading", "description", "add_button"]
+_HEADER_BLOCKS_V5 = ["banner", "name", "tagline", "welcome"]
+
+
 @dataclass(frozen=True)
 class ImportedTheme:
     theme: Theme
@@ -101,7 +106,22 @@ def _upgrade(doc: dict[str, Any]) -> None:
         doc["layout"] = copy.deepcopy(_LAYOUT_V3)
     if version <= 3:
         doc["cards"] = copy.deepcopy(_CARDS_V4)
+    if version <= 4:
+        _add(doc, "cards", "blocks", list(_CARD_BLOCKS_V5))
+        _add(doc, "layout", "header_blocks", list(_HEADER_BLOCKS_V5))
+        _add(doc, "layout", "categories", {})
     doc["schema_version"] = SCHEMA_VERSION
+
+
+def _add(doc: dict[str, Any], part: str, key: str, value: Any) -> None:
+    """Adds a field a newer version introduced. A part that is not an object is left for `parse_theme` to reject;
+    an older document that already has the field is not that version."""
+    section = doc.get(part)
+    if not isinstance(section, dict):
+        return
+    if key in section:
+        raise InvalidTheme(f"{part}.{key}")
+    section[key] = value
 
 
 def _remove_unavailable_images(doc: dict[str, Any], available: set[str]) -> tuple[str, ...]:

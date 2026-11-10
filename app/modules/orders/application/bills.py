@@ -7,8 +7,8 @@ and discards the unsent cart, all in one transaction: after that nobody at the t
 import uuid
 from dataclasses import dataclass
 
-from app.modules.orders.application.ordering import Ordering, clear_bill_request
-from app.modules.orders.domain.errors import BillHasOrders, BillNotFound, NothingToCharge, TableNotFound
+from app.modules.orders.application.ordering import Ordering, clear_bill_request, open_bill
+from app.modules.orders.domain.errors import BillChanged, BillHasOrders, BillNotFound, NothingToCharge, TableNotFound
 from app.modules.orders.domain.model import Bill, Order, PaymentMethod
 
 
@@ -38,7 +38,9 @@ async def _table_name(ctx: Ordering, tenant_id: uuid.UUID, table_id: uuid.UUID) 
 
 
 class OpenTable:
-    """Opens the table's bill so its QR lets guests in; opening an open table returns its bill."""
+    """The waiter (or admin) opens the table's bill by hand; opening an open table returns its bill.
+
+    Optional for the QR: the first guest who scans it opens the visit too (JoinTable)."""
 
     def __init__(self, ctx: Ordering) -> None:
         self._ctx = ctx
@@ -50,15 +52,15 @@ class OpenTable:
         bill = await ctx.bills.get_open(tenant_id, table_id)
         if bill is not None:
             return BillDetail(bill=bill, table_name=name, orders=await ctx.orders.list_for_bill(tenant_id, bill.id))
-        bill = Bill(tenant_id=tenant_id, table_id=table_id, opened_at=ctx.clock.now())
-        await ctx.bills.add(bill)
+        bill = await open_bill(ctx.bills, tenant_id, table_id, ctx.clock.now())
         await ctx.uow.commit()
         await ctx.events.publish(tenant_id, table_id, "bill.opened")
         return BillDetail(bill=bill, table_name=name, orders=[])
 
 
 class ListTables:
-    """Every active table of the tenant, with its open bill and what it owes so far."""
+    """The tables the staff can work on, with the open bill and what it owes so far: every active table,
+    plus a deactivated one that still has a bill to charge or close (the bill never gets stranded)."""
 
     def __init__(self, ctx: Ordering) -> None:
         self._ctx = ctx
@@ -66,15 +68,19 @@ class ListTables:
     async def execute(self, tenant_id: uuid.UUID) -> list[TableOverview]:
         ctx = self._ctx
         open_bills = {bill.table_id: bill for bill in await ctx.bills.list_open(tenant_id)}
+        # One read for every bill, never one per table.
+        orders = await ctx.orders.list_for_bills(tenant_id, [bill.id for bill in open_bills.values()])
         overview = []
-        for table_id, name in await ctx.tables.list_active(tenant_id):
-            bill = open_bills.get(table_id)
+        for table in await ctx.tables.list_all(tenant_id):
+            bill = open_bills.get(table.table_id)
+            if bill is None and not table.is_active:
+                continue
             detail = (
-                BillDetail(bill=bill, table_name=name, orders=await ctx.orders.list_for_bill(tenant_id, bill.id))
+                BillDetail(bill=bill, table_name=table.name, orders=orders.get(bill.id, []))
                 if bill is not None
                 else None
             )
-            overview.append(TableOverview(table_id=table_id, table_name=name, bill=detail))
+            overview.append(TableOverview(table_id=table.table_id, table_name=table.name, bill=detail))
         return overview
 
 
@@ -125,11 +131,21 @@ class PayBill:
     def __init__(self, ctx: Ordering) -> None:
         self._ctx = ctx
 
-    async def execute(self, tenant_id: uuid.UUID, bill_id: uuid.UUID, method: PaymentMethod) -> BillDetail:
+    async def execute(
+        self,
+        tenant_id: uuid.UUID,
+        bill_id: uuid.UUID,
+        method: PaymentMethod,
+        expected_total_cents: int | None = None,
+    ) -> BillDetail:
+        """`expected_total_cents` is the total the person charging saw: if the bill no longer adds up to it
+        (compared under the table lock, so nothing can change it before the payment) nothing is charged."""
         ctx = self._ctx
         bill = await _locked_open_bill(ctx, tenant_id, bill_id)
         orders = await ctx.orders.list_for_bill(tenant_id, bill.id)
         total = sum(order.total_cents for order in orders)
+        if expected_total_cents is not None and expected_total_cents != total:
+            raise BillChanged(bill_id)
         if total == 0:
             raise NothingToCharge(bill_id)
         paid = bill.paid(ctx.clock.now(), method, total)

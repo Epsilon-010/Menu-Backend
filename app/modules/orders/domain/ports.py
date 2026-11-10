@@ -83,6 +83,10 @@ class OrderRepository(Protocol):
 
     async def exists_anywhere(self, order_id: uuid.UUID) -> bool: ...
 
+    async def list_for_bills(self, tenant_id: uuid.UUID, bill_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[Order]]:
+        """The orders of each bill, in order; a bill without orders is left out. One query, however many bills."""
+        ...
+
     async def list_for_bill(self, tenant_id: uuid.UUID, bill_id: uuid.UUID) -> list[Order]:
         """Oldest first."""
         ...
@@ -140,6 +144,13 @@ class TableInfo:
     qr_token: str | None = None
 
 
+@dataclass(frozen=True)
+class TableRow:
+    table_id: uuid.UUID
+    name: str
+    is_active: bool
+
+
 class Tables(Protocol):
     """Port to the tables module."""
 
@@ -147,6 +158,10 @@ class Tables(Protocol):
 
     async def list_active(self, tenant_id: uuid.UUID) -> list[tuple[uuid.UUID, str]]:
         """(id, name) of the tenant's active tables, by name."""
+        ...
+
+    async def list_all(self, tenant_id: uuid.UUID) -> list[TableRow]:
+        """Every table of the tenant, deactivated ones too, by name."""
         ...
 
 

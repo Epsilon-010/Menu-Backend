@@ -8,11 +8,11 @@ from typing import Any
 from alembic.config import Config
 from alembic import command
 
-from app.modules.theming.domain.theme import default_theme
 from app.seed import SeedResult
 from tests.integration.modules.auth.test_auth_api import _seed
 from tests.integration.modules.theming.test_typography_migration import (
     WITH_TYPOGRAPHY,
+    v4_document,
     at_head_afterwards,  # noqa: F401 (fixture)
     run,
     stored,
@@ -25,7 +25,7 @@ Json = dict[str, Any]
 
 def v2_document(primary: str, heading_font: str) -> Json:
     """A theme as Slice 11 stored it."""
-    doc = default_theme().to_dict()
+    doc = v4_document()
     del doc["layout"]
     del doc["cards"]
     doc["schema_version"] = 2
@@ -54,7 +54,7 @@ def test_stored_v2_themes_get_the_default_layout_and_downgrade_removes_it(at_hea
 
     command.upgrade(at_head_afterwards, WITH_LAYOUT)
 
-    default_layout = default_theme().to_dict()["layout"]
+    default_layout = v4_document()["layout"]
     upgraded_draft, upgraded_published = stored(published_tenant.tenant_id)
     assert upgraded_published is not None
     for doc, original in ((upgraded_draft, draft), (upgraded_published, published), (stored(draft_only.tenant_id)[0], lone_draft)):
@@ -76,7 +76,7 @@ def test_stored_v2_themes_get_the_default_layout_and_downgrade_removes_it(at_hea
 def test_the_upgrade_leaves_documents_already_at_version_3_untouched(at_head_afterwards: Config) -> None:  # noqa: F811
     tenant: SeedResult = asyncio.run(_seed("La Taquería", "owner@example.com"))
     command.downgrade(at_head_afterwards, WITH_TYPOGRAPHY)
-    current = default_theme().to_dict()
+    current = v4_document()
     del current["cards"]
     current["schema_version"] = 3
     current["layout"]["navigation"] = "tabs"

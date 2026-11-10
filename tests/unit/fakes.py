@@ -310,6 +310,10 @@ class InMemoryCategoryRepository:
             assert category.tenant_id == tenant_id
             self.categories[category_id] = replace(category, position=position)
 
+    async def list_by_ids(self, tenant_id: uuid.UUID, category_ids: Iterable[uuid.UUID]) -> list[Category]:
+        wanted = set(category_ids)
+        return [c for c in self.categories.values() if c.tenant_id == tenant_id and c.id in wanted]
+
     # Last on purpose: a method named `list` shadows the builtin in the annotations below it.
     async def list(self, tenant_id: uuid.UUID) -> list[Category]:
         return sorted((c for c in self.categories.values() if c.tenant_id == tenant_id), key=_by_position)
@@ -367,6 +371,10 @@ class InMemoryItemRepository:
             assert item.tenant_id == tenant_id
             self.items[item_id] = replace(item, position=position)
 
+    async def list_by_ids(self, tenant_id: uuid.UUID, item_ids: Iterable[uuid.UUID]) -> list[Item]:
+        wanted = set(item_ids)
+        return [item for item in self.items.values() if item.tenant_id == tenant_id and item.id in wanted]
+
     async def list(self, tenant_id: uuid.UUID) -> list[Item]:
         return sorted((i for i in self.items.values() if i.tenant_id == tenant_id), key=_by_position)
 
@@ -418,6 +426,10 @@ class InMemoryModifierGroupRepository:
 
     async def list_page(self, tenant_id: uuid.UUID, page: PageRequest) -> Page[ModifierGroup]:
         return keyset_page(await self.list(tenant_id), lambda group: group.name.lower(), page)
+
+    async def list_by_ids(self, tenant_id: uuid.UUID, group_ids: Iterable[uuid.UUID]) -> list[ModifierGroup]:
+        wanted = set(group_ids)
+        return [g for g in self.groups.values() if g.tenant_id == tenant_id and g.id in wanted]
 
     async def list(self, tenant_id: uuid.UUID) -> list[ModifierGroup]:
         return sorted((g for g in self.groups.values() if g.tenant_id == tenant_id), key=lambda g: g.name.lower())

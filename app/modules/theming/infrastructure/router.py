@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.media.infrastructure.jobs import image_cleanup_scheduler, image_registry
+from app.modules.media.infrastructure.jobs import TooManyPendingUploads, image_cleanup_scheduler, image_registry
 from app.modules.theming.application.manage_theme import (
     GetPublishedTheme,
     GetThemeDraft,
@@ -157,6 +157,12 @@ class TypographyDoc(_Strict):
     elements: TextElementsDoc
 
 
+class CategoryLayoutDoc(_Strict):
+    product_view: StrictStr
+    columns: StrictInt
+    card_template: StrictStr
+
+
 class LayoutDoc(_Strict):
     navigation: StrictStr
     product_view: StrictStr
@@ -168,6 +174,9 @@ class LayoutDoc(_Strict):
     show_tagline: StrictBool
     show_welcome: StrictBool
     cart: StrictStr
+    header_blocks: list[StrictStr]
+    # By category id; the domain checks the ids, the count and every value.
+    categories: dict[StrictStr, CategoryLayoutDoc]
 
 
 class CardImageDoc(_Strict):
@@ -200,6 +209,7 @@ class CardsDoc(_Strict):
     animation: StrictStr
     overlay_opacity: StrictInt
     badge_shape: StrictStr
+    blocks: list[StrictStr]
 
 
 class ThemeDoc(_Strict):
@@ -336,6 +346,8 @@ async def _run(call: Awaitable[T]) -> T | JSONResponse:
         return await call
     except (InvalidTheme, InvalidImage) as error:
         return problem(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error))
+    except TooManyPendingUploads:
+        return problem(status.HTTP_429_TOO_MANY_REQUESTS, "Too many images are waiting to be used; try again later")
     except ImageStorageUnavailable as error:
         return problem(status.HTTP_503_SERVICE_UNAVAILABLE, str(error) or "Image storage is not available")
 

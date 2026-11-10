@@ -14,7 +14,7 @@ from app.modules.catalog.infrastructure.repository import (
     SqlAlchemyModifierGroupRepository,
 )
 from app.modules.orders.domain.modifiers import MenuModifierGroup, MenuModifierOption
-from app.modules.orders.domain.ports import MenuItem, TableInfo
+from app.modules.orders.domain.ports import MenuItem, TableInfo, TableRow
 from app.modules.tables.application.find_table import GetTable
 from app.modules.tables.application.manage_tables import ListTables
 from app.modules.tables.infrastructure.repository import SqlAlchemyTableRepository
@@ -82,6 +82,12 @@ class TablesModule:
 
     async def list_active(self, tenant_id: uuid.UUID) -> list[tuple[uuid.UUID, str]]:
         return [(table.id, table.name) for table in await self._list.execute(tenant_id) if table.is_active]
+
+    async def list_all(self, tenant_id: uuid.UUID) -> list[TableRow]:
+        return [
+            TableRow(table_id=table.id, name=table.name, is_active=table.is_active)
+            for table in await self._list.execute(tenant_id)
+        ]
 
 
 class RedisTableEvents:

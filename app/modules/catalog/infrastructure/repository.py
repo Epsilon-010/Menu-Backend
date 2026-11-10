@@ -180,6 +180,12 @@ class SqlAlchemyCategoryRepository:
         )
         _ensure_whole_order(result, ordered_ids)
 
+    async def list_by_ids(self, tenant_id: uuid.UUID, category_ids: Iterable[uuid.UUID]) -> list[Category]:
+        models = await self._session.scalars(
+            select(CategoryModel).where(CategoryModel.tenant_id == tenant_id, CategoryModel.id.in_(list(category_ids)))
+        )
+        return [_category(model) for model in models]
+
     # Last on purpose: a method named `list` shadows the builtin in the annotations below it.
     async def list(self, tenant_id: uuid.UUID) -> list[Category]:
         models = await self._session.scalars(
@@ -331,6 +337,12 @@ class SqlAlchemyItemRepository:
             .values(position=case(positions, value=ItemModel.id))
         )
         _ensure_whole_order(result, ordered_ids)
+
+    async def list_by_ids(self, tenant_id: uuid.UUID, item_ids: Iterable[uuid.UUID]) -> list[Item]:
+        models = await self._session.scalars(
+            select(ItemModel).where(ItemModel.tenant_id == tenant_id, ItemModel.id.in_(list(item_ids)))
+        )
+        return await self._items(models)
 
     async def list(self, tenant_id: uuid.UUID) -> list[Item]:
         models = await self._session.scalars(
@@ -497,6 +509,14 @@ class SqlAlchemyModifierGroupRepository:
         return Page(await self._groups(models), following)
 
     # Last on purpose: a method named `list` shadows the builtin in the annotations below it.
+    async def list_by_ids(self, tenant_id: uuid.UUID, group_ids: Iterable[uuid.UUID]) -> list[ModifierGroup]:
+        models = await self._session.scalars(
+            select(ModifierGroupModel).where(
+                ModifierGroupModel.tenant_id == tenant_id, ModifierGroupModel.id.in_(list(group_ids))
+            )
+        )
+        return await self._groups(models)
+
     async def list(self, tenant_id: uuid.UUID) -> list[ModifierGroup]:
         models = await self._session.scalars(
             select(ModifierGroupModel)

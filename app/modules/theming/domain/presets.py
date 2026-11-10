@@ -22,8 +22,10 @@ from app.modules.theming.domain.theme import (
     TextStyle,
     Theme,
     Typography,
+    cards_to_dict,
     colors_to_dict,
     default_theme,
+    layout_to_dict,
 )
 
 
@@ -47,8 +49,8 @@ class ThemePreset:
             "description": self.description,
             "colors": colors_to_dict(self.colors),
             "typography": asdict(self.typography),
-            "layout": asdict(self.layout),
-            "cards": asdict(self.cards),
+            "layout": layout_to_dict(self.layout),
+            "cards": cards_to_dict(self.cards),
         }
 
 
@@ -114,6 +116,7 @@ def _cards(
         animation=animation,
         overlay_opacity=overlay_opacity,
         badge_shape=badge_shape,
+        blocks=DEFAULT_CARDS.blocks,
     )
 
 

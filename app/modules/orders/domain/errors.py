@@ -6,12 +6,12 @@ class TableNotFound(Exception):
     """No active table with that id in the caller's tenant."""
 
 
+class BillChanged(Exception):
+    """The bill's total is no longer the one the person charging it saw: they must review it again."""
+
+
 class BillNotFound(Exception):
     """No bill with that id in the caller's tenant (or it is already closed)."""
-
-
-class TableNotOpen(Exception):
-    """A guest tried to join, or act on, a table whose bill is closed (or was never opened)."""
 
 
 class QrNotValid(Exception):

@@ -45,6 +45,7 @@ from app.modules.orders.application.ordering import (
     authorize,
 )
 from app.modules.orders.domain.errors import (
+    BillChanged,
     BillClosed,
     BillHasOrders,
     NothingToCharge,
@@ -198,6 +199,8 @@ class OpenTableIn(_In):
 
 class PaymentIn(_In):
     method: PaymentMethod
+    # The total the staff member saw; omitted, the payment takes whatever the bill adds up to.
+    expected_total_cents: int | None = Field(default=None, strict=True, ge=0)
 
 
 class CartModifierOut(BaseModel):
@@ -473,6 +476,8 @@ async def _run(call: Awaitable[T]) -> T | JSONResponse:
         return problem(status.HTTP_409_CONFLICT, "That id is already used by something else")
     except NothingToPay:
         return problem(status.HTTP_409_CONFLICT, "There is nothing to pay yet")
+    except BillChanged:
+        return problem(status.HTTP_409_CONFLICT, "The bill changed, review it")
     except NothingToCharge:
         return problem(status.HTTP_409_CONFLICT, "This bill has nothing to charge; close the table instead")
     except BillHasOrders:
@@ -538,9 +543,9 @@ async def submit_order(body: SubmitIn, diner: DinerDep, ctx: OrderingDep) -> Ord
     return result if isinstance(result, JSONResponse) else _order_out(result)
 
 
-def _take_stream_slot(request: Request, subject: str) -> JSONResponse | None:
-    """None when the stream may open; else the problem to answer (the cap per session, or the server's)."""
-    refusal = request.app.state.stream_slots.take(subject)
+def _take_stream_slot(request: Request, subject: str, tenant_id: uuid.UUID) -> JSONResponse | None:
+    """None when the stream may open; else the problem to answer (the cap per session, or the tenant or server one)."""
+    refusal = request.app.state.stream_slots.take(subject, str(tenant_id))
     if refusal == "session":
         return problem(status.HTTP_429_TOO_MANY_REQUESTS, "Too many open live updates; close another tab first")
     if refusal == "server":
@@ -550,10 +555,12 @@ def _take_stream_slot(request: Request, subject: str) -> JSONResponse | None:
     return None
 
 
-def _event_stream(request: Request, subject: str, events: AsyncIterator[str]) -> StreamingResponse:
+def _event_stream(
+    request: Request, subject: str, tenant_id: uuid.UUID, events: AsyncIterator[str]
+) -> StreamingResponse:
     """Holds the slot taken for `subject` until the stream ends."""
     return StreamingResponse(
-        request.app.state.stream_slots.holding(subject, events),
+        request.app.state.stream_slots.holding(subject, str(tenant_id), events),
         media_type="text/event-stream",
         # Proxies (nginx) must pass each event on at once instead of buffering the response.
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -577,7 +584,7 @@ async def table_events_stream(
         except DinerNotAllowed:
             return problem(status.HTTP_401_UNAUTHORIZED, "Your visit at this table has ended")
     subject = str(diner.guest_id or diner.table_id)
-    refused = _take_stream_slot(request, subject)
+    refused = _take_stream_slot(request, subject, diner.tenant_id)
     if refused is not None:
         return refused
     events = table_events(
@@ -587,7 +594,7 @@ async def table_events_stream(
         last_event_id if last_event_id and _STREAM_ID.fullmatch(last_event_id) else None,
         stop_on_close=diner.guest_id is not None,
     )
-    return _event_stream(request, subject, events)
+    return _event_stream(request, subject, diner.tenant_id, events)
 
 
 @table_router.get("/orders", response_model=list[OrderOut])
@@ -637,7 +644,7 @@ async def read_bill(bill_id: uuid.UUID, staff: Staff, ctx: OrderingDep) -> BillO
 
 @bills_router.post("/{bill_id}/payment", response_model=BillOut)
 async def pay_bill(bill_id: uuid.UUID, body: PaymentIn, staff: Staff, ctx: OrderingDep) -> BillOut | JSONResponse:
-    result = await _run(PayBill(ctx).execute(staff.tenant_id, bill_id, body.method))
+    result = await _run(PayBill(ctx).execute(staff.tenant_id, bill_id, body.method, body.expected_total_cents))
     return result if isinstance(result, JSONResponse) else _bill_out(result)
 
 
@@ -725,7 +732,7 @@ async def staff_events_stream(
     `bill.requested`, `bill.request_cleared` and `bill.closed` of the tenant, with `{table_id, order_id?}`;
     never cart changes or prices."""
     subject = str(staff.subject_id)
-    refused = _take_stream_slot(request, subject)
+    refused = _take_stream_slot(request, subject, staff.tenant_id)
     if refused is not None:
         return refused
     events = staff_events(
@@ -733,4 +740,4 @@ async def staff_events_stream(
         staff.tenant_id,
         last_event_id if last_event_id and _STREAM_ID.fullmatch(last_event_id) else None,
     )
-    return _event_stream(request, subject, events)
+    return _event_stream(request, subject, staff.tenant_id, events)

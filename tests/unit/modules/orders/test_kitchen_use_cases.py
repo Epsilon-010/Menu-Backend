@@ -33,7 +33,7 @@ from app.modules.orders.domain.model import (
     PaymentMethod,
 )
 from app.modules.orders.domain.modifiers import MenuModifierGroup, MenuModifierOption
-from app.modules.orders.domain.ports import DishChange, MenuItem, TableInfo
+from app.modules.orders.domain.ports import DishChange, MenuItem, TableInfo, TableRow
 from app.shared.domain.principal import Role
 from tests.unit.fakes import FakeClock, FakeUnitOfWork
 
@@ -79,6 +79,9 @@ class InMemoryOrders:
             raise OrderIdTaken(dish.id)
         order = self.orders[order_id]
         self.orders[order_id] = replace(order, items=(*order.items, dish))
+
+    async def list_for_bills(self, tenant_id: uuid.UUID, bill_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[Order]]:
+        return {bill_id: await self.list_for_bill(tenant_id, bill_id) for bill_id in bill_ids}
 
     async def list_for_bill(self, tenant_id: uuid.UUID, bill_id: uuid.UUID) -> list[Order]:
         return [o for o in self.orders.values() if o.tenant_id == tenant_id and o.bill_id == bill_id]
@@ -140,6 +143,9 @@ class FakeTables:
 
     async def list_active(self, tenant_id: uuid.UUID) -> list[tuple[uuid.UUID, str]]:
         return [(TABLE, "Table 1")]
+
+    async def list_all(self, tenant_id: uuid.UUID) -> list[TableRow]:
+        return [TableRow(table_id=TABLE, name="Table 1", is_active=True)]
 
 
 class FakeEvents:

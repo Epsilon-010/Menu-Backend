@@ -10,9 +10,13 @@ import logging
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.media.domain.uploads import TooManyPendingUploads
 from app.modules.media.infrastructure.repository import SqlAlchemyImageUploads
 from app.shared.domain.images import ImageCleanupScheduler, ImageRegistry
 from app.shared.infrastructure.celery_app import CLEAN_UP_IMAGES_TASK
+from app.shared.infrastructure.config import get_settings
+
+__all__ = ["CeleryImageCleanupScheduler", "TooManyPendingUploads", "image_cleanup_scheduler", "image_registry"]
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +25,11 @@ _ENQUEUE_TIMEOUT_SECONDS = 3
 
 
 def image_registry(session: AsyncSession) -> ImageRegistry:
-    """The registry on the caller's session, so it shares the caller's transaction."""
-    return SqlAlchemyImageUploads(session)
+    """The registry on the caller's session, so it shares the caller's transaction.
+
+    Its `register` raises TooManyPendingUploads at the tenant's limit of signed uploads waiting to be used.
+    """
+    return SqlAlchemyImageUploads(session, max_pending=get_settings().image_max_pending_per_tenant)
 
 
 class CeleryImageCleanupScheduler:

@@ -47,12 +47,6 @@ from tests.integration.modules.tables.test_tables_api import (  # noqa: F401  (f
 
 QR_URL = "/api/v1/auth/qr"
 REFRESH_URL = "/api/v1/auth/refresh"
-NOT_OPEN = {
-    "type": "about:blank",
-    "title": "Conflict",
-    "status": 409,
-    "detail": "This table is not open yet; ask your waiter",
-}
 
 
 def scan(client: TestClient, qr_token: str, name: str | None = None) -> Response:
@@ -72,6 +66,12 @@ def guest_of(new_client: ClientFactory, qr_token: str, name: str | None = None) 
 
 def open_table(staff: TestClient, table: dict[str, str]) -> str:
     return str(ok(staff.post(BILLS_URL, json={"table_id": table["id"]}))["id"])
+
+
+def open_bill_of(staff: TestClient, table: dict[str, str]) -> str | None:
+    """The id of the table's open bill (its current visit), or None while nobody is sitting there."""
+    overview = next(row for row in ok(staff.get(f"{BILLS_URL}/tables")) if row["table_id"] == table["id"])
+    return None if overview["bill"] is None else str(overview["bill"]["id"])
 
 
 def pay(staff: TestClient, bill_id: str) -> None:
@@ -116,19 +116,52 @@ def move_guests_joined_at(by: timedelta) -> None:
 # --- Joining -------------------------------------------------------------------------------------
 
 
-def test_a_qr_lets_nobody_in_while_the_table_is_closed(new_client: ClientFactory, tenant_a: SeedResult) -> None:
+def test_the_first_scan_opens_the_table_and_the_next_phones_join_that_visit(
+    new_client: ClientFactory, tenant_a: SeedResult
+) -> None:
+    """"mejor que esté abierta y al cobrar una orden cierre todas las sesiones": nobody opens it by hand."""
+    admin = admin_of(new_client)
+    items = menu_items(admin)
+    table = created(create_table(admin))
+    assert open_bill_of(admin, table) is None
+
+    first = guest_of(new_client, table["qr_token"])
+    bill_id = open_bill_of(admin, table)
+    second = guest_of(new_client, table["qr_token"])
+
+    assert bill_id is not None
+    assert open_bill_of(admin, table) == bill_id  # the second phone joined, it did not open another visit
+    assert [ok(me(phone))["guest"]["name"] for phone in (first, second)] == ["Guest 1", "Guest 2"]
+    ok(add(first, items["pastor"]))
+    assert [line["added_by"] for line in cart(second)["lines"]] == ["Guest 1"]
+    # The waiter's "open table" still works and just returns the visit the QR opened.
+    assert open_table(admin, table) == bill_id
+
+
+def test_a_qr_that_is_not_the_tables_lets_nobody_in(new_client: ClientFactory, tenant_a: SeedResult) -> None:
     admin = admin_of(new_client)
     table = created(create_table(admin))
     phone = new_client()
 
-    closed = scan(phone, table["qr_token"])
-
-    assert (closed.status_code, closed.json()) == (409, NOT_OPEN)
-    assert "set-cookie" not in closed.headers
-    assert phone.get(CART_URL).status_code == 401
     unknown = scan(phone, "not-a-real-qr-token")
+
     assert (unknown.status_code, unknown.json()["detail"]) == (401, "This QR code is not valid")
+    assert "set-cookie" not in unknown.headers
+    assert phone.get(CART_URL).status_code == 401
     assert scan(phone, "").status_code == 422
+    assert open_bill_of(admin, table) is None
+
+
+def test_scanning_an_inactive_table_opens_nothing(new_client: ClientFactory, tenant_a: SeedResult) -> None:
+    admin = admin_of(new_client)
+    table = created(create_table(admin))
+    ok(admin.patch(f"{TABLES_URL}/{table['id']}", json={"is_active": False}))
+
+    refused = scan(new_client(), table["qr_token"])
+
+    assert (refused.status_code, refused.json()["detail"]) == (401, "This QR code is not valid")
+    ok(admin.patch(f"{TABLES_URL}/{table['id']}", json={"is_active": True}))
+    assert open_bill_of(admin, table) is None
 
 
 def test_any_number_of_phones_join_and_build_one_order_with_the_tablet(
@@ -187,8 +220,36 @@ def test_after_paying_nobody_who_left_can_order_even_with_the_app_still_open(
 
     for guest in guests:
         locked_out(guest, items["pastor"])
-    # The same QR, scanned again from the street or from home, does not open a closed table.
-    assert scan(new_client(), table["qr_token"]).json() == NOT_OPEN
+    assert open_bill_of(waiter, table) is None
+
+
+def test_paying_ends_the_old_guests_even_after_the_next_scan_opens_a_new_visit(
+    new_client: ClientFactory, tenant_a: SeedResult
+) -> None:
+    """"si se cobra las sesiones que estaban en la mesa de antes se invaliden y ya no puedan pedir si
+    tienen la página web abierta", also once the next people's scan opened the table again."""
+    admin = admin_of(new_client)
+    items = menu_items(admin)
+    table = created(create_table(admin))
+    waiter = staff_of(new_client, admin, "mesero", "waiter")
+    old_guest = guest_of(new_client, table["qr_token"])
+    visit_a = open_bill_of(waiter, table)
+    assert visit_a is not None
+    ok(add(old_guest, items["pastor"]))
+    ok(submit(old_guest, cart(old_guest)["version"]), 201)
+    pay(waiter, visit_a)
+    forget_access_revocations()  # only Postgres remains to keep the old phone out
+
+    new_guest = guest_of(new_client, table["qr_token"])
+    visit_b = open_bill_of(waiter, table)
+
+    assert visit_b not in (None, visit_a)
+    locked_out(old_guest, items["pastor"])
+    assert ok(me(new_guest))["guest"]["name"] == "Guest 1"
+    ok(add(new_guest, items["suadero"]))
+    sent = ok(submit(new_guest, cart(new_guest)["version"]), 201)
+    assert sent["sent_by"] == "Guest 1"
+    assert [order["id"] for order in ok(new_guest.get(ORDERS_URL))] == [sent["id"]]  # nothing from visit A
 
 
 def test_ending_the_visit_holds_even_if_redis_forgot_the_revocations(
@@ -366,7 +427,7 @@ def test_a_forged_guest_token_for_another_visit_or_table_is_refused(
         assert forger.get("/api/v1/auth/me", headers=headers).status_code == 401
 
 
-def test_wrong_qrs_are_limited_but_scanning_a_closed_table_never_locks_anyone_out(
+def test_wrong_qrs_are_limited_but_scanning_the_real_qr_again_never_locks_anyone_out(
     new_client: ClientFactory, tenant_a: SeedResult
 ) -> None:
     admin = admin_of(new_client)
@@ -374,9 +435,7 @@ def test_wrong_qrs_are_limited_but_scanning_a_closed_table_never_locks_anyone_ou
     phone = new_client()
 
     for _ in range(get_settings().login_max_failures_per_client + 3):
-        assert scan(phone, table["qr_token"]).status_code == 409  # before the waiter opens the table
-    open_table(admin, table)
-    assert scan(phone, table["qr_token"]).status_code == 200
+        assert scan(phone, table["qr_token"]).status_code == 200
 
     guesser = new_client()
     for _ in range(get_settings().login_max_failures_per_client):

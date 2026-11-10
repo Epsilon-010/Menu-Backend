@@ -395,6 +395,14 @@ class SqlAlchemyOrderRepository:
     async def list_for_bill(self, tenant_id: uuid.UUID, bill_id: uuid.UUID) -> list[Order]:
         return await self._orders(tenant_id, OrderModel.bill_id == bill_id)
 
+    async def list_for_bills(self, tenant_id: uuid.UUID, bill_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[Order]]:
+        if not bill_ids:
+            return {}
+        by_bill: dict[uuid.UUID, list[Order]] = {}
+        for order in await self._orders(tenant_id, OrderModel.bill_id.in_(bill_ids)):
+            by_bill.setdefault(order.bill_id, []).append(order)
+        return by_bill
+
     async def next_number(self, tenant_id: uuid.UUID) -> int:
         statement = (
             insert(OrderCounterModel)

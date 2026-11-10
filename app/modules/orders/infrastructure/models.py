@@ -14,6 +14,8 @@ class BillModel(UUIDPrimaryKey, Base):
     __table_args__ = (
         # At most one open bill per table: the database is the guarantee, the table lock the fast path.
         Index("uq_bills_open_table_id", "table_id", unique=True, postgresql_where=text("closed_at IS NULL")),
+        # The staff views ask for a tenant's open bills all the time; closed bills only pile up.
+        Index("ix_bills_open_tenant_id", "tenant_id", postgresql_where=text("closed_at IS NULL")),
     )
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)

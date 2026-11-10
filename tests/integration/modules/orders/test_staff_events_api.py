@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from app.modules.orders.infrastructure.stream_slots import StreamSlots
 from app.seed import SeedResult
 from tests.integration.modules.catalog.test_catalog_api import ok
-from tests.integration.modules.orders.test_guest_qr_api import open_table, pay
+from tests.integration.modules.orders.test_guest_qr_api import guest_of, open_bill_of, open_table, pay
 from tests.integration.modules.orders.test_kitchen_api import mark, send_order
 from tests.integration.modules.orders.test_ordering_api import add, menu_items, staff_of
 from tests.integration.modules.orders.test_table_events_api import short_streams  # noqa: F401  (fixture)
@@ -65,6 +65,21 @@ def test_the_staff_hear_orders_and_bills_of_every_table_but_no_carts_or_prices(
         assert received(staff, STAFF_EVENTS_URL) == expected
 
 
+def test_the_staff_hear_a_table_that_opened_itself_with_a_qr_scan(
+    new_client: ClientFactory, tenant_a: SeedResult
+) -> None:
+    admin = admin_of(new_client)
+    table = created(create_table(admin, "Mesa 2"))
+    waiter = staff_of(new_client, admin, "waiter.qr", "waiter")
+
+    guest = guest_of(new_client, table["qr_token"])
+    guest_of(new_client, table["qr_token"])  # joining an open visit announces nothing new
+    assert open_bill_of(waiter, table) is not None
+
+    assert received(waiter, STAFF_EVENTS_URL) == [("bill.opened", {"table_id": table["id"]})]
+    assert received(guest, TABLE_EVENTS_URL) == [("bill.opened", {})]
+
+
 def test_a_table_hears_the_changes_of_its_own_orders_only(new_client: ClientFactory, tenant_a: SeedResult) -> None:
     admin = admin_of(new_client)
     item = menu_items(admin)["pastor"]
@@ -115,7 +130,7 @@ def test_a_session_cannot_open_more_streams_than_its_cap(new_client: ClientFacto
     tablet = tablet_of(new_client, created(create_table(admin, "Mesa 1")))
     for client, url in ((admin, STAFF_EVENTS_URL), (tablet, TABLE_EVENTS_URL)):
         slots = _slots(client)
-        assert all(slots.take(_subject(client)) is None for _ in range(slots.per_subject))
+        assert all(slots.take(_subject(client), str(tenant_a.tenant_id)) is None for _ in range(slots.per_subject))
 
         response = client.get(url)
 
@@ -126,7 +141,7 @@ def test_a_session_cannot_open_more_streams_than_its_cap(new_client: ClientFacto
 def test_the_server_refuses_streams_past_its_total_cap(new_client: ClientFactory, tenant_a: SeedResult) -> None:
     admin = admin_of(new_client)
     slots = _slots(admin)
-    assert all(slots.take(f"other-{n}") is None for n in range(slots.total))
+    assert all(slots.take(f"other-{n}", f"tenant-{n}") is None for n in range(slots.total))
 
     response = admin.get(STAFF_EVENTS_URL)
 
@@ -135,11 +150,32 @@ def test_the_server_refuses_streams_past_its_total_cap(new_client: ClientFactory
     assert response.headers["retry-after"] == "5"
 
 
+def test_one_tenant_cannot_take_every_stream_of_the_server(
+    new_client: ClientFactory, tenant_a: SeedResult, tenant_b: SeedResult, short_streams: None
+) -> None:
+    admin = admin_of(new_client)
+    other = admin_of(new_client, "boss@example.com")
+    slots = StreamSlots(total=10, per_subject=4, per_tenant=2)
+    admin.app.state.stream_slots = slots  # type: ignore[attr-defined]
+    assert slots.take("guest-1", str(tenant_a.tenant_id)) is None
+    assert slots.take("guest-2", str(tenant_a.tenant_id)) is None
+
+    refused = admin.get(STAFF_EVENTS_URL)
+
+    assert refused.status_code == 503
+    assert refused.headers["content-type"] == "application/problem+json"
+    assert refused.json()["detail"] == "Live updates are busy; try again shortly"
+    assert refused.headers["retry-after"] == "5"
+    assert slots.open == 2
+    received(other, STAFF_EVENTS_URL)  # another tenant still streams, and gives its slot back
+    assert slots.open == 2
+
+
 def test_a_finished_stream_gives_its_slot_back(
     new_client: ClientFactory, tenant_a: SeedResult, short_streams: None
 ) -> None:
     admin = admin_of(new_client)
-    admin.app.state.stream_slots = StreamSlots(total=10, per_subject=1)  # type: ignore[attr-defined]
+    admin.app.state.stream_slots = StreamSlots(total=10, per_subject=1, per_tenant=1)  # type: ignore[attr-defined]
 
     received(admin, STAFF_EVENTS_URL)
     received(admin, STAFF_EVENTS_URL)
