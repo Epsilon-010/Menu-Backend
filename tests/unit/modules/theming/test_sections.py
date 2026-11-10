@@ -158,6 +158,24 @@ def test_every_template_defines_a_page_with_the_menu_and_no_products_of_its_own(
         assert "featured" not in types, preset.id
 
 
+def test_there_are_more_templates_and_several_bring_their_own_page() -> None:
+    assert len(PRESETS) >= 12
+    with_own_page = [preset for preset in PRESETS if preset.layout.sections != DEFAULT_SECTIONS]
+    assert len(with_own_page) >= 4
+    for preset in with_own_page:
+        assert parse_theme(preset.apply(default_theme()).to_dict(), TENANT).layout.sections == preset.layout.sections
+
+
+def test_templates_follow_the_design_rules_one_typeface_no_italics_no_black_weights_flat_backgrounds() -> None:
+    for preset in PRESETS[6:]:
+        fonts = preset.typography.fonts
+        assert len({fonts.heading, fonts.body, fonts.price, fonts.button}) == 1, preset.id
+        for element in ("business_name", "category", "product_name", "description", "price", "button"):
+            style = getattr(preset.typography.elements, element)
+            assert style.style == "normal" and style.weight <= 700, (preset.id, element)
+        assert not preset.colors.gradient.enabled, preset.id
+
+
 def test_an_older_export_gets_the_default_page() -> None:
     doc = document()
     doc["schema_version"] = 5
