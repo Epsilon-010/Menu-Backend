@@ -108,6 +108,27 @@ class ListKitchenOrders:
         return await _with_table_names(self._ctx, tenant_id, orders)
 
 
+# How many finished orders the kitchen screen keeps in sight.
+MAX_FINISHED_ORDERS = 30
+
+
+def _last_change(order: Order) -> datetime:
+    return max((item.updated_at or order.created_at for item in order.items), default=order.created_at)
+
+
+class ListFinishedOrders:
+    """Orders of open bills the kitchen has nothing left to cook for (every dish ready, delivered or
+    cancelled), the one finished last first. They leave when their bill is paid, like the queues."""
+
+    def __init__(self, ctx: Kitchen) -> None:
+        self._ctx = ctx
+
+    async def execute(self, tenant_id: uuid.UUID) -> list[StaffOrder]:
+        orders = await self._ctx.orders.list_without_dishes_in(tenant_id, KITCHEN_STATUSES)
+        orders.sort(key=lambda order: (_last_change(order), order.number), reverse=True)
+        return await _with_table_names(self._ctx, tenant_id, orders[:MAX_FINISHED_ORDERS])
+
+
 def _oldest_ready(order: Order) -> datetime:
     return min(item.ready_at or order.created_at for item in order.items if item.status is OrderItemStatus.READY)
 
@@ -154,6 +175,7 @@ class ChangeDishStatus:
             sources=sources,
             target=target,
             changed_by=staff.user_id,
+            role=staff.role,
             at=ctx.clock.now(),
             reason=reason,
         )

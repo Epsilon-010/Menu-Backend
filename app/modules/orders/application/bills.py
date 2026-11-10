@@ -9,7 +9,9 @@ from dataclasses import dataclass
 
 from app.modules.orders.application.ordering import Ordering, clear_bill_request, open_bill
 from app.modules.orders.domain.errors import BillChanged, BillHasOrders, BillNotFound, NothingToCharge, TableNotFound
-from app.modules.orders.domain.model import Bill, Order, PaymentMethod
+from app.modules.orders.domain.model import NOT_DELIVERED_REASON, Bill, Order, PaymentMethod
+from app.modules.orders.domain.ports import UndeliveredDrop
+from app.shared.domain.principal import Role
 
 
 @dataclass(frozen=True)
@@ -125,8 +127,21 @@ class GetBill:
         )
 
 
+@dataclass(frozen=True)
+class Cashier:
+    """The staff member charging, from the access token."""
+
+    user_id: uuid.UUID
+    role: Role
+
+
 class PayBill:
-    """Registers the payment of the backend-computed total and closes the bill."""
+    """Registers the payment of the backend-computed total and closes the bill.
+
+    The bill is paid at the end of the visit. If some dishes never reached the table, the person charging
+    either charges everything anyway or, with `only_delivered`, takes those dishes off the bill first
+    (they are cancelled in the same transaction, so a refused payment cancels nothing).
+    """
 
     def __init__(self, ctx: Ordering) -> None:
         self._ctx = ctx
@@ -137,11 +152,24 @@ class PayBill:
         bill_id: uuid.UUID,
         method: PaymentMethod,
         expected_total_cents: int | None = None,
+        only_delivered: Cashier | None = None,
     ) -> BillDetail:
         """`expected_total_cents` is the total the person charging saw: if the bill no longer adds up to it
         (compared under the table lock, so nothing can change it before the payment) nothing is charged."""
         ctx = self._ctx
         bill = await _locked_open_bill(ctx, tenant_id, bill_id)
+        if only_delivered is not None:
+            # Not committed yet: any refusal below leaves the transaction to roll back with the dishes as they were.
+            await ctx.orders.cancel_undelivered(
+                tenant_id,
+                bill.id,
+                UndeliveredDrop(
+                    changed_by=only_delivered.user_id,
+                    role=only_delivered.role,
+                    at=ctx.clock.now(),
+                    reason=NOT_DELIVERED_REASON,
+                ),
+            )
         orders = await ctx.orders.list_for_bill(tenant_id, bill.id)
         total = sum(order.total_cents for order in orders)
         if expected_total_cents is not None and expected_total_cents != total:

@@ -6,11 +6,12 @@ from typing import Annotated, Literal, TypeVar
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.orders.application.bills import (
     BillDetail,
+    Cashier,
     CloseTable,
     DismissBillRequest,
     GetBill,
@@ -25,6 +26,7 @@ from app.modules.orders.application.kitchen import (
     GetOrderSettings,
     Kitchen,
     ListDeliveries,
+    ListFinishedOrders,
     ListKitchenOrders,
     StaffMember,
     StaffOrder,
@@ -201,6 +203,8 @@ class PaymentIn(_In):
     method: PaymentMethod
     # The total the staff member saw; omitted, the payment takes whatever the bill adds up to.
     expected_total_cents: int | None = Field(default=None, strict=True, ge=0)
+    # True: the dishes that never reached the table are cancelled and only the rest is charged.
+    only_delivered: StrictBool = False
 
 
 class CartModifierOut(BaseModel):
@@ -251,6 +255,8 @@ class OrderItemOut(BaseModel):
     added_by: str
     status: OrderItemStatus
     cancel_reason: str | None
+    # The role that cancelled it: "kitchen", "waiter" or "admin"; null when not cancelled (or not recorded).
+    cancelled_by: Role | None
     modifiers: list[OrderModifierOut]
     # Includes the options' prices.
     unit_price_cents: int
@@ -309,6 +315,8 @@ class StaffOrderItemOut(BaseModel):
     modifiers: list[StaffModifierOut]
     status: OrderItemStatus
     cancel_reason: str | None
+    # The role that cancelled it: "kitchen", "waiter" or "admin"; null when not cancelled (or not recorded).
+    cancelled_by: Role | None
     ready_at: datetime | None
     updated_at: datetime
 
@@ -389,6 +397,7 @@ def _order_out(order: Order) -> OrderOut:
                 added_by=item.added_by,
                 status=item.status,
                 cancel_reason=item.cancel_reason,
+                cancelled_by=item.cancelled_by,
                 modifiers=[OrderModifierOut(group=m.group, name=m.name, price_cents=m.price_cents) for m in item.modifiers],
                 unit_price_cents=item.unit_price_cents,
                 subtotal_cents=item.subtotal_cents,
@@ -419,6 +428,7 @@ def _staff_order_out(view: StaffOrder) -> StaffOrderOut:
                 modifiers=[StaffModifierOut(group=m.group, name=m.name) for m in item.modifiers],
                 status=item.status,
                 cancel_reason=item.cancel_reason,
+                cancelled_by=item.cancelled_by,
                 ready_at=item.ready_at,
                 updated_at=item.updated_at or order.created_at,
             )
@@ -644,7 +654,10 @@ async def read_bill(bill_id: uuid.UUID, staff: Staff, ctx: OrderingDep) -> BillO
 
 @bills_router.post("/{bill_id}/payment", response_model=BillOut)
 async def pay_bill(bill_id: uuid.UUID, body: PaymentIn, staff: Staff, ctx: OrderingDep) -> BillOut | JSONResponse:
-    result = await _run(PayBill(ctx).execute(staff.tenant_id, bill_id, body.method, body.expected_total_cents))
+    cashier = Cashier(user_id=staff.subject_id, role=staff.role) if body.only_delivered else None
+    result = await _run(
+        PayBill(ctx).execute(staff.tenant_id, bill_id, body.method, body.expected_total_cents, cashier)
+    )
     return result if isinstance(result, JSONResponse) else _bill_out(result)
 
 
@@ -667,6 +680,12 @@ async def close_table(bill_id: uuid.UUID, staff: Staff, ctx: OrderingDep) -> Res
 @staff_router.get("/kitchen/orders", response_model=list[StaffOrderOut])
 async def kitchen_orders(staff: KitchenStaff, ctx: KitchenDep) -> list[StaffOrderOut]:
     return [_staff_order_out(view) for view in await ListKitchenOrders(ctx).execute(staff.tenant_id)]
+
+
+@staff_router.get("/kitchen/orders/finished", response_model=list[StaffOrderOut])
+async def finished_kitchen_orders(staff: KitchenStaff, ctx: KitchenDep) -> list[StaffOrderOut]:
+    """Orders of open bills with nothing left to cook, the one finished last first."""
+    return [_staff_order_out(view) for view in await ListFinishedOrders(ctx).execute(staff.tenant_id)]
 
 
 @staff_router.get("/deliveries", response_model=list[StaffOrderOut])

@@ -9,7 +9,9 @@ from app.modules.orders.application.kitchen import (
     ChangeDishStatus,
     GetOrderSettings,
     Kitchen,
+    MAX_FINISHED_ORDERS,
     ListDeliveries,
+    ListFinishedOrders,
     ListKitchenOrders,
     StaffMember,
     UpdateOrderSettings,
@@ -105,6 +107,18 @@ class InMemoryOrders:
             key=lambda o: o.number,
         )
 
+    async def list_without_dishes_in(self, tenant_id: uuid.UUID, statuses: frozenset[OrderItemStatus]) -> list[Order]:
+        return sorted(
+            (
+                o
+                for o in self.orders.values()
+                if o.tenant_id == tenant_id
+                and self._bills.bills[o.bill_id].is_open
+                and not any(i.status in statuses for i in o.items)
+            ),
+            key=lambda o: o.number,
+        )
+
     async def change_dishes(self, tenant_id: uuid.UUID, order_id: uuid.UUID, change: DishChange) -> bool:
         order = self.orders[order_id]
         moving = [item for item in order.items if item.id in change.item_ids]
@@ -119,6 +133,7 @@ class InMemoryOrders:
                     updated_at=change.at,
                     ready_at=change.at if change.target is READY else item.ready_at,
                     cancel_reason=change.reason if change.target is CANCELLED else item.cancel_reason,
+                    cancelled_by=change.role if change.target is CANCELLED else item.cancelled_by,
                 )
                 if item.id in change.item_ids
                 else item
@@ -443,3 +458,17 @@ async def test_repeating_an_add_returns_the_order_and_a_reused_id_is_taken() -> 
     with pytest.raises(OrderIdTaken):
         await add.execute(TENANT_A, other.id, taco, 1, dish_id=dish_id)
     assert world.uow.commits == 1
+
+
+async def test_the_finished_list_keeps_the_newest_thirty_orders_with_nothing_left_to_cook() -> None:
+    world = World()
+    for number in range(1, 33):
+        world.order(number, OrderItemStatus.READY, OrderItemStatus.CANCELLED)
+    world.order(33, OrderItemStatus.READY, OrderItemStatus.QUEUED)  # still has a dish to cook
+    paid = world.order(34, OrderItemStatus.DELIVERED)
+    world.pay(paid)  # a paid bill leaves the list
+
+    finished = await ListFinishedOrders(world.ctx).execute(TENANT_A)
+
+    assert [view.order.number for view in finished] == list(range(32, 2, -1))
+    assert len(finished) == MAX_FINISHED_ORDERS

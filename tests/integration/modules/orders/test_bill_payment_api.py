@@ -126,3 +126,85 @@ def test_another_tenant_never_learns_a_bill_exists_from_the_expected_total(
 
     assert (refused.status_code, refused.json()["detail"]) == (404, "Bill not found")
     assert table.bill()["id"] == bill["id"]
+
+
+# --- Paying only what reached the table ------------------------------------------------------------
+
+NOT_DELIVERED = "Not delivered when the bill was paid"
+
+
+def _served_in_part(table: Table) -> tuple[Json, Json]:
+    """One order with a delivered, a ready and a started dish, and a second order nobody started."""
+    first = send_order(table.tablet, table.items["pastor"], 3)
+    second = send_order(table.tablet, table.items["suadero"], 1)
+    ok(mark(table.cook, first, first["items"][:2], "ready"))
+    ok(mark(table.waiter, first, first["items"][:1], "delivered"))
+    ok(mark(table.cook, first, first["items"][2:], "preparing"))
+    return first, second
+
+
+def _dishes(table: Table, bill_id: str) -> list[tuple[str, str | None, str | None]]:
+    bill = ok(table.waiter.get(f"{BILLS_URL}/{bill_id}"))
+    return [
+        (item["status"], item["cancel_reason"], item["cancelled_by"])
+        for order in bill["orders"]
+        for item in order["items"]
+    ]
+
+
+def test_paying_only_what_was_delivered_takes_the_rest_off_the_bill_and_closes_it(table: Table) -> None:
+    _served_in_part(table)
+    seen = table.bill()
+    assert seen["total_cents"] == 3 * 2500 + 2700
+
+    paid = ok(pay(table.waiter, seen["id"], method="card", only_delivered=True, expected_total_cents=2500))
+
+    assert (paid["total_cents"], paid["payment_method"], paid["closed_at"] is not None) == (2500, "card", True)
+    dropped = ("cancelled", NOT_DELIVERED, "waiter")
+    assert _dishes(table, seen["id"]) == [("delivered", None, None), dropped, dropped, dropped]
+    assert tables_overview(table.waiter)[0]["bill"] is None
+    assert ok(table.cook.get("/api/v1/kitchen/orders")) == []
+
+
+def test_a_stale_delivered_total_charges_nothing_and_cancels_nothing(table: Table) -> None:
+    first, _ = _served_in_part(table)
+    seen = table.bill()
+    before = _dishes(table, seen["id"])
+    ok(mark(table.waiter, first, first["items"][1:2], "delivered"))  # another dish arrives meanwhile
+
+    refused = pay(table.waiter, seen["id"], only_delivered=True, expected_total_cents=2500)
+
+    assert (refused.status_code, refused.json()["detail"]) == (409, BILL_CHANGED)
+    after = _dishes(table, seen["id"])
+    assert after[1][0] == "delivered" and [after[0], *after[2:]] == [before[0], *before[2:]]
+    assert table.bill()["closed_at"] is None
+
+
+def test_paying_only_what_was_delivered_with_nothing_delivered_charges_and_cancels_nothing(table: Table) -> None:
+    send_order(table.tablet, table.items["pastor"], 2)
+    seen = table.bill()
+
+    refused = pay(table.waiter, seen["id"], only_delivered=True)
+
+    assert (refused.status_code, refused.json()["detail"]) == (
+        409,
+        "This bill has nothing to charge; close the table instead",
+    )
+    assert [status for status, _, _ in _dishes(table, seen["id"])] == ["queued", "queued"]
+    assert table.bill()["closed_at"] is None
+
+
+def test_a_payment_still_charges_every_dish_unless_asked_otherwise(table: Table) -> None:
+    _served_in_part(table)
+    seen = table.bill()
+
+    paid = ok(pay(table.waiter, seen["id"], only_delivered=False))
+
+    assert paid["total_cents"] == 3 * 2500 + 2700
+    assert [status for status, _, _ in _dishes(table, seen["id"])] == ["delivered", "ready", "preparing", "queued"]
+
+
+def test_only_delivered_must_be_a_boolean(table: Table) -> None:
+    send_order(table.tablet, table.items["pastor"], 1)
+
+    assert pay(table.waiter, table.bill()["id"], only_delivered="yes").status_code == 422

@@ -22,6 +22,8 @@ MAX_CART_LINES = 100
 MAX_BILL_TOTAL_CENTS = 1_000_000_000
 MAX_GUEST_NAME_LENGTH = 30
 MAX_REASON_LENGTH = 200
+# Why a dish left the bill when the staff charged only what had reached the table.
+NOT_DELIVERED_REASON = "Not delivered when the bill was paid"
 # Who a dish added by the staff to a sent order shows as added by.
 STAFF_NAME = "Staff"
 # Orders waiting longer than this are highlighted; each tenant may change it.
@@ -253,6 +255,9 @@ class OrderItem:
     ready_at: datetime | None = None
     updated_at: datetime | None = None
     cancel_reason: str | None = None
+    # The role of whoever cancelled it (the kitchen rejecting it is not the waiter cancelling it); None on
+    # dishes cancelled before the role was recorded.
+    cancelled_by: Role | None = None
     # A copy of the options chosen when it was ordered; `unit_price_cents` already includes them.
     modifiers: tuple[ChosenModifier, ...] = ()
     id: uuid.UUID = field(default_factory=uuid.uuid4)

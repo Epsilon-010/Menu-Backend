@@ -20,7 +20,7 @@ from app.modules.orders.domain.model import (
 )
 from app.modules.orders.domain.errors import OrderIdTaken
 from app.modules.orders.domain.modifiers import ChosenModifier
-from app.modules.orders.domain.ports import DishChange
+from app.modules.orders.domain.ports import DishChange, UndeliveredDrop
 from app.modules.orders.infrastructure.models import (
     BillModel,
     CartLineModel,
@@ -32,6 +32,7 @@ from app.modules.orders.infrastructure.models import (
     OrderModel,
     OrderSettingsModel,
 )
+from app.shared.domain.principal import Role
 from app.shared.infrastructure.database import advisory_xact_lock, affected_rows, violated_unique_constraint
 
 
@@ -367,6 +368,7 @@ class SqlAlchemyOrderRepository:
                     updated_at=item.updated_at,
                     modifiers=_modifiers(item.modifiers),
                     cancel_reason=item.cancel_reason,
+                    cancelled_by=Role(item.cancelled_by) if item.cancelled_by else None,
                 )
             )
         return [
@@ -421,6 +423,55 @@ class SqlAlchemyOrderRepository:
         # A paid bill is frozen: its orders leave the staff queues.
         open_bills = select(BillModel.id).where(BillModel.tenant_id == tenant_id, BillModel.closed_at.is_(None))
         return await self._orders(tenant_id, OrderModel.id.in_(with_dishes), OrderModel.bill_id.in_(open_bills))
+
+    async def list_without_dishes_in(self, tenant_id: uuid.UUID, statuses: frozenset[OrderItemStatus]) -> list[Order]:
+        with_dishes = select(OrderItemModel.order_id).where(
+            OrderItemModel.tenant_id == tenant_id, OrderItemModel.status.in_([status.value for status in statuses])
+        )
+        open_bills = select(BillModel.id).where(BillModel.tenant_id == tenant_id, BillModel.closed_at.is_(None))
+        return await self._orders(tenant_id, OrderModel.id.not_in(with_dishes), OrderModel.bill_id.in_(open_bills))
+
+    async def cancel_undelivered(self, tenant_id: uuid.UUID, bill_id: uuid.UUID, change: UndeliveredDrop) -> int:
+        of_bill = select(OrderModel.id).where(OrderModel.tenant_id == tenant_id, OrderModel.bill_id == bill_id)
+        pending = [OrderItemStatus.QUEUED.value, OrderItemStatus.PREPARING.value, OrderItemStatus.READY.value]
+        # Locks the rows (the caller already holds the table lock) and reads where each dish comes from.
+        rows = await self._session.execute(
+            select(OrderItemModel.id, OrderItemModel.status)
+            .where(
+                OrderItemModel.tenant_id == tenant_id,
+                OrderItemModel.order_id.in_(of_bill),
+                OrderItemModel.status.in_(pending),
+            )
+            .with_for_update()
+        )
+        previous = {row[0]: row[1] for row in rows}
+        if not previous:
+            return 0
+        await self._session.execute(
+            update(OrderItemModel)
+            .where(OrderItemModel.tenant_id == tenant_id, OrderItemModel.id.in_(list(previous)))
+            .values(
+                status=OrderItemStatus.CANCELLED.value,
+                updated_at=change.at,
+                cancel_reason=change.reason,
+                cancelled_by=change.role.value,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        self._session.add_all(
+            OrderItemChangeModel(
+                tenant_id=tenant_id,
+                order_item_id=item_id,
+                from_status=status,
+                to_status=OrderItemStatus.CANCELLED.value,
+                changed_by=change.changed_by,
+                changed_at=change.at,
+                reason=change.reason,
+            )
+            for item_id, status in previous.items()
+        )
+        await self._session.flush()
+        return len(previous)
 
     async def add_dish(self, tenant_id: uuid.UUID, order_id: uuid.UUID, dish: OrderItem) -> None:
         # The caller holds the table lock, so no other dish of this order takes the same position.
@@ -481,6 +532,7 @@ class SqlAlchemyOrderRepository:
             values["ready_at"] = change.at
         if change.target is OrderItemStatus.CANCELLED:
             values["cancel_reason"] = change.reason
+            values["cancelled_by"] = change.role.value
         # The guarantee: only dishes still in an expected state move. Fewer rows than asked means the
         # caller fails and rolls back, so a batch is all or nothing.
         result = await self._session.execute(

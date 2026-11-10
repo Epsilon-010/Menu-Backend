@@ -290,7 +290,8 @@ def test_the_kitchen_never_sees_prices(kitchen: Kitchen) -> None:
         assert not {key for key in keys(document) if "cents" in key or "price" in key or "total" in key}
     assert set(changed) == {"id", "number", "table_id", "table_name", "sent_by", "created_at", "status", "items"}
     assert set(changed["items"][0]) == {
-        "id", "name", "quantity", "note", "added_by", "modifiers", "status", "cancel_reason", "ready_at", "updated_at",
+        "id", "name", "quantity", "note", "added_by", "modifiers", "status", "cancel_reason", "cancelled_by", "ready_at",
+        "updated_at",
     }
 
 
@@ -356,3 +357,63 @@ def test_each_tenant_has_its_own_threshold(
     ok(kitchen.admin.patch(SETTINGS_URL, json={"late_order_minutes": 40}))
 
     assert ok(admin_of(new_client, "boss@example.com").get(SETTINGS_URL)) == {"late_order_minutes": 15}
+
+
+# --- Finished orders and who cancelled a dish -------------------------------------------------------
+
+FINISHED_URL = "/api/v1/kitchen/orders/finished"
+
+
+def test_an_order_moves_to_the_finished_list_when_the_kitchen_has_nothing_left_to_cook(kitchen: Kitchen) -> None:
+    first, second = kitchen.order(2), kitchen.order()
+    assert queue(kitchen.cook, FINISHED_URL) == []
+
+    ok(mark(kitchen.cook, first, first["items"][:1], "ready"))
+    assert queue(kitchen.cook, FINISHED_URL) == []  # one dish of the order is still queued
+
+    ok(mark(kitchen.cook, first, first["items"][1:], "cancelled", reason="Out of tortillas"))
+    [finished] = queue(kitchen.cook, FINISHED_URL)
+    assert (finished["id"], statuses(finished)) == (first["id"], ["ready", "cancelled"])
+    assert [order["id"] for order in queue(kitchen.cook, KITCHEN_URL)] == [second["id"]]
+
+    # The one finished last goes first, and a delivered order is still there.
+    ok(mark(kitchen.cook, second, second["items"], "ready"))
+    ok(mark(kitchen.waiter, second, second["items"], "delivered"))
+    assert [order["id"] for order in queue(kitchen.admin, FINISHED_URL)] == [second["id"], first["id"]]
+    assert not {key for key in keys(queue(kitchen.cook, FINISHED_URL)) if "cents" in key or "price" in key}
+
+
+def test_finished_orders_leave_the_list_when_their_bill_is_paid(kitchen: Kitchen) -> None:
+    order = kitchen.order()
+    ok(mark(kitchen.cook, order, order["items"], "ready"))
+    [table] = ok(kitchen.waiter.get("/api/v1/bills/tables"))
+
+    ok(kitchen.waiter.post(f"/api/v1/bills/{table['bill']['id']}/payment", json={"method": "cash"}))
+
+    assert queue(kitchen.cook, FINISHED_URL) == []
+
+
+def test_the_finished_list_is_for_the_kitchen_of_its_own_tenant(
+    kitchen: Kitchen, new_client: ClientFactory, tenant_b: SeedResult
+) -> None:
+    order = kitchen.order()
+    ok(mark(kitchen.cook, order, order["items"], "ready"))
+    other_cook = staff_of(new_client, admin_of(new_client, "boss@example.com"), "cook.burger", "kitchen")
+
+    assert queue(other_cook, FINISHED_URL) == []
+    assert kitchen.waiter.get(FINISHED_URL).status_code == 403
+    assert kitchen.tablet.get(FINISHED_URL).status_code == 403
+
+
+@pytest.mark.parametrize("who", ["cook", "waiter", "admin"])
+def test_a_cancelled_dish_says_which_role_cancelled_it(kitchen: Kitchen, who: str) -> None:
+    order = kitchen.order(2)
+    role = {"cook": "kitchen", "waiter": "waiter", "admin": "admin"}[who]
+
+    changed = ok(mark(getattr(kitchen, who), order, order["items"][:1], "cancelled", reason="No longer wanted"))
+
+    assert [item["cancelled_by"] for item in changed["items"]] == [role, None]
+    [seen_by_table] = ok(kitchen.tablet.get(ORDERS_URL))
+    assert [item["cancelled_by"] for item in seen_by_table["items"]] == [role, None]
+    [table] = ok(kitchen.waiter.get("/api/v1/bills/tables"))
+    assert [item["cancelled_by"] for item in table["bill"]["orders"][0]["items"]] == [role, None]
