@@ -5,6 +5,7 @@ from typing import Protocol
 
 from app.modules.orders.domain.modifiers import MenuModifierGroup
 from app.modules.orders.domain.model import Bill, Cart, CartLine, Guest, Order, OrderItem, OrderItemStatus
+from app.shared.domain.principal import Role
 
 
 class TableLocks(Protocol):
@@ -72,6 +73,8 @@ class DishChange:
     sources: frozenset[OrderItemStatus]
     target: OrderItemStatus
     changed_by: uuid.UUID
+    # The role `changed_by` acted with; a cancelled dish keeps it.
+    role: Role
     at: datetime
     reason: str | None = None
 
@@ -97,6 +100,10 @@ class OrderRepository(Protocol):
 
     async def list_with_dishes_in(self, tenant_id: uuid.UUID, statuses: frozenset[OrderItemStatus]) -> list[Order]:
         """Orders of open bills with at least one dish in one of `statuses` (with all their dishes), by number."""
+        ...
+
+    async def list_without_dishes_in(self, tenant_id: uuid.UUID, statuses: frozenset[OrderItemStatus]) -> list[Order]:
+        """Orders of open bills with no dish in any of `statuses` (with all their dishes), by number."""
         ...
 
     async def add_dish(self, tenant_id: uuid.UUID, order_id: uuid.UUID, dish: OrderItem) -> None:

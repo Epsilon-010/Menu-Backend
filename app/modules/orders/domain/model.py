@@ -253,6 +253,9 @@ class OrderItem:
     ready_at: datetime | None = None
     updated_at: datetime | None = None
     cancel_reason: str | None = None
+    # The role of whoever cancelled it (the kitchen rejecting it is not the waiter cancelling it); None on
+    # dishes cancelled before the role was recorded.
+    cancelled_by: Role | None = None
     # A copy of the options chosen when it was ordered; `unit_price_cents` already includes them.
     modifiers: tuple[ChosenModifier, ...] = ()
     id: uuid.UUID = field(default_factory=uuid.uuid4)

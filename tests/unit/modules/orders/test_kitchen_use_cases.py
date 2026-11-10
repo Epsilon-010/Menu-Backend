@@ -105,6 +105,18 @@ class InMemoryOrders:
             key=lambda o: o.number,
         )
 
+    async def list_without_dishes_in(self, tenant_id: uuid.UUID, statuses: frozenset[OrderItemStatus]) -> list[Order]:
+        return sorted(
+            (
+                o
+                for o in self.orders.values()
+                if o.tenant_id == tenant_id
+                and self._bills.bills[o.bill_id].is_open
+                and not any(i.status in statuses for i in o.items)
+            ),
+            key=lambda o: o.number,
+        )
+
     async def change_dishes(self, tenant_id: uuid.UUID, order_id: uuid.UUID, change: DishChange) -> bool:
         order = self.orders[order_id]
         moving = [item for item in order.items if item.id in change.item_ids]
@@ -119,6 +131,7 @@ class InMemoryOrders:
                     updated_at=change.at,
                     ready_at=change.at if change.target is READY else item.ready_at,
                     cancel_reason=change.reason if change.target is CANCELLED else item.cancel_reason,
+                    cancelled_by=change.role if change.target is CANCELLED else item.cancelled_by,
                 )
                 if item.id in change.item_ids
                 else item

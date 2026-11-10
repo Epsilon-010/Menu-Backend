@@ -101,6 +101,8 @@ class OrderItemModel(UUIDPrimaryKey, Base):
     queued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     cancel_reason: Mapped[str | None] = mapped_column(String(200))
+    # Role of whoever cancelled it; null on dishes cancelled before it was recorded.
+    cancelled_by: Mapped[str | None] = mapped_column(String(8))
     # Copy of the chosen options when ordered: [{"option_id", "group", "name", "price_cents"}].
     modifiers: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, server_default=text("'[]'"))
 

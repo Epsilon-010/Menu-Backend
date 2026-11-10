@@ -25,6 +25,7 @@ from app.modules.orders.application.kitchen import (
     GetOrderSettings,
     Kitchen,
     ListDeliveries,
+    ListFinishedOrders,
     ListKitchenOrders,
     StaffMember,
     StaffOrder,
@@ -251,6 +252,8 @@ class OrderItemOut(BaseModel):
     added_by: str
     status: OrderItemStatus
     cancel_reason: str | None
+    # The role that cancelled it: "kitchen", "waiter" or "admin"; null when not cancelled (or not recorded).
+    cancelled_by: Role | None
     modifiers: list[OrderModifierOut]
     # Includes the options' prices.
     unit_price_cents: int
@@ -309,6 +312,8 @@ class StaffOrderItemOut(BaseModel):
     modifiers: list[StaffModifierOut]
     status: OrderItemStatus
     cancel_reason: str | None
+    # The role that cancelled it: "kitchen", "waiter" or "admin"; null when not cancelled (or not recorded).
+    cancelled_by: Role | None
     ready_at: datetime | None
     updated_at: datetime
 
@@ -389,6 +394,7 @@ def _order_out(order: Order) -> OrderOut:
                 added_by=item.added_by,
                 status=item.status,
                 cancel_reason=item.cancel_reason,
+                cancelled_by=item.cancelled_by,
                 modifiers=[OrderModifierOut(group=m.group, name=m.name, price_cents=m.price_cents) for m in item.modifiers],
                 unit_price_cents=item.unit_price_cents,
                 subtotal_cents=item.subtotal_cents,
@@ -419,6 +425,7 @@ def _staff_order_out(view: StaffOrder) -> StaffOrderOut:
                 modifiers=[StaffModifierOut(group=m.group, name=m.name) for m in item.modifiers],
                 status=item.status,
                 cancel_reason=item.cancel_reason,
+                cancelled_by=item.cancelled_by,
                 ready_at=item.ready_at,
                 updated_at=item.updated_at or order.created_at,
             )
@@ -667,6 +674,12 @@ async def close_table(bill_id: uuid.UUID, staff: Staff, ctx: OrderingDep) -> Res
 @staff_router.get("/kitchen/orders", response_model=list[StaffOrderOut])
 async def kitchen_orders(staff: KitchenStaff, ctx: KitchenDep) -> list[StaffOrderOut]:
     return [_staff_order_out(view) for view in await ListKitchenOrders(ctx).execute(staff.tenant_id)]
+
+
+@staff_router.get("/kitchen/orders/finished", response_model=list[StaffOrderOut])
+async def finished_kitchen_orders(staff: KitchenStaff, ctx: KitchenDep) -> list[StaffOrderOut]:
+    """Orders of open bills with nothing left to cook, the one finished last first."""
+    return [_staff_order_out(view) for view in await ListFinishedOrders(ctx).execute(staff.tenant_id)]
 
 
 @staff_router.get("/deliveries", response_model=list[StaffOrderOut])

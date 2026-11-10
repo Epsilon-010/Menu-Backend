@@ -32,6 +32,7 @@ from app.modules.orders.infrastructure.models import (
     OrderModel,
     OrderSettingsModel,
 )
+from app.shared.domain.principal import Role
 from app.shared.infrastructure.database import advisory_xact_lock, affected_rows, violated_unique_constraint
 
 
@@ -367,6 +368,7 @@ class SqlAlchemyOrderRepository:
                     updated_at=item.updated_at,
                     modifiers=_modifiers(item.modifiers),
                     cancel_reason=item.cancel_reason,
+                    cancelled_by=Role(item.cancelled_by) if item.cancelled_by else None,
                 )
             )
         return [
@@ -421,6 +423,13 @@ class SqlAlchemyOrderRepository:
         # A paid bill is frozen: its orders leave the staff queues.
         open_bills = select(BillModel.id).where(BillModel.tenant_id == tenant_id, BillModel.closed_at.is_(None))
         return await self._orders(tenant_id, OrderModel.id.in_(with_dishes), OrderModel.bill_id.in_(open_bills))
+
+    async def list_without_dishes_in(self, tenant_id: uuid.UUID, statuses: frozenset[OrderItemStatus]) -> list[Order]:
+        with_dishes = select(OrderItemModel.order_id).where(
+            OrderItemModel.tenant_id == tenant_id, OrderItemModel.status.in_([status.value for status in statuses])
+        )
+        open_bills = select(BillModel.id).where(BillModel.tenant_id == tenant_id, BillModel.closed_at.is_(None))
+        return await self._orders(tenant_id, OrderModel.id.not_in(with_dishes), OrderModel.bill_id.in_(open_bills))
 
     async def add_dish(self, tenant_id: uuid.UUID, order_id: uuid.UUID, dish: OrderItem) -> None:
         # The caller holds the table lock, so no other dish of this order takes the same position.
@@ -481,6 +490,7 @@ class SqlAlchemyOrderRepository:
             values["ready_at"] = change.at
         if change.target is OrderItemStatus.CANCELLED:
             values["cancel_reason"] = change.reason
+            values["cancelled_by"] = change.role.value
         # The guarantee: only dishes still in an expected state move. Fewer rows than asked means the
         # caller fails and rolls back, so a batch is all or nothing.
         result = await self._session.execute(
