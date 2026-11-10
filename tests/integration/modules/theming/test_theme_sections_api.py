@@ -69,7 +69,7 @@ def remove_menu(doc: Json) -> None:
 
 
 def unknown_type(doc: Json) -> None:
-    doc["layout"]["sections"].append({"id": str(uuid.uuid4()), "type": "video"})
+    doc["layout"]["sections"].append({"id": str(uuid.uuid4()), "type": "SECRETVAL"})
 
 
 def long_title(doc: Json) -> None:
@@ -79,7 +79,7 @@ def long_title(doc: Json) -> None:
 
 
 def extra_field(doc: Json) -> None:
-    doc["layout"]["sections"].append({"id": str(uuid.uuid4()), "type": "divider", "color": "#ff0000"})
+    doc["layout"]["sections"].append({"id": str(uuid.uuid4()), "type": "divider", "color": "SECRETVAL"})
 
 
 @pytest.mark.parametrize(
@@ -102,16 +102,23 @@ def test_an_invalid_page_is_rejected_naming_the_field(
     assert draft_of(admin)["draft"] == before
 
 
-@pytest.mark.parametrize("change", [unknown_type, extra_field])
-def test_an_unknown_section_or_field_is_a_422_without_echoing_values(
-    new_client: ClientFactory, tenant_a: SeedResult, change: Callable[[Json], None]  # noqa: F811
+@pytest.mark.parametrize(
+    ("change", "detail"),
+    [
+        (unknown_type, "Invalid theme value: layout.sections.2.type"),
+        (extra_field, "Invalid theme value: layout.sections.2.color"),
+    ],
+)
+def test_an_unknown_section_or_field_is_a_422_naming_the_place_without_echoing_what_was_sent(
+    new_client: ClientFactory, tenant_a: SeedResult, change: Callable[[Json], None], detail: str  # noqa: F811
 ) -> None:
     admin = admin_of(new_client)
     doc = draft_of(admin)["draft"]
     change(doc)
-    response = save(admin, doc)
-    assert response.status_code == 422
-    assert "#ff0000" not in response.text and "video" not in response.json()["detail"]
+    for response in (save(admin, doc), admin.post(IMPORT_URL, json=doc)):
+        assert response.status_code == 422
+        assert response.json()["detail"].startswith(detail)
+        assert "SECRETVAL" not in response.text
 
 
 def test_tables_cannot_change_the_page_and_tenants_never_see_each_other(

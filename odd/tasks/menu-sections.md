@@ -77,3 +77,11 @@ Delivery: one PR per repo (as previous slices); Backend merges first. Tests: `uv
   Advisories: applying a template or "Restablecer" replaces the page sections (featured products included); featured
   item ids of another tenant in an imported file are kept but never drawn; the preview click is a mouse shortcut
   (the panel list is the keyboard path). Next: T5 (image section) and native review.
+- **L6 (2026-11-10) review and verification:** native review of Backend `38d796a..` (lenses risk, reliability)
+  approved with no findings and acknowledged (`review-7bd9555d8c0c69b0`); Frontend assessed medium, `under_budget`
+  (pending in its slice). Independent verifier: S4, S5, S8 and invariants ok (migration probed on a scratch DB, 21 docs
+  up/down/up); **1 blocker in S3**: the Pydantic tagged union echoed an unknown `type` value in the 422
+  (`union_tag_invalid`). Fixed: `LayoutDoc.sections` is now `list[dict]` and the domain names the path
+  (`layout.sections.N.type`) without the value; pinned by `test_theme_sections_api.py` (PUT and import, RED observed).
+  Theming tests 429 passed. Advisories kept: the name (not the value) of an unknown key still appears in the 422, as
+  everywhere in the project (Slice 14 advisory); text sections accept `<b>` as plain text (React escapes it).

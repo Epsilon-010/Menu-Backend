@@ -163,41 +163,6 @@ class CategoryLayoutDoc(_Strict):
     card_template: StrictStr
 
 
-class HeroSectionDoc(_Strict):
-    id: StrictStr
-    type: Literal["hero"]
-
-
-class MenuSectionDoc(_Strict):
-    id: StrictStr
-    type: Literal["menu"]
-
-
-class FeaturedSectionDoc(_Strict):
-    id: StrictStr
-    type: Literal["featured"]
-    title: StrictStr
-    item_ids: list[StrictStr]
-    view: StrictStr
-
-
-class TextSectionDoc(_Strict):
-    id: StrictStr
-    type: Literal["text"]
-    title: StrictStr
-    body: StrictStr
-    align: StrictStr
-    style: StrictStr
-
-
-class DividerSectionDoc(_Strict):
-    id: StrictStr
-    type: Literal["divider"]
-
-
-SectionDoc = HeroSectionDoc | MenuSectionDoc | FeaturedSectionDoc | TextSectionDoc | DividerSectionDoc
-
-
 class LayoutDoc(_Strict):
     navigation: StrictStr
     product_view: StrictStr
@@ -212,7 +177,9 @@ class LayoutDoc(_Strict):
     header_blocks: list[StrictStr]
     # By category id; the domain checks the ids, the count and every value.
     categories: dict[StrictStr, CategoryLayoutDoc]
-    sections: list[Annotated[SectionDoc, Field(discriminator="type")]]
+    # Each kind of section has its own fields: the domain checks them all and names the failing one by its full path.
+    # (A Pydantic tagged union would echo an unknown `type` value back in the 422.)
+    sections: list[dict[StrictStr, Any]]
 
 
 class CardImageDoc(_Strict):
