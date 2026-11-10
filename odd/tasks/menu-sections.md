@@ -91,3 +91,11 @@ Delivery: one PR per repo (as previous slices); Backend merges first. Tests: `uv
   and reports `section` in `removed_images`. Backend RED observed (`ImageSection` import error); theming tests 437
   passed. Frontend: "Imagen" in the add gallery, upload/change/remove photo and caption, drawn wide with its caption;
   491 tests, typecheck, lint and build ok (frontend tests written with the code: RED not observed).
+- **L8 (2026-11-10) close:** native review of the whole Backend branch `38d796a..` approved and acknowledged
+  (`review-7793738c43dc40e0`, reliability lens; one informational suggestion: the stale-cache test seeds no v5 key —
+  safe because the key carries `v{SCHEMA_VERSION}`). Independent verifier of T5: no blockers; signature roles, id and
+  caption validation, registry lifecycle (pending → attached → discarded, shared and replaced pictures, kept by saved
+  versions), import emptying and published URLs ok; **full backend suite 1324 passed**. Advisories: trailing control
+  characters in text fields are trimmed rather than rejected (baseline `_Reader.text`); a hand-made import putting the
+  tenant's own in-use banner id in an image section fails with 422 instead of being emptied (same as brand slots).
+  Pending: browser check after merge; Frontend native review (`under_budget`); push and PRs are the user's call.
