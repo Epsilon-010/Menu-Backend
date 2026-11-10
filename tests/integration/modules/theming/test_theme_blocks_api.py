@@ -38,7 +38,7 @@ def test_the_draft_starts_with_the_default_blocks_and_no_category_layouts(
     admin = admin_of(new_client)
     response = draft_of(admin)
     draft = response["draft"]
-    assert draft["schema_version"] == 5
+    assert draft["schema_version"] == 6
     assert draft["cards"]["blocks"] == ["image", "badges", "heading", "description", "add_button"]
     assert draft["layout"]["header_blocks"] == ["banner", "name", "tagline", "welcome"]
     assert draft["layout"]["categories"] == {}
@@ -135,7 +135,7 @@ def test_a_missing_or_extra_field_is_rejected(
     assert draft_of(admin)["draft"] == before
 
 
-def test_a_version_5_export_round_trips_and_a_version_4_export_gets_the_default_blocks(
+def test_a_current_export_round_trips_and_a_version_4_export_gets_the_default_blocks(
     new_client: ClientFactory, tenant_a: SeedResult  # noqa: F811
 ) -> None:
     admin = admin_of(new_client)
@@ -147,8 +147,9 @@ def test_a_version_5_export_round_trips_and_a_version_4_export_gets_the_default_
     del old["cards"]["blocks"]
     del old["layout"]["header_blocks"]
     del old["layout"]["categories"]
+    del old["layout"]["sections"]
     imported = ok(admin.post(IMPORT_URL, json=old))["theme"]
-    assert imported["schema_version"] == 5
+    assert imported["schema_version"] == 6
     assert imported["cards"]["blocks"] == ["image", "badges", "heading", "description", "add_button"]
     assert imported["layout"]["header_blocks"] == ["banner", "name", "tagline", "welcome"]
     assert imported["layout"]["categories"] == {}

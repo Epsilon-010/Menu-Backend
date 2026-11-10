@@ -58,9 +58,9 @@ def rejected_field(doc: dict[str, Any]) -> str:
 
 
 def test_the_default_cards_are_the_current_card() -> None:
-    assert SCHEMA_VERSION == 5
+    assert SCHEMA_VERSION == 6
     doc = default_theme().to_dict()
-    assert doc["schema_version"] == 5
+    assert doc["schema_version"] == 6
     assert doc["cards"] == DEFAULT_CARDS
     assert parse_theme(doc, TENANT) == default_theme()
 

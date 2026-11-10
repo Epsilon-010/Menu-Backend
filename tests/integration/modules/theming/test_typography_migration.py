@@ -30,6 +30,7 @@ def v4_document() -> Json:
     del doc["cards"]["blocks"]
     del doc["layout"]["header_blocks"]
     del doc["layout"]["categories"]
+    del doc["layout"]["sections"]
     doc["schema_version"] = 4
     return doc
 
