@@ -48,7 +48,7 @@ Delivery: one PR per repo (as previous slices); Backend merges first. Tests: `uv
 | T2 | S4 (migration) — Risk item 1 | inline, own commit | done | Backend `f06fc2b` |
 | T3 | S3, S7 (frontend types + renderer) | inline | done | Frontend `f675311` |
 | T4 | S6 (editor) | inline | done | Frontend `d5de521` |
-| T5 | S3 `image`, S6, S7 | inline | pending | |
+| T5 | S3 `image`, S6, S7 | inline | done | Backend `caf7d61`, Frontend `59cd70f` |
 | T6 | S5, S8 (new presets, `landing-page-design` skill) | inline | done | Backend `4c056bc` |
 
 ## Log
@@ -85,3 +85,9 @@ Delivery: one PR per repo (as previous slices); Backend merges first. Tests: `uv
   (`layout.sections.N.type`) without the value; pinned by `test_theme_sections_api.py` (PUT and import, RED observed).
   Theming tests 429 passed. Advisories kept: the name (not the value) of an unknown key still appears in the 422, as
   everywhere in the project (Slice 14 advisory); text sections accept `<b>` as plain text (React escapes it).
+- **L7 (2026-11-10) T5:** `image` section `{image_id (tenant's `sections` folder or null), caption ≤120}`; new
+  `ImageKind.SECTION` (jpg/png/webp, served with the banner variant), signature kind `section`; `Theme.images()`
+  includes them so the image registry keeps them attached while any theme uses them; import empties unavailable ones
+  and reports `section` in `removed_images`. Backend RED observed (`ImageSection` import error); theming tests 437
+  passed. Frontend: "Imagen" in the add gallery, upload/change/remove photo and caption, drawn wide with its caption;
+  491 tests, typecheck, lint and build ok (frontend tests written with the code: RED not observed).
