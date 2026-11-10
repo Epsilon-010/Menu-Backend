@@ -39,7 +39,7 @@ Frontend paths are relative to `Menu-Frontend/src`; backend paths to the backend
 |---|---|---|---|---|
 | T1 | S1-S7 | delegated, parallel with T2 (disjoint repositories, each several minutes) | done, pytest 1246 passed | `e9d18c3`, `e3e5a7f`, `072ac88`, `3260d58`, `9e769fd`, `7923322`, `bc6c762` |
 | T2 | S8-S20 | delegated, parallel with T1 | done, vitest 469 passed, typecheck, lint and build pass | 11 commits after `0ad411c` |
-| T3 | S1-S20 | independent verifier (Risk items 1, 2, 4) | pending | |
+| T3 | S1-S20 | independent verifier (Risk items 1, 3, 4), then native review | done, S1-S20 pass, no blockers (S14, S15 by code and unit tests, no browser) | n/a |
 
 ## Log
 
@@ -47,3 +47,7 @@ Frontend paths are relative to `Menu-Frontend/src`; backend paths to the backend
 - L2 (2026-11-09, user, after the audit report): "corrgie todos"
 - L3: Scope read as every defect reported, not only the three High ones. Not included: the backend architecture bends and root Dockerfile user / open `/docs` (audit item 7): a refactor and deployment hardening, deployment being out of scope per CLAUDE.md. Report to the user.
 - L4: Forecast about 500 authored lines backend and 350 frontend. The uncommitted `fix/load-hardening` work in `Backend/` stays untouched; its files (`qr_login.py`, `cache.py`) are not in scope here.
+- L5: Independent verifier, S1-S20 pass, no blockers. Live probes against baseline `0625d08` and candidate; 36 GET endpoint and role combinations byte-identical; data hashes unchanged after rejected commands. Follow-up commit `974d035`.
+- L6: Advisories, open: a same-QR rescan without the local marker takes another guest seat; the retry screen exists only on `RequireRole` routes; expired `pending` uploads count until the worker deletes them, so with Celery down a tenant at the limit stays at 429; after a 409 whose reload fails, the dialog still shows the old total; the S4 index is not built `CONCURRENTLY`; staff can still add a dish to a deactivated table's bill.
+- L7: The review against `bd70c4a` (61 files) exceeded the native context budget. Scoped review of `0625d08..974d035` (lenses risk, resilience, reliability) approved and acknowledged, lineage `review-e0140d7202ab8477`. Frontend `2717ef5..fix/audit-findings` (4 lenses) approved and acknowledged, lineage `review-06fcfbe3b407da21`, 8 non-blocking advisories.
+- L8 (2026-11-10, user): "ya lo susbiste para que haga merge? o que esperas revisa lo que tengas que revisar pero ya dejame hacer merge péroreivsq uq eteseb ien lo que subo". Both branches pushed for the user to merge.
