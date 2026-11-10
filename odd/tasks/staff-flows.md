@@ -49,4 +49,7 @@ Delivery: one PR per repo, backend first. Runners: `uv run pytest` (backend), `n
   branch was applied to the dev database; the end to end run used its own database.
 - L3: Vitest fails on every file when started from Git Bash (drive letter case); it runs from PowerShell.
 - L4: dishes cancelled before the migration have `cancelled_by` null and read "Cancelado".
+- L5: commits Backend `3e7698b`, Menu-Frontend `37a4366`. Native review of the backend commit approved and
+  acknowledged (`review-5211d89c8b1b99c1`, lenses risk and reliability); its one advisory: no test proves the cap of
+  30 finished orders. Frontend assessed `under_budget`, not reviewed. No independent verifier was run.
 - Open question for the user (S4): block the payment while dishes are not delivered, or keep the warning.
