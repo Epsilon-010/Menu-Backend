@@ -6,11 +6,12 @@ from typing import Annotated, Literal, TypeVar
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.orders.application.bills import (
     BillDetail,
+    Cashier,
     CloseTable,
     DismissBillRequest,
     GetBill,
@@ -202,6 +203,8 @@ class PaymentIn(_In):
     method: PaymentMethod
     # The total the staff member saw; omitted, the payment takes whatever the bill adds up to.
     expected_total_cents: int | None = Field(default=None, strict=True, ge=0)
+    # True: the dishes that never reached the table are cancelled and only the rest is charged.
+    only_delivered: StrictBool = False
 
 
 class CartModifierOut(BaseModel):
@@ -651,7 +654,10 @@ async def read_bill(bill_id: uuid.UUID, staff: Staff, ctx: OrderingDep) -> BillO
 
 @bills_router.post("/{bill_id}/payment", response_model=BillOut)
 async def pay_bill(bill_id: uuid.UUID, body: PaymentIn, staff: Staff, ctx: OrderingDep) -> BillOut | JSONResponse:
-    result = await _run(PayBill(ctx).execute(staff.tenant_id, bill_id, body.method, body.expected_total_cents))
+    cashier = Cashier(user_id=staff.subject_id, role=staff.role) if body.only_delivered else None
+    result = await _run(
+        PayBill(ctx).execute(staff.tenant_id, bill_id, body.method, body.expected_total_cents, cashier)
+    )
     return result if isinstance(result, JSONResponse) else _bill_out(result)
 
 

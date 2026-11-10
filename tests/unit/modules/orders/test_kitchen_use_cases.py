@@ -9,7 +9,9 @@ from app.modules.orders.application.kitchen import (
     ChangeDishStatus,
     GetOrderSettings,
     Kitchen,
+    MAX_FINISHED_ORDERS,
     ListDeliveries,
+    ListFinishedOrders,
     ListKitchenOrders,
     StaffMember,
     UpdateOrderSettings,
@@ -456,3 +458,17 @@ async def test_repeating_an_add_returns_the_order_and_a_reused_id_is_taken() -> 
     with pytest.raises(OrderIdTaken):
         await add.execute(TENANT_A, other.id, taco, 1, dish_id=dish_id)
     assert world.uow.commits == 1
+
+
+async def test_the_finished_list_keeps_the_newest_thirty_orders_with_nothing_left_to_cook() -> None:
+    world = World()
+    for number in range(1, 33):
+        world.order(number, OrderItemStatus.READY, OrderItemStatus.CANCELLED)
+    world.order(33, OrderItemStatus.READY, OrderItemStatus.QUEUED)  # still has a dish to cook
+    paid = world.order(34, OrderItemStatus.DELIVERED)
+    world.pay(paid)  # a paid bill leaves the list
+
+    finished = await ListFinishedOrders(world.ctx).execute(TENANT_A)
+
+    assert [view.order.number for view in finished] == list(range(32, 2, -1))
+    assert len(finished) == MAX_FINISHED_ORDERS

@@ -15,10 +15,17 @@ Delivery: one PR per repo, backend first. Runners: `uv run pytest` (backend), `n
     never overlap, at 390, 820 and 1280 px.
 - S3. "en el menu lo de la sesion de salir y asi se ve superpuestos con el menus que se enseña"
   - The top bar is in the page flow (sticky or not, per the theme), never floating over the content.
-- S4. "con lo de mesero si una orden aparece en preparacion o asi se le cobra todo"
-  - Assumption (not confirmed by the user): the payment is still allowed, but the waiter sees how many dishes are
-    not delivered on the table card and a warning in the payment dialog. Blocking the payment in the API would
-    reverse the Slice 7 decision "cuenta cobrada = nada cambia" and is left as a question for the user.
+- S4. "con lo de mesero si una orden aparece en preparacion o asi se le cobra todo"; then (L6) "si dejal con aviso
+  pero puede que se cobre solo lo que ya cobro tipo asi de que solo lo que ya esta marcado como entregado o asi se
+  cobra"; then (L7) "siemrpe que las personas teremine de comer se pagara al final elije tu la merjor opcion y haz el
+  flujo de cobro".
+  - The bill is paid once, at the end. `POST /bills/{id}/payment` accepts `only_delivered` (boolean, default false):
+    true cancels every dish not delivered (queued, preparing or ready) with reason "Not delivered when the bill was
+    paid" and the cashier's role, in the same transaction, then charges the rest and closes the bill. A refused
+    payment (stale total, nothing to charge) cancels nothing. Without it the payment charges every dish, as before.
+  - The payment dialog lists each dish, marks the ones not delivered, lets the waiter choose "Solo lo entregado"
+    (default when something was delivered and something was not) or "Toda la cuenta", shows the total, the method
+    and, for cash, the change.
 - S5. "cuando le doy canecelar desde mesero aparece un enesajeque lo canbcelo cocina"
   - `order_items.cancelled_by` stores the role that cancelled (kitchen, waiter, admin); every order response
     carries `cancelled_by`. Only kitchen cancellations read "Rechazado por la cocina" and raise the waiter alert;
@@ -35,6 +42,7 @@ Delivery: one PR per repo, backend first. Runners: `uv run pytest` (backend), `n
 - [x] T3 (S6) end to end on a separate database (`menu_staffflows`) with the new API on port 8021 and Vite on 5174:
   20 of 20 checks pass; Chrome headless captures at 390, 820 and 1280 px report no horizontal scroll, no clipped
   and no overlapping buttons on kitchen, waiter and menu.
+- [x] T4 (S4) payment flow: backend `only_delivered` and the frontend payment dialog, inline.
 
 ## Log
 
@@ -52,4 +60,12 @@ Delivery: one PR per repo, backend first. Runners: `uv run pytest` (backend), `n
 - L5: commits Backend `3e7698b`, Menu-Frontend `37a4366`. Native review of the backend commit approved and
   acknowledged (`review-5211d89c8b1b99c1`, lenses risk and reliability); its one advisory: no test proves the cap of
   30 finished orders. Frontend assessed `under_budget`, not reviewed. No independent verifier was run.
-- Open question for the user (S4): block the payment while dishes are not delivered, or keep the warning.
+- L6 (2026-11-10, user): "si dejal con aviso pero puede que se cobre solo lo que ya cobro tipo asi de que solo lo que ya
+  esta marcado como entregado o asi se cobra op se amrca como cobrado con su metodo?"
+- L7 (2026-11-10, user): "supongamos que al siempre al gffinal se pide la cuenta lo manejaremos asi siemrpe que las
+  personas teremine de comer se pagara al final elije tu la merjor opcion y haz el flujo de cobro". Decision: no
+  partial payments and the table never stays open after paying; one payment that may leave out what never arrived.
+- L8: T4 evidence. RED: 3 of the new payment tests failed on the old code. GREEN: 175 focused tests. End to end on a
+  separate database: a table with one delivered dish and three pending paid $70.00 with `only_delivered`; the three
+  were cancelled by the waiter, the kitchen and delivery queues emptied, the table was free and `/stats` reported
+  the $70.00 as collected. A delivered-only payment sent with the whole total was refused and cancelled nothing.

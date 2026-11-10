@@ -79,6 +79,16 @@ class DishChange:
     reason: str | None = None
 
 
+@dataclass(frozen=True)
+class UndeliveredDrop:
+    """Who took the undelivered dishes off a bill while paying it, when and why."""
+
+    changed_by: uuid.UUID
+    role: Role
+    at: datetime
+    reason: str
+
+
 class OrderRepository(Protocol):
     async def add(self, order: Order) -> None: ...
 
@@ -104,6 +114,11 @@ class OrderRepository(Protocol):
 
     async def list_without_dishes_in(self, tenant_id: uuid.UUID, statuses: frozenset[OrderItemStatus]) -> list[Order]:
         """Orders of open bills with no dish in any of `statuses` (with all their dishes), by number."""
+        ...
+
+    async def cancel_undelivered(self, tenant_id: uuid.UUID, bill_id: uuid.UUID, change: "UndeliveredDrop") -> int:
+        """Cancels every dish of the bill that has not reached the table (queued, in preparation or ready),
+        whatever its state, and records each change. Returns how many. The caller holds the table lock."""
         ...
 
     async def add_dish(self, tenant_id: uuid.UUID, order_id: uuid.UUID, dish: OrderItem) -> None:

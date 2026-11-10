@@ -20,7 +20,7 @@ from app.modules.orders.domain.model import (
 )
 from app.modules.orders.domain.errors import OrderIdTaken
 from app.modules.orders.domain.modifiers import ChosenModifier
-from app.modules.orders.domain.ports import DishChange
+from app.modules.orders.domain.ports import DishChange, UndeliveredDrop
 from app.modules.orders.infrastructure.models import (
     BillModel,
     CartLineModel,
@@ -430,6 +430,48 @@ class SqlAlchemyOrderRepository:
         )
         open_bills = select(BillModel.id).where(BillModel.tenant_id == tenant_id, BillModel.closed_at.is_(None))
         return await self._orders(tenant_id, OrderModel.id.not_in(with_dishes), OrderModel.bill_id.in_(open_bills))
+
+    async def cancel_undelivered(self, tenant_id: uuid.UUID, bill_id: uuid.UUID, change: UndeliveredDrop) -> int:
+        of_bill = select(OrderModel.id).where(OrderModel.tenant_id == tenant_id, OrderModel.bill_id == bill_id)
+        pending = [OrderItemStatus.QUEUED.value, OrderItemStatus.PREPARING.value, OrderItemStatus.READY.value]
+        # Locks the rows (the caller already holds the table lock) and reads where each dish comes from.
+        rows = await self._session.execute(
+            select(OrderItemModel.id, OrderItemModel.status)
+            .where(
+                OrderItemModel.tenant_id == tenant_id,
+                OrderItemModel.order_id.in_(of_bill),
+                OrderItemModel.status.in_(pending),
+            )
+            .with_for_update()
+        )
+        previous = {row[0]: row[1] for row in rows}
+        if not previous:
+            return 0
+        await self._session.execute(
+            update(OrderItemModel)
+            .where(OrderItemModel.tenant_id == tenant_id, OrderItemModel.id.in_(list(previous)))
+            .values(
+                status=OrderItemStatus.CANCELLED.value,
+                updated_at=change.at,
+                cancel_reason=change.reason,
+                cancelled_by=change.role.value,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        self._session.add_all(
+            OrderItemChangeModel(
+                tenant_id=tenant_id,
+                order_item_id=item_id,
+                from_status=status,
+                to_status=OrderItemStatus.CANCELLED.value,
+                changed_by=change.changed_by,
+                changed_at=change.at,
+                reason=change.reason,
+            )
+            for item_id, status in previous.items()
+        )
+        await self._session.flush()
+        return len(previous)
 
     async def add_dish(self, tenant_id: uuid.UUID, order_id: uuid.UUID, dish: OrderItem) -> None:
         # The caller holds the table lock, so no other dish of this order takes the same position.
