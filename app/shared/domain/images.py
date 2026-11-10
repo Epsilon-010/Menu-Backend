@@ -117,7 +117,9 @@ class ImageRegistry(Protocol):
     methods commit: the calling use case owns the transaction.
     """
 
-    async def register(self, tenant_id: uuid.UUID, public_id: str) -> None: ...
+    async def register(self, tenant_id: uuid.UUID, public_id: str) -> None:
+        """Records a signed image as pending. The media module refuses a tenant with too many waiting."""
+        ...
 
     async def attach(self, tenant_id: uuid.UUID, public_id: str) -> bool:
         """Marks a pending image of the tenant as used. False if it is unknown, used or discarded."""

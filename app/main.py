@@ -51,7 +51,9 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
     app.state.access_tokens = JoseAccessTokens(settings.jwt_secret.get_secret_value())
-    app.state.stream_slots = StreamSlots(settings.sse_max_streams, settings.sse_max_streams_per_session)
+    app.state.stream_slots = StreamSlots(
+        settings.sse_max_streams, settings.sse_max_streams_per_session, settings.sse_max_streams_per_tenant
+    )
     app.state.image_storage = build_image_storage(settings)
     app.state.image_cleanup = CeleryImageCleanupScheduler(create_celery(settings))
     register_problem_handlers(app)
