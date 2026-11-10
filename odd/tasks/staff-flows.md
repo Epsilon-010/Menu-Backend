@@ -69,3 +69,8 @@ Delivery: one PR per repo, backend first. Runners: `uv run pytest` (backend), `n
   separate database: a table with one delivered dish and three pending paid $70.00 with `only_delivered`; the three
   were cancelled by the waiter, the kitchen and delivery queues emptied, the table was free and `/stats` reported
   the $70.00 as collected. A delivered-only payment sent with the whole total was refused and cancelled nothing.
+- L9: commits Backend `15e7939` (payment, plus a unit test for the cap of 30 finished orders, the advisory of L5)
+  and Menu-Frontend `0655767`. Full backend suite: 1335 passed. Native review of the whole backend branch against
+  `main` (33 files, 1690 lines) approved with no findings and acknowledged (`review-8daaf40f3de9d386`). An earlier
+  attempt on the previous candidate (`review-8e8fc99b2a62fbe6`) stopped at `review status` with `operation_timeout`
+  twice; it did not happen again. Frontend commits assessed `under_budget`, not reviewed.
