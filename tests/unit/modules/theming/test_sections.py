@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from app.modules.theming.domain.import_theme import import_theme
+from app.shared.domain.images import ImageKind
 from app.modules.theming.domain.presets import PRESETS
 from app.modules.theming.domain.theme import (
     DEFAULT_SECTIONS,
@@ -14,6 +15,7 @@ from app.modules.theming.domain.theme import (
     SCHEMA_VERSION,
     SECTION_TYPES,
     FeaturedSection,
+    ImageSection,
     InvalidTheme,
     TextSection,
     default_theme,
@@ -67,7 +69,7 @@ def text(**changes: Any) -> Json:
 
 def test_the_theme_is_version_6_and_the_default_page_is_the_header_then_the_menu() -> None:
     assert SCHEMA_VERSION == 6
-    assert SECTION_TYPES == ("hero", "menu", "featured", "text", "divider")
+    assert SECTION_TYPES == ("hero", "menu", "featured", "text", "divider", "image")
     assert (MAX_SECTIONS, MAX_FEATURED_ITEMS) == (20, 12)
     doc = document()
     assert doc["schema_version"] == 6
@@ -174,6 +176,47 @@ def test_templates_follow_the_design_rules_one_typeface_no_italics_no_black_weig
             style = getattr(preset.typography.elements, element)
             assert style.style == "normal" and style.weight <= 700, (preset.id, element)
         assert not preset.colors.gradient.enabled, preset.id
+
+
+def section_image(tenant: uuid.UUID = TENANT) -> str:
+    return f"tenants/{tenant}/sections/{uuid.uuid4().hex}"
+
+
+def image(**changes: Any) -> Json:
+    return {"id": new_id(), "type": "image", "image_id": section_image(), "caption": "Nuestra terraza"} | changes
+
+
+def test_an_image_section_holds_one_image_of_the_tenant_and_a_caption() -> None:
+    assert "image" in SECTION_TYPES
+    picture = image(caption="  Nuestra terraza  ")
+    theme = parse_theme(with_sections(menu(), picture, image(image_id=None, caption="")), TENANT)
+    first, empty = theme.layout.sections[1], theme.layout.sections[2]
+    assert isinstance(first, ImageSection) and first.image_id == picture["image_id"] and first.caption == "Nuestra terraza"
+    assert isinstance(empty, ImageSection) and empty.image_id is None
+    # The image registry keeps it attached while a theme uses it, like the logo and the banner.
+    assert theme.images() == {picture["image_id"]: ImageKind.SECTION}
+
+
+@pytest.mark.parametrize(
+    ("section", "field"),
+    [
+        (image(image_id=f"tenants/{uuid.uuid4()}/sections/abc"), "layout.sections.1.image_id"),  # another tenant
+        (image(image_id=f"tenants/{TENANT}/banners/abc"), "layout.sections.1.image_id"),  # another slot
+        (image(caption="x" * 121), "layout.sections.1.caption"),
+        (image(caption="a\nb"), "layout.sections.1.caption"),
+    ],
+)
+def test_invalid_image_sections_are_rejected(section: Json, field: str) -> None:
+    assert rejected_field(with_sections(menu(), section)) == field
+
+
+def test_importing_keeps_only_section_images_the_tenant_still_uses() -> None:
+    kept, gone = section_image(), section_image()
+    doc = with_sections(menu(), image(image_id=kept), image(image_id=gone))
+    imported = import_theme(doc, TENANT, available_images={kept})
+    images = [section.image_id for section in imported.theme.layout.sections if isinstance(section, ImageSection)]
+    assert images == [kept, None]
+    assert imported.removed_images == ("section",)
 
 
 def test_an_older_export_gets_the_default_page() -> None:

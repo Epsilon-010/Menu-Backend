@@ -148,7 +148,26 @@ def _remove_unavailable_images(doc: dict[str, Any], available: set[str]) -> tupl
             if slot == "background" and part.get("kind") == "image":
                 part["kind"] = "none"
             removed.append(slot)
+    if _remove_unavailable_section_images(doc, available):
+        removed.append("section")
     return tuple(removed)
+
+
+def _remove_unavailable_section_images(doc: dict[str, Any], available: set[str]) -> bool:
+    """Empties image sections whose image is gone; True when any was emptied."""
+    layout = doc.get("layout")
+    sections = layout.get("sections") if isinstance(layout, Mapping) else None
+    if not isinstance(sections, list):
+        return False
+    emptied = False
+    for section in sections:
+        if not isinstance(section, dict) or section.get("type") != "image":
+            continue
+        image_id = section.get("image_id")
+        if isinstance(image_id, str) and image_id not in available:
+            section["image_id"] = None
+            emptied = True
+    return emptied
 
 
 def import_theme(raw: Any, tenant_id: uuid.UUID, available_images: set[str]) -> ImportedTheme:

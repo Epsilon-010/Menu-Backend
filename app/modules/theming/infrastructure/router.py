@@ -282,12 +282,12 @@ class ThemeImportOut(BaseModel):
 
     theme: ThemeDoc
     # Image slots emptied: the image was another business's, or no theme of this one uses it anymore.
-    removed_images: list[Literal["logo", "banner", "background"]]
+    removed_images: list[Literal["logo", "banner", "background", "section"]]
     image_urls: dict[str, str]
 
 
 class ImageSlotIn(_Strict):
-    kind: Literal["logo", "banner", "background"]
+    kind: Literal["logo", "banner", "background", "section"]
 
 
 class UploadSignatureOut(BaseModel):
@@ -303,11 +303,17 @@ class UploadSignatureOut(BaseModel):
     max_bytes: int
 
 
-_SLOT_KINDS = {"logo": ImageKind.LOGO, "banner": ImageKind.BANNER, "background": ImageKind.BACKGROUND}
+_SLOT_KINDS = {
+    "logo": ImageKind.LOGO,
+    "banner": ImageKind.BANNER,
+    "background": ImageKind.BACKGROUND,
+    "section": ImageKind.SECTION,
+}
 _KIND_VARIANTS = {
     ImageKind.LOGO: ImageVariant.LOGO,
     ImageKind.BANNER: ImageVariant.BANNER,
     ImageKind.BACKGROUND: ImageVariant.BACKGROUND,
+    ImageKind.SECTION: ImageVariant.BANNER,  # a wide picture across the menu, like the banner
 }
 
 

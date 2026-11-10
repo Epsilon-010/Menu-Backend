@@ -42,7 +42,8 @@ MAX_CATEGORY_LAYOUTS = 100
 _CATEGORY_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
 
 # The menu page, top to bottom: `hero` is the header (at most one), `menu` the categories (exactly one).
-SECTION_TYPES = ("hero", "menu", "featured", "text", "divider")
+SECTION_TYPES = ("hero", "menu", "featured", "text", "divider", "image")
+MAX_IMAGE_CAPTION_LENGTH = 120
 MAX_SECTIONS = 20
 MAX_FEATURED_ITEMS = 12
 MAX_FEATURED_TITLE_LENGTH = 60
@@ -289,7 +290,17 @@ class DividerSection:
     type: str = field(default="divider", init=False)
 
 
-Section = HeroSection | MenuSection | FeaturedSection | TextSection | DividerSection
+@dataclass(frozen=True)
+class ImageSection:
+    """A picture of the tenant (its `sections` folder) with an optional caption; none yet draws nothing."""
+
+    id: str
+    image_id: str | None
+    caption: str
+    type: str = field(default="image", init=False)
+
+
+Section = HeroSection | MenuSection | FeaturedSection | TextSection | DividerSection | ImageSection
 
 # The page the menu had before it was made of sections. Fixed ids: they only need to be unique within one theme.
 DEFAULT_SECTIONS: tuple[Section, ...] = (
@@ -376,6 +387,11 @@ class Theme:
             (self.brand.logo.image_id, ImageKind.LOGO),
             (self.brand.banner.image_id, ImageKind.BANNER),
             (self.brand.background.image_id, ImageKind.BACKGROUND),
+            *(
+                (section.image_id, ImageKind.SECTION)
+                for section in self.layout.sections
+                if isinstance(section, ImageSection)
+            ),
         )
         return {public_id: kind for public_id, kind in slots if public_id is not None}
 
@@ -800,7 +816,7 @@ def _parse_item_ids(doc: _Reader) -> tuple[str, ...]:
     return item_ids  # type: ignore[return-value]  # no None left
 
 
-def _parse_section(entry: _Reader) -> Section:
+def _parse_section(entry: _Reader, tenant_id: uuid.UUID) -> Section:
     section_id = _uuid(entry.get("id"))
     if section_id is None:
         raise InvalidTheme(entry.name("id"))
@@ -825,18 +841,26 @@ def _parse_section(entry: _Reader) -> Section:
             align=entry.choice("align", TEXT_SECTION_ALIGNS),
             style=entry.choice("style", TEXT_SECTION_STYLES),
         )
+    elif kind == "image":
+        section = ImageSection(
+            id=section_id,
+            image_id=entry.image("image_id", tenant_id, ImageKind.SECTION),
+            caption=entry.text("caption", MAX_IMAGE_CAPTION_LENGTH),
+        )
     else:
         section = DividerSection(id=section_id)
     entry.done()
     return section
 
 
-def _parse_sections(doc: _Reader) -> tuple[Section, ...]:
+def _parse_sections(doc: _Reader, tenant_id: uuid.UUID) -> tuple[Section, ...]:
     raw = doc.get("sections")
     path = doc.name("sections")
     if not isinstance(raw, list) or len(raw) > MAX_SECTIONS:
         raise InvalidTheme(path)
-    sections = tuple(_parse_section(_Reader(value, f"{path}.{index}")) for index, value in enumerate(raw))
+    sections = tuple(
+        _parse_section(_Reader(value, f"{path}.{index}"), tenant_id) for index, value in enumerate(raw)
+    )
     types = [section.type for section in sections]
     if (
         types.count("menu") != 1
@@ -847,7 +871,7 @@ def _parse_sections(doc: _Reader) -> tuple[Section, ...]:
     return sections
 
 
-def _parse_layout(doc: _Reader) -> Layout:
+def _parse_layout(doc: _Reader, tenant_id: uuid.UUID) -> Layout:
     layout = Layout(
         navigation=doc.choice("navigation", NAVIGATIONS),
         product_view=doc.choice("product_view", PRODUCT_VIEWS),
@@ -861,7 +885,7 @@ def _parse_layout(doc: _Reader) -> Layout:
         cart=doc.choice("cart", CART_STYLES),
         header_blocks=doc.order("header_blocks", HEADER_BLOCKS),
         categories=_parse_categories(doc),
-        sections=_parse_sections(doc),
+        sections=_parse_sections(doc, tenant_id),
     )
     doc.done()
     return layout
@@ -914,7 +938,7 @@ def parse_theme(raw: Any, tenant_id: uuid.UUID) -> Theme:
         colors=_parse_colors(doc.child("colors")),
         brand=_parse_brand(doc.child("brand"), tenant_id),
         typography=_parse_typography(doc.child("typography")),
-        layout=_parse_layout(doc.child("layout")),
+        layout=_parse_layout(doc.child("layout"), tenant_id),
         cards=_parse_cards(doc.child("cards")),
     )
     doc.done()

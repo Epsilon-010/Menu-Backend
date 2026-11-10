@@ -9,8 +9,10 @@ import pytest
 from app.seed import SeedResult
 from tests.integration.modules.catalog.test_catalog_api import ClientFactory, admin_of, ok
 from tests.integration.modules.tables.test_tables_api import create_table, created, tablet_of
+from tests.unit.fakes import FakeImageStorage
 from tests.integration.modules.theming.test_theme_api import (  # noqa: F401 (fixtures)
     PUBLISH_URL,
+    SIGNATURE_URL,
     THEME_URL,
     Json,
     draft_of,
@@ -19,7 +21,9 @@ from tests.integration.modules.theming.test_theme_api import (  # noqa: F401 (fi
     save,
     tenant_a,
     tenant_b,
+    upload,
 )
+from tests.integration.modules.theming.test_typography_migration import run
 
 IMPORT_URL = f"{THEME_URL}/import"
 DEFAULT_PAGE = [
@@ -119,6 +123,49 @@ def test_an_unknown_section_or_field_is_a_422_naming_the_place_without_echoing_w
         assert response.status_code == 422
         assert response.json()["detail"].startswith(detail)
         assert "SECRETVAL" not in response.text
+
+
+def upload_status(public_id: str) -> str:
+    [(status,)] = run("SELECT status FROM image_uploads WHERE public_id = :public_id", public_id=public_id)
+    return str(status)
+
+
+def test_an_image_section_uses_an_uploaded_picture_that_stays_attached_until_removed(
+    new_client: ClientFactory, tenant_a: SeedResult, images: FakeImageStorage  # noqa: F811
+) -> None:
+    admin = admin_of(new_client)
+    tablet = tablet_of(new_client, created(create_table(admin)))
+    picture = upload(admin, images, "section")
+    assert picture.startswith(f"tenants/{tenant_a.tenant_id}/sections/")
+    assert tablet.post(SIGNATURE_URL, json={"kind": "section"}).status_code == 403
+
+    doc = draft_of(admin)["draft"]
+    doc["layout"]["sections"].append({"id": str(uuid.uuid4()), "type": "image", "image_id": picture, "caption": "Terraza"})
+    saved = ok(save(admin, doc))
+    assert picture in saved["image_urls"]
+    assert upload_status(picture) == "attached"
+    ok(admin.post(PUBLISH_URL))
+    published = ok(tablet.get(THEME_URL))
+    assert published["theme"]["layout"]["sections"][-1]["image_id"] == picture
+    assert picture in published["image_urls"]
+
+    # Gone from the draft but still published: kept. Gone from every theme of the tenant is what discards it.
+    doc["layout"]["sections"].pop()
+    ok(save(admin, doc))
+    assert upload_status(picture) == "attached"
+
+
+def test_an_image_section_cannot_use_another_tenants_or_another_slots_picture(
+    new_client: ClientFactory, tenant_a: SeedResult, tenant_b: SeedResult, images: FakeImageStorage  # noqa: F811
+) -> None:
+    owner_a = admin_of(new_client)
+    owner_b = admin_of(new_client, "boss@example.com")
+    for picture in (upload(owner_b, images, "section"), upload(owner_a, images, "banner")):
+        doc = draft_of(owner_a)["draft"]
+        doc["layout"]["sections"].append({"id": str(uuid.uuid4()), "type": "image", "image_id": picture, "caption": ""})
+        response = save(owner_a, doc)
+        assert response.status_code == 422
+        assert response.json()["detail"] == "Invalid theme value: layout.sections.2.image_id"
 
 
 def test_tables_cannot_change_the_page_and_tenants_never_see_each_other(
