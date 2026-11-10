@@ -8,7 +8,8 @@ from datetime import UTC, datetime
 from alembic import command
 from alembic.config import Config
 
-from app.modules.theming.domain.theme import default_theme, parse_theme
+from app.modules.theming.domain.import_theme import import_theme
+from app.modules.theming.domain.theme import Theme, default_theme
 from app.seed import SeedResult
 from tests.integration.modules.auth.test_auth_api import _seed
 from tests.integration.modules.theming.test_typography_migration import (
@@ -37,6 +38,12 @@ def v4(primary: str, template: str) -> Json:
 def versions(tenant_id: uuid.UUID) -> list[Json]:
     rows = run("SELECT theme FROM theme_versions WHERE tenant_id = :tenant ORDER BY number", tenant=tenant_id)
     return [theme for (theme,) in rows]
+
+
+def read_v5(doc: Json, tenant_id: uuid.UUID) -> Theme:
+    """A stored version 5 document as the app reads it once upgraded (fails unless it is a valid version 5)."""
+    assert doc["schema_version"] == 5
+    return import_theme(doc, tenant_id, set()).theme
 
 
 def as_v5(doc: Json) -> Json:
@@ -85,15 +92,16 @@ def test_stored_v4_themes_and_their_history_get_the_default_blocks_and_downgrade
     assert stored(published_tenant.tenant_id) == (as_v5(draft), as_v5(published))
     assert stored(draft_only.tenant_id) == (as_v5(lone_draft), None)
     assert versions(published_tenant.tenant_id) == [as_v5(first_version), as_v5(published)]
-    # The app reads them all. The order is the first default this migration froze; e2a6c0b9d817 then puts the badges
-    # back above the name (test_badges_first_migration.py).
+    # They are valid version 5 documents (read through the import, which takes them to the current version). The order
+    # is the first default this migration froze; e2a6c0b9d817 then puts the badges back above the name
+    # (test_badges_first_migration.py).
     for doc in (*stored(published_tenant.tenant_id), *versions(published_tenant.tenant_id)):
         assert doc is not None
-        theme = parse_theme(doc, published_tenant.tenant_id)
+        theme = read_v5(doc, published_tenant.tenant_id)
         assert theme.cards.blocks == tuple(CARD_BLOCKS)
         assert theme.layout.header_blocks == default_theme().layout.header_blocks
         assert theme.layout.categories == {}
-    assert parse_theme(stored(published_tenant.tenant_id)[1], published_tenant.tenant_id).cards.template == "horizontal"
+    assert read_v5(stored(published_tenant.tenant_id)[1], published_tenant.tenant_id).cards.template == "horizontal"
 
     command.downgrade(at_head_afterwards, BEFORE_BLOCKS)
     assert stored(published_tenant.tenant_id) == (draft, published)

@@ -44,6 +44,10 @@ def test_the_default_layout_is_the_current_menu() -> None:
         "cart": "bar",
         "header_blocks": ["banner", "name", "tagline", "welcome"],
         "categories": {},
+        "sections": [
+            {"id": "00000000-0000-4000-8000-000000000001", "type": "hero"},
+            {"id": "00000000-0000-4000-8000-000000000002", "type": "menu"},
+        ],
     }
     assert parse_theme(doc, TENANT) == default_theme()
 

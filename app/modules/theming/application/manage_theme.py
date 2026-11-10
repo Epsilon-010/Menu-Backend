@@ -34,7 +34,7 @@ from app.shared.domain.images import (
 )
 from app.shared.domain.ports import Clock, UnitOfWork
 
-THEME_IMAGE_KINDS = (ImageKind.LOGO, ImageKind.BANNER, ImageKind.BACKGROUND)
+THEME_IMAGE_KINDS = (ImageKind.LOGO, ImageKind.BANNER, ImageKind.BACKGROUND, ImageKind.SECTION)
 
 
 @dataclass(frozen=True)

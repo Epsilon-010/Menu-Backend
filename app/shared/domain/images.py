@@ -25,6 +25,7 @@ class ImageKind(StrEnum):
     LOGO = "logos"
     BANNER = "banners"
     BACKGROUND = "backgrounds"
+    SECTION = "sections"  # pictures the admin places on the menu page
 
 
 _PHOTO_FORMATS = ("jpg", "png", "webp")
@@ -34,6 +35,7 @@ ALLOWED_FORMATS: dict[ImageKind, tuple[str, ...]] = {
     ImageKind.LOGO: (*_PHOTO_FORMATS, "svg"),
     ImageKind.BANNER: _PHOTO_FORMATS,
     ImageKind.BACKGROUND: _PHOTO_FORMATS,
+    ImageKind.SECTION: _PHOTO_FORMATS,
 }
 
 

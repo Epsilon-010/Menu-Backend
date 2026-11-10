@@ -79,6 +79,12 @@ _CARDS_V4 = {
 _CARD_BLOCKS_V5 = ["image", "badges", "heading", "description", "add_button"]
 _HEADER_BLOCKS_V5 = ["banner", "name", "tagline", "welcome"]
 
+# Added by schema_version 6: the page as before, the header then the menu.
+_SECTIONS_V6 = [
+    {"id": "00000000-0000-4000-8000-000000000001", "type": "hero"},
+    {"id": "00000000-0000-4000-8000-000000000002", "type": "menu"},
+]
+
 
 @dataclass(frozen=True)
 class ImportedTheme:
@@ -110,6 +116,8 @@ def _upgrade(doc: dict[str, Any]) -> None:
         _add(doc, "cards", "blocks", list(_CARD_BLOCKS_V5))
         _add(doc, "layout", "header_blocks", list(_HEADER_BLOCKS_V5))
         _add(doc, "layout", "categories", {})
+    if version <= 5:
+        _add(doc, "layout", "sections", copy.deepcopy(_SECTIONS_V6))
     doc["schema_version"] = SCHEMA_VERSION
 
 
@@ -140,7 +148,26 @@ def _remove_unavailable_images(doc: dict[str, Any], available: set[str]) -> tupl
             if slot == "background" and part.get("kind") == "image":
                 part["kind"] = "none"
             removed.append(slot)
+    if _remove_unavailable_section_images(doc, available):
+        removed.append("section")
     return tuple(removed)
+
+
+def _remove_unavailable_section_images(doc: dict[str, Any], available: set[str]) -> bool:
+    """Empties image sections whose image is gone; True when any was emptied."""
+    layout = doc.get("layout")
+    sections = layout.get("sections") if isinstance(layout, Mapping) else None
+    if not isinstance(sections, list):
+        return False
+    emptied = False
+    for section in sections:
+        if not isinstance(section, dict) or section.get("type") != "image":
+            continue
+        image_id = section.get("image_id")
+        if isinstance(image_id, str) and image_id not in available:
+            section["image_id"] = None
+            emptied = True
+    return emptied
 
 
 def import_theme(raw: Any, tenant_id: uuid.UUID, available_images: set[str]) -> ImportedTheme:

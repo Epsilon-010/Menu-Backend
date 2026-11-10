@@ -13,7 +13,7 @@ from typing import Any
 
 from app.shared.domain.images import ImageKind, InvalidImage, ensure_owned_image
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 MODES = ("light", "dark")
 LOGO_SIZES = ("sm", "md", "lg")
@@ -40,6 +40,18 @@ HEADER_BLOCKS = ("banner", "name", "tagline", "welcome")
 MAX_CATEGORY_LAYOUTS = 100
 # A category id as the catalog writes it (any case on input; stored lowercase).
 _CATEGORY_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
+
+# The menu page, top to bottom: `hero` is the header (at most one), `menu` the categories (exactly one).
+SECTION_TYPES = ("hero", "menu", "featured", "text", "divider", "image")
+MAX_IMAGE_CAPTION_LENGTH = 120
+MAX_SECTIONS = 20
+MAX_FEATURED_ITEMS = 12
+MAX_FEATURED_TITLE_LENGTH = 60
+MAX_TEXT_TITLE_LENGTH = 80
+MAX_TEXT_BODY_LENGTH = 500
+FEATURED_VIEWS = ("carousel", "grid")
+TEXT_SECTION_ALIGNS = ("left", "center")
+TEXT_SECTION_STYLES = ("plain", "highlight")
 
 CARD_TEMPLATES = ("vertical", "horizontal", "overlay")
 IMAGE_ASPECTS = ("square", "landscape", "wide")  # 1:1, 4:3, 16:9
@@ -234,6 +246,70 @@ class CategoryLayout:
 
 
 @dataclass(frozen=True)
+class HeroSection:
+    """The menu header: banner, name, tagline and welcome, as `header_blocks` and the `show_*` flags say."""
+
+    id: str
+    type: str = field(default="hero", init=False)
+
+
+@dataclass(frozen=True)
+class MenuSection:
+    """The categories with their navigation and per-category designs."""
+
+    id: str
+    type: str = field(default="menu", init=False)
+
+
+@dataclass(frozen=True)
+class FeaturedSection:
+    """Products the admin picked, by item id; ones that no longer exist or are unavailable are not drawn."""
+
+    id: str
+    title: str
+    item_ids: tuple[str, ...]
+    view: str
+    type: str = field(default="featured", init=False)
+
+
+@dataclass(frozen=True)
+class TextSection:
+    """A title and a plain-text paragraph (welcome, promo, notice)."""
+
+    id: str
+    title: str
+    body: str
+    align: str
+    style: str
+    type: str = field(default="text", init=False)
+
+
+@dataclass(frozen=True)
+class DividerSection:
+    id: str
+    type: str = field(default="divider", init=False)
+
+
+@dataclass(frozen=True)
+class ImageSection:
+    """A picture of the tenant (its `sections` folder) with an optional caption; none yet draws nothing."""
+
+    id: str
+    image_id: str | None
+    caption: str
+    type: str = field(default="image", init=False)
+
+
+Section = HeroSection | MenuSection | FeaturedSection | TextSection | DividerSection | ImageSection
+
+# The page the menu had before it was made of sections. Fixed ids: they only need to be unique within one theme.
+DEFAULT_SECTIONS: tuple[Section, ...] = (
+    HeroSection(id="00000000-0000-4000-8000-000000000001"),
+    MenuSection(id="00000000-0000-4000-8000-000000000002"),
+)
+
+
+@dataclass(frozen=True)
 class Layout:
     """How the menu is arranged: category navigation, product view, spacing, sections shown and the cart.
 
@@ -254,6 +330,7 @@ class Layout:
     header_blocks: tuple[str, ...]
     # Left out of the hash (a dict has none); still compared, so equal layouts keep equal hashes.
     categories: dict[str, CategoryLayout] = field(hash=False)
+    sections: tuple[Section, ...] = DEFAULT_SECTIONS
 
 
 @dataclass(frozen=True)
@@ -310,6 +387,11 @@ class Theme:
             (self.brand.logo.image_id, ImageKind.LOGO),
             (self.brand.banner.image_id, ImageKind.BANNER),
             (self.brand.background.image_id, ImageKind.BACKGROUND),
+            *(
+                (section.image_id, ImageKind.SECTION)
+                for section in self.layout.sections
+                if isinstance(section, ImageSection)
+            ),
         )
         return {public_id: kind for public_id, kind in slots if public_id is not None}
 
@@ -337,6 +419,15 @@ def layout_to_dict(layout: Layout) -> dict[str, Any]:
     """The layout as JSON: block orders are lists."""
     doc = asdict(layout)
     doc["header_blocks"] = list(layout.header_blocks)
+    doc["sections"] = [section_to_dict(section) for section in layout.sections]
+    return doc
+
+
+def section_to_dict(section: Section) -> dict[str, Any]:
+    """One section as JSON: its id and type first, item ids as a list."""
+    doc = {"id": section.id, "type": section.type} | asdict(section)
+    if isinstance(section, FeaturedSection):
+        doc["item_ids"] = list(section.item_ids)
     return doc
 
 
@@ -707,7 +798,80 @@ def _parse_categories(doc: _Reader) -> dict[str, CategoryLayout]:
     return categories
 
 
-def _parse_layout(doc: _Reader) -> Layout:
+def _uuid(value: Any) -> str | None:
+    """A UUID in any case, lowercased; None when it is not one."""
+    if not isinstance(value, str) or _CATEGORY_ID.fullmatch(value) is None:
+        return None
+    return value.lower()
+
+
+def _parse_item_ids(doc: _Reader) -> tuple[str, ...]:
+    raw = doc.get("item_ids")
+    path = doc.name("item_ids")
+    if not isinstance(raw, list) or len(raw) > MAX_FEATURED_ITEMS:
+        raise InvalidTheme(path)
+    item_ids = tuple(_uuid(value) for value in raw)
+    if None in item_ids or len(set(item_ids)) != len(item_ids):
+        raise InvalidTheme(path)
+    return item_ids  # type: ignore[return-value]  # no None left
+
+
+def _parse_section(entry: _Reader, tenant_id: uuid.UUID) -> Section:
+    section_id = _uuid(entry.get("id"))
+    if section_id is None:
+        raise InvalidTheme(entry.name("id"))
+    kind = entry.choice("type", SECTION_TYPES)
+    section: Section
+    if kind == "hero":
+        section = HeroSection(id=section_id)
+    elif kind == "menu":
+        section = MenuSection(id=section_id)
+    elif kind == "featured":
+        section = FeaturedSection(
+            id=section_id,
+            title=entry.text("title", MAX_FEATURED_TITLE_LENGTH),
+            item_ids=_parse_item_ids(entry),
+            view=entry.choice("view", FEATURED_VIEWS),
+        )
+    elif kind == "text":
+        section = TextSection(
+            id=section_id,
+            title=entry.text("title", MAX_TEXT_TITLE_LENGTH),
+            body=entry.text("body", MAX_TEXT_BODY_LENGTH, multiline=True),
+            align=entry.choice("align", TEXT_SECTION_ALIGNS),
+            style=entry.choice("style", TEXT_SECTION_STYLES),
+        )
+    elif kind == "image":
+        section = ImageSection(
+            id=section_id,
+            image_id=entry.image("image_id", tenant_id, ImageKind.SECTION),
+            caption=entry.text("caption", MAX_IMAGE_CAPTION_LENGTH),
+        )
+    else:
+        section = DividerSection(id=section_id)
+    entry.done()
+    return section
+
+
+def _parse_sections(doc: _Reader, tenant_id: uuid.UUID) -> tuple[Section, ...]:
+    raw = doc.get("sections")
+    path = doc.name("sections")
+    if not isinstance(raw, list) or len(raw) > MAX_SECTIONS:
+        raise InvalidTheme(path)
+    sections = tuple(
+        _parse_section(_Reader(value, f"{path}.{index}"), tenant_id) for index, value in enumerate(raw)
+    )
+    types = [section.type for section in sections]
+    if (
+        types.count("menu") != 1
+        or types.count("hero") > 1
+        or len({section.id for section in sections}) != len(sections)
+    ):
+        raise InvalidTheme(path)
+    return sections
+
+
+def _parse_layout(doc: _Reader, tenant_id: uuid.UUID) -> Layout:
     layout = Layout(
         navigation=doc.choice("navigation", NAVIGATIONS),
         product_view=doc.choice("product_view", PRODUCT_VIEWS),
@@ -721,6 +885,7 @@ def _parse_layout(doc: _Reader) -> Layout:
         cart=doc.choice("cart", CART_STYLES),
         header_blocks=doc.order("header_blocks", HEADER_BLOCKS),
         categories=_parse_categories(doc),
+        sections=_parse_sections(doc, tenant_id),
     )
     doc.done()
     return layout
@@ -773,7 +938,7 @@ def parse_theme(raw: Any, tenant_id: uuid.UUID) -> Theme:
         colors=_parse_colors(doc.child("colors")),
         brand=_parse_brand(doc.child("brand"), tenant_id),
         typography=_parse_typography(doc.child("typography")),
-        layout=_parse_layout(doc.child("layout")),
+        layout=_parse_layout(doc.child("layout"), tenant_id),
         cards=_parse_cards(doc.child("cards")),
     )
     doc.done()
