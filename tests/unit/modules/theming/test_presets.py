@@ -121,3 +121,10 @@ def test_the_presets_do_not_all_share_one_card_design() -> None:
     assert PRESETS[0].cards == default_theme().cards
     assert len({preset.cards for preset in PRESETS}) == len(PRESETS)
     assert {preset.cards.template for preset in PRESETS} == {"vertical", "horizontal", "overlay"}
+
+def test_the_gallery_offers_the_dark_grill_and_bright_delivery_templates() -> None:
+    by_id = {preset.id: preset for preset in PRESETS}
+    assert {"brasa", "velada", "umami", "antojo"} <= set(by_id)
+    assert {by_id["brasa"].colors.mode, by_id["velada"].colors.mode} == {"dark"}
+    assert {by_id["umami"].colors.mode, by_id["antojo"].colors.mode} == {"light"}
+    assert by_id["brasa"].layout.columns == by_id["antojo"].layout.columns == 4
