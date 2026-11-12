@@ -402,10 +402,10 @@ def test_admin_applies_a_preset_keeping_the_brand_and_tables_see_it_only_after_p
     assert presets[0]["colors"] == mine["colors"] and presets[0]["typography"] == mine["typography"]
     assert presets[0]["layout"] == mine["layout"] and presets[0]["cards"] == mine["cards"]
     assert set(presets[0]) == {"id", "name", "description", "colors", "typography", "layout", "cards"}
-    street = next(preset for preset in presets if preset["id"] == "street")
+    brasa = next(preset for preset in presets if preset["id"] == "brasa")
 
     # The editor applies it to the draft: colors and typography change, the brand stays.
-    applied = {**mine, "colors": street["colors"], "typography": street["typography"], "layout": street["layout"], "cards": street["cards"]}
+    applied = {**mine, "colors": brasa["colors"], "typography": brasa["typography"], "layout": brasa["layout"], "cards": brasa["cards"]}
     saved = ok(save(admin, applied))
     assert saved["draft"] == applied
     assert saved["draft"]["brand"] == mine["brand"]

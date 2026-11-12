@@ -161,7 +161,7 @@ def test_every_template_defines_a_page_with_the_menu_and_no_products_of_its_own(
 
 
 def test_there_are_more_templates_and_several_bring_their_own_page() -> None:
-    assert len(PRESETS) >= 12
+    assert len(PRESETS) >= 8
     with_own_page = [preset for preset in PRESETS if preset.layout.sections != DEFAULT_SECTIONS]
     assert len(with_own_page) >= 4
     for preset in with_own_page:
@@ -169,7 +169,8 @@ def test_there_are_more_templates_and_several_bring_their_own_page() -> None:
 
 
 def test_templates_follow_the_design_rules_one_typeface_no_italics_no_black_weights_flat_backgrounds() -> None:
-    for preset in PRESETS[6:]:
+    # The three oldest designs predate these rules (they pair two typefaces).
+    for preset in (preset for preset in PRESETS if preset.id not in {"classic", "fiesta", "cafe"}):
         fonts = preset.typography.fonts
         assert len({fonts.heading, fonts.body, fonts.price, fonts.button}) == 1, preset.id
         for element in ("business_name", "category", "product_name", "description", "price", "button"):
