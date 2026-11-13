@@ -208,3 +208,43 @@ def test_only_delivered_must_be_a_boolean(table: Table) -> None:
     send_order(table.tablet, table.items["pastor"], 1)
 
     assert pay(table.waiter, table.bill()["id"], only_delivered="yes").status_code == 422
+
+
+def test_repeating_a_payment_whose_answer_was_lost_returns_the_payment_already_made(table: Table) -> None:
+    send_order(table.tablet, table.items["pastor"], 2)
+    seen = table.bill()
+    first = ok(pay(table.waiter, seen["id"], expected_total_cents=seen["total_cents"]))
+
+    again = ok(pay(table.waiter, seen["id"], expected_total_cents=seen["total_cents"]))
+
+    assert again == first  # charged once: same closing time, method and total
+    assert tables_overview(table.waiter)[0]["bill"] is None
+
+
+def test_repeating_a_payment_of_only_what_was_delivered_returns_the_payment_already_made(table: Table) -> None:
+    _served_in_part(table)
+    first = ok(pay(table.waiter, table.bill()["id"], expected_total_cents=2500, only_delivered=True))
+
+    again = ok(pay(table.waiter, first["id"], expected_total_cents=2500, only_delivered=True))
+
+    assert again == first and again["total_cents"] == 2500
+
+
+def test_a_different_payment_of_a_bill_already_paid_is_still_not_found(table: Table) -> None:
+    send_order(table.tablet, table.items["pastor"], 2)
+    seen = table.bill()
+    ok(pay(table.waiter, seen["id"]))
+
+    other_method = pay(table.waiter, seen["id"], method="card")
+    other_total = pay(table.waiter, seen["id"], expected_total_cents=seen["total_cents"] + 1)
+
+    assert (other_method.status_code, other_total.status_code) == (404, 404)
+
+
+def test_a_table_closed_without_payment_cannot_be_paid_afterwards(table: Table) -> None:
+    order = send_order(table.tablet, table.items["pastor"], 1)
+    ok(mark(table.waiter, order, order["items"], "cancelled", reason="Changed their mind"))
+    bill_id = table.bill()["id"]
+    assert table.waiter.post(f"{BILLS_URL}/{bill_id}/close").status_code == 204
+
+    assert pay(table.waiter, bill_id).status_code == 404

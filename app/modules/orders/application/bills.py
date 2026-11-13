@@ -86,14 +86,22 @@ class ListTables:
         return overview
 
 
-async def _locked_open_bill(ctx: Ordering, tenant_id: uuid.UUID, bill_id: uuid.UUID) -> Bill:
+async def _locked_bill(ctx: Ordering, tenant_id: uuid.UUID, bill_id: uuid.UUID) -> Bill:
+    """The bill, open or closed, read under its table's lock."""
     bill = await ctx.bills.get(tenant_id, bill_id)
     if bill is None:
         raise BillNotFound(bill_id)
     await ctx.locks.lock(tenant_id, bill.table_id)
     # Read again under the lock: a concurrent payment may have closed it meanwhile.
     bill = await ctx.bills.get(tenant_id, bill_id)
-    if bill is None or not bill.is_open:
+    if bill is None:
+        raise BillNotFound(bill_id)
+    return bill
+
+
+async def _locked_open_bill(ctx: Ordering, tenant_id: uuid.UUID, bill_id: uuid.UUID) -> Bill:
+    bill = await _locked_bill(ctx, tenant_id, bill_id)
+    if not bill.is_open:
         raise BillNotFound(bill_id)
     return bill
 
@@ -157,7 +165,9 @@ class PayBill:
         """`expected_total_cents` is the total the person charging saw: if the bill no longer adds up to it
         (compared under the table lock, so nothing can change it before the payment) nothing is charged."""
         ctx = self._ctx
-        bill = await _locked_open_bill(ctx, tenant_id, bill_id)
+        bill = await _locked_bill(ctx, tenant_id, bill_id)
+        if not bill.is_open:
+            return await self._payment_already_made(bill, method, expected_total_cents)
         if only_delivered is not None:
             # Not committed yet: any refusal below leaves the transaction to roll back with the dishes as they were.
             await ctx.orders.cancel_undelivered(
@@ -180,6 +190,23 @@ class PayBill:
         await _end_visit(ctx, paid)
         table = await ctx.tables.get(tenant_id, bill.table_id)
         return BillDetail(bill=paid, table_name=table.name if table is not None else "", orders=orders)
+
+    async def _payment_already_made(
+        self, bill: Bill, method: PaymentMethod, expected_total_cents: int | None
+    ) -> BillDetail:
+        """A repeated payment (its answer was lost) gets the payment already made and charges nothing.
+
+        Any other payment of a closed bill finds no bill to pay, as before."""
+        same_payment = bill.payment_method is method and expected_total_cents in (None, bill.paid_cents)
+        if not same_payment:
+            raise BillNotFound(bill.id)
+        ctx = self._ctx
+        table = await ctx.tables.get(bill.tenant_id, bill.table_id)
+        return BillDetail(
+            bill=bill,
+            table_name=table.name if table is not None else "",
+            orders=await ctx.orders.list_for_bill(bill.tenant_id, bill.id),
+        )
 
 
 class CloseTable:
